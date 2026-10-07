@@ -51,13 +51,13 @@ Alpine Linux 上运行的 **mihomo 旁路由透明代理 + 一体化 Web 面板*
 **国外网络：**
 
 ```sh
-wget -qO- https://raw.githubusercontent.com/Skycnhe/-mihomo-panel/main/install.sh | sh
+wget -qO- https://raw.githubusercontent.com/Skycnhe/mihomo-panel/main/install.sh | sh
 ```
 
 **国内网络**（apk 换中科大镜像，GitHub 下载走 ghfast.top 加速）：
 
 ```sh
-wget -qO- https://ghfast.top/https://raw.githubusercontent.com/Skycnhe/-mihomo-panel/main/install.sh | sh -s -- --cn
+wget -qO- https://ghfast.top/https://raw.githubusercontent.com/Skycnhe/mihomo-panel/main/install.sh | sh -s -- --cn
 ```
 
 需要额外参数时加在最后，例如 `| sh -s -- --cn --https --selftest`。可选环境变量：`GH_PROXY`（换加速代理）、`APK_MIRROR`（换 apk 镜像，如 `mirrors.aliyun.com`）。
