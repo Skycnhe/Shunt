@@ -27,8 +27,9 @@ EOF
 
 # 生成各场景的 data.json
 python3 - "$SRC" "$WORK" <<'EOF'
-import json, os, sys
+import json, os, re, sys
 src, work = sys.argv[1], sys.argv[2]
+os.environ["PANEL_OFFLINE"] = "1"  # 不读取正在运行的核心的订阅节点
 sys.path.insert(0, src)
 import server
 nodes, errs = server.add_links(open(os.path.join(work, "links.txt")).read(), [])
@@ -82,10 +83,92 @@ scen.update({
                                 "default": ["119.29.29.29"], "mode": "fake-ip", "fake_filter": ["+.lan", "+.example.com"], "cache": "arc", "policy": False}},
     "16-旧版数据(tproxy=false)": {"tproxy": False, "nodes": nodes[:1]},
 })
+# ---- v5 新增场景：地区负载均衡 / 地区主组类型 / 已知订阅节点 / 自定义策略组
+ssn = lambda n, port: {"link": "", "proxy": {"name": n, "type": "ss", "server": "127.0.0.1", "port": port, "cipher": "aes-128-gcm",
+                                              "password": "pw", "udp": True}}
+multi = [ssn(n, 20000 + i) for i, n in enumerate(["🇺🇸 美国 01", "US 02 洛杉矶", "美国 03", "🇯🇵 日本 01", "JP 02 Osaka", "香港 01",
+                                                   "🇰🇷 韩国 01", "Korea 02", "UK 01 London", "Russia 01", "Plus 节点", "Australia 1"])]
+gcfg = lambda **kw: dict({"type": "url-test", "lb": True, "auto": True, "strategy": "consistent-hashing", "interval": 300,
+                          "tolerance": 50, "url": "https://www.gstatic.com/generate_204", "extra": True, "other": True, "lazy": True}, **kw)
+cg = lambda name, t, members, **kw: dict({"name": name, "type": t, "proxies": members, "filter": "", "subs": True, "expose": True, "icon": ""}, **kw)
+customs = [
+    cg("🎯 美日均衡", "load-balance", ["🇺🇸 美国", "🇯🇵 日本"], strategy="round-robin"),
+    cg("🧷 粘性", "load-balance", [], filter="(?i)美国|US", strategy="sticky-sessions", interval=120),
+    cg("🔗 一致性", "load-balance", ["🇺🇸 美国均衡", "🇯🇵 日本均衡"], strategy="consistent-hashing"),
+    cg("🎮 游戏", "select", ["🇭🇰 香港", "DIRECT"], filter="(?i)香港|日本", icon="https://example.com/game.png"),
+    cg("⚡ 低延迟", "url-test", [], filter="(?i)美国|日本", tolerance=80),
+    cg("🧯 稳定优先", "fallback", ["🎯 美日均衡", "🇭🇰 香港", "DIRECT"]),
+    cg("🔁 跟随节点选择", "select", ["🚀 节点选择", "🎮 游戏", "REJECT"], expose=False),
+    cg("空筛选", "select", [], filter="根本不存在的节点XYZ", subs=False),
+    cg("引用已消失的组", "select", ["🇫🇷 法国", "DIRECT"]),
+]
+crules = ["DOMAIN-SUFFIX,steampowered.com,🎮 游戏", "DOMAIN-SUFFIX,netflix.com,🎯 美日均衡", "DST-PORT,8099,🇺🇸 美国均衡",
+          "DOMAIN,x.com,🔁 跟随节点选择"]
+crs = [dict(rs[1], target="⚡ 低延迟")]
+cdns = dict(dns_custom, proxy=["https://1.1.1.1/dns-query#🧯 稳定优先"])
+EXPECT = {  # 场景名: (必须存在的组 {名称: [类型, 策略]}, 必须不存在的组)
+    "17-地区均衡(手动节点)": ({"🇺🇸 美国": ["url-test", None], "🇺🇸 美国均衡": ["load-balance", "consistent-hashing"],
+                         "🇯🇵 日本均衡": ["load-balance", None], "🇰🇷 韩国均衡": ["load-balance", None], "🌐 其他": ["url-test", None],
+                         "🇷🇺 俄罗斯": ["url-test", None], "🇦🇺 澳大利亚": ["url-test", None]},
+                        ["🇭🇰 香港均衡", "🇺🇸 美国自动", "🇸🇬 新加坡", "🇹🇼 台湾"]),
+    "18-地区主组select+自动+轮询": ({"🇺🇸 美国": ["select", None], "🇺🇸 美国自动": ["url-test", None],
+                              "🇺🇸 美国均衡": ["load-balance", "round-robin"], "🇭🇰 香港自动": ["url-test", None]}, ["🌐 其他", "🇰🇷 韩国"]),
+    "19-地区主组load-balance粘性": ({"🇺🇸 美国": ["load-balance", "sticky-sessions"], "🇺🇸 美国自动": ["url-test", None]}, ["🇺🇸 美国均衡"]),
+    "20-地区主组fallback无均衡": ({"🇯🇵 日本": ["fallback", None], "🇯🇵 日本自动": ["url-test", None]}, ["🇯🇵 日本均衡"]),
+    "21-订阅节点已知": ({"🇺🇸 美国均衡": ["load-balance", None], "🇬🇧 英国": ["url-test", None], "🌐 其他": ["url-test", None],
+                    "🇯🇵 日本": ["url-test", None]}, ["🇯🇵 日本均衡", "🇸🇬 新加坡", "🇹🇼 台湾", "🇭🇰 香港"]),
+    "22-订阅未加载(旧行为)": ({"🇭🇰 香港": ["url-test", None], "🇸🇬 新加坡": ["url-test", None], "🇺🇸 美国均衡": ["load-balance", None]},
+                        ["🇬🇧 英国"]),
+    "23-自定义策略组(全部类型)": ({"🎯 美日均衡": ["load-balance", "round-robin"], "🧷 粘性": ["load-balance", "sticky-sessions"],
+                            "🔗 一致性": ["load-balance", "consistent-hashing"], "🎮 游戏": ["select", None],
+                            "⚡ 低延迟": ["url-test", None], "🧯 稳定优先": ["fallback", None], "🔁 跟随节点选择": ["select", None],
+                            "空筛选": ["select", None]}, []),
+    "24-自定义组+订阅+TUN+嗅探关": ({"🎮 游戏": ["select", None], "🧷 粘性": ["load-balance", "sticky-sessions"]}, []),
+}
+scen.update({
+    "17-地区均衡(手动节点)": {"nodes": multi},
+    "18-地区主组select+自动+轮询": {"nodes": multi, "groups_cfg": gcfg(type="select", strategy="round-robin", extra=False, other=False)},
+    "19-地区主组load-balance粘性": {"nodes": multi, "groups_cfg": gcfg(type="load-balance", strategy="sticky-sessions", lazy=False)},
+    "20-地区主组fallback无均衡": {"nodes": multi, "groups_cfg": gcfg(type="fallback", lb=False, interval=600, tolerance=0)},
+    "21-订阅节点已知": {"subs": [sub], "nodes": multi[:3], "_prov": {"机场A": ["US 05", "US 06 Pro", "JP 03", "🇬🇧 英国 02", "Mars 01"]}},
+    "22-订阅未加载(旧行为)": {"subs": [sub], "nodes": multi[:3]},
+    "23-自定义策略组(全部类型)": {"nodes": multi, "custom_groups": customs, "rules": crules, "rulesets": crs, "dns": cdns},
+    "24-自定义组+订阅+TUN+嗅探关": {"subs": [sub, sub2], "nodes": multi, "custom_groups": customs, "rules": crules,
+                             "proxy_mode": "tun", "tun": tun("mixed"), "sniffer": False, "groups_cfg": gcfg(strategy="sticky-sessions")},
+})
+# 校验逻辑：重名 / 循环 / 成员不存在应被拒绝
+server.PROV_FILE = os.path.join(work, "_none.json")
+base = dict(server.DEFAULT, nodes=multi, subs=[], custom_groups=customs[:2])
+bad_cases = {
+    "循环": customs[:1] + [cg("A", "select", ["B"], expose=False), cg("B", "select", ["A"], expose=False)],
+    "引用节点选择且加入候选": [cg("X", "select", ["🚀 节点选择"])],
+    "重名": [customs[0], dict(customs[0])],
+    "与地区组同名": [cg("🇺🇸 美国均衡", "select", ["DIRECT"])],
+    "成员不存在": [cg("X", "select", ["不存在"])],
+}
+for k, v in bad_cases.items():
+    assert server.validate_groups(dict(base, custom_groups=v)), "应拒绝：" + k
+ok_errs = server.validate_groups(dict(base, custom_groups=customs[:7]))
+assert not ok_errs, ok_errs
+for k in ("名称,逗号", "", "a#b"):
+    try:
+        server.clean_custom_group({"name": k, "type": "select", "proxies": ["DIRECT"]})
+        raise AssertionError("应拒绝名称：" + k)
+    except ValueError:
+        pass
+us = server.REGIONS[4][1]
+assert not re.search(us, "Russia 01") and not re.search(us, "Plus") and re.search(us, "US01") and re.search(us, "美国 01")
+print("策略组校验 ok", file=sys.stderr)
 for name, extra in scen.items():
+    extra = dict(extra)
+    prov = extra.pop("_prov", None)
     d = dict(password="x", secret="selftest", **extra)
     os.makedirs(os.path.join(work, name))
     json.dump(d, open(os.path.join(work, name, "data.json"), "w"), ensure_ascii=False)
+    if prov is not None:
+        json.dump(prov, open(os.path.join(work, name, "provider_nodes.json"), "w"), ensure_ascii=False)
+    if name in EXPECT:
+        json.dump(EXPECT[name], open(os.path.join(work, name, "expect.json"), "w"), ensure_ascii=False)
     if extra.get("adblock"):  # 生成本地规则文件（离线，不下载）
         server.AB_DIR = os.path.join(work, name, "adblock")
         bs, be, as_, ae, _ = server.parse_filter(FILTER)
@@ -101,8 +184,8 @@ PASS=0; FAIL=0
 for d in "$WORK"/*/; do
   d=${d%/}; n=$(basename "$d")
   for f in geoip.dat geosite.dat geoip.metadb; do [ -f "$GEO_DIR/$f" ] && ln -sf "$GEO_DIR/$f" "$d/$f"; done
-  MIHOMO_DIR="$d" PANEL_DATA="$d/data.json" python3 "$SRC/server.py" --gen >/dev/null || { echo "✗ $n: server.py --gen 失败"; FAIL=$((FAIL+1)); continue; }
-  if ! CHK=$(python3 - "$d" <<'PY'
+  PANEL_OFFLINE=1 MIHOMO_DIR="$d" PANEL_DATA="$d/data.json" python3 "$SRC/server.py" --gen >/dev/null || { echo "✗ $n: server.py --gen 失败"; FAIL=$((FAIL+1)); continue; }
+  if ! CHK=$(python3 - "$d" 2>&1 <<'PY'
 import json, sys
 d = sys.argv[1]
 c, data = json.load(open(d + "/config.yaml")), json.load(open(d + "/data.json"))
@@ -119,9 +202,33 @@ if ab.get("enabled"):
     if ab.get("white") or ab.get("lists"):
         assert "ad-allow" in c["rule-providers"] and all("NOT,((RULE-SET,ad-allow))" in r for r in rej), "白名单未优先"
     assert ("rcode://name_error" in json.dumps(c["dns"].get("nameserver-policy", {}))) == bool(ab.get("dns")), "DNS 层拦截开关不一致"
+# v5：策略组成员都存在、负载均衡带策略、规则引用的策略存在、预期的分组生成 / 不生成
+groups = {g["name"]: g for g in c["proxy-groups"]}
+names = set(groups) | {p["name"] for p in c["proxies"]} | {"DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE"}
+for g in c["proxy-groups"]:
+    assert g.get("proxies") or g.get("use"), "策略组 %s 没有成员" % g["name"]
+    for m in g.get("proxies") or []:
+        assert m in names, "%s 的成员 %s 不存在" % (g["name"], m)
+    if g["type"] == "load-balance":
+        assert g.get("strategy") in ("consistent-hashing", "round-robin", "sticky-sessions"), "负载均衡缺少策略"
+for r in c["rules"]:
+    if r.startswith(("AND,", "OR,", "NOT,")):
+        continue
+    parts = [x for x in r.split(",") if x not in ("no-resolve", "src")]
+    assert parts[-1] in names, "规则引用了不存在的策略：" + r
+assert c["sniffer"]["enable"] == data.get("sniffer", True), "嗅探开关不一致"
+import os
+if os.path.isfile(d + "/expect.json"):
+    must, mustnot = json.load(open(d + "/expect.json"))
+    for n, (t, st) in must.items():
+        assert n in groups, "缺少策略组 " + n
+        assert groups[n]["type"] == t, "%s 类型应为 %s，实际 %s" % (n, t, groups[n]["type"])
+        assert st is None or groups[n].get("strategy") == st, "%s 策略应为 %s" % (n, st)
+    for n in mustnot:
+        assert n not in groups, "不应生成策略组 " + n
 print("ok")
 PY
-); then echo "✗ $n: 生成结果断言失败"; FAIL=$((FAIL+1)); continue; fi
+); then echo "✗ $n: 生成结果断言失败"; echo "$CHK" | tail -n 2; FAIL=$((FAIL+1)); continue; fi
   if OUT=$(timeout 120 "$MIHOMO_BIN" -t -d "$d" -f "$d/config.yaml" 2>&1); then
     echo "✓ $n"; PASS=$((PASS+1))
   else

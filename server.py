@@ -42,12 +42,15 @@ AB_DEFAULT = {"enabled": False, "lists": [], "black": [], "white": [], "interval
 AB_PRESETS = [{"name": "AdGuard DNS filter", "url": "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt"},
               {"name": "anti-AD", "url": "https://anti-ad.net/easylist.txt"}]
 TUN_DEFAULT = {"stack": "mixed", "device": "Meta", "auto_redirect": True, "strict_route": False}
+GROUPS_DEFAULT = {"type": "url-test", "lb": True, "auto": True, "strategy": "consistent-hashing", "interval": 300,
+                  "tolerance": 50, "url": "https://www.gstatic.com/generate_204", "extra": True, "other": True, "lazy": True}
 SCHED_DEFAULT = {"sub_update": "", "core_restart": "", "geo_update": "", "latency": 0}
 DEFAULT = {"password": "admin", "secret": "", "mode": "rule", "tproxy": True, "subs": [], "rules": [],
            "rulesets": [], "bypass": [], "tests": None, "sub_interval": 86400, "region_groups": True,
            "nodes": [], "ipv6": False, "https": False, "watchdog": True, "tg_token": "", "tg_chat": "",
            "proxy_mode": "", "tun": TUN_DEFAULT, "log_limit": 5, "adblock": AB_DEFAULT, "dns": DNS_DEFAULT,
-           "devices": {}, "schedule": SCHED_DEFAULT}
+           "devices": {}, "schedule": SCHED_DEFAULT, "groups_cfg": GROUPS_DEFAULT, "custom_groups": [], "sniffer": True,
+           "gh_proxy": ""}
 TESTS = [
     {"name": "Google", "url": "https://www.google.com/generate_204"},
     {"name": "YouTube", "url": "https://www.youtube.com/generate_204"},
@@ -57,13 +60,37 @@ TESTS = [
 ]
 G_SEL, G_AUTO, G_YT, G_GG, G_TG, G_FINAL = "🚀 节点选择", "♻️ 自动选择", "📹 YouTube", "🔍 Google", "📲 Telegram", "🐟 漏网之鱼"
 G_AI, G_NF = "🤖 AI 服务", "🎬 Netflix"
-REGIONS = [
-    ("🇭🇰 香港", "(?i)港|HK|Hong ?Kong"),
-    ("🇹🇼 台湾", "(?i)台|TW|Taiwan"),
-    ("🇯🇵 日本", "(?i)日本|JP|Japan|东京|大阪"),
-    ("🇸🇬 新加坡", "(?i)新加坡|狮城|SG|Singapore"),
-    ("🇺🇸 美国", "(?i)美国|US|United ?States|洛杉矶|硅谷|纽约"),
+PANEL_VERSION = "5.0"
+L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
+REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
+    ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
+    ("🇹🇼 台湾", f"🇹🇼|(?i:台|Taiwan|Taipei)|{L}TWN?{R}"),
+    ("🇯🇵 日本", f"🇯🇵|(?i:日本|东京|東京|大阪|埼玉|Japan|Tokyo|Osaka)|{L}JPN?{R}"),
+    ("🇸🇬 新加坡", f"🇸🇬|(?i:新加坡|狮城|獅城|Singapore)|{L}SGP?{R}"),
+    ("🇺🇸 美国", f"🇺🇸|(?i:美国|美國|洛杉矶|圣何塞|硅谷|纽约|西雅图|芝加哥|达拉斯|凤凰城|United ?States|America|Los ?Angeles|San ?Jose|Seattle|New ?York|Chicago|Dallas)|{L}USA?{R}"),
+    # 以下为扩展地区（设置 → 策略组 可关闭），只有确实存在节点时才生成
+    ("🇰🇷 韩国", f"🇰🇷|(?i:韩国|韓國|首尔|首爾|春川|Korea|Seoul)|{L}KOR?{R}"),
+    ("🇬🇧 英国", f"🇬🇧|(?i:英国|英國|伦敦|倫敦|United ?Kingdom|Britain|London)|{L}(?:UK|GB|GBR){R}"),
+    ("🇩🇪 德国", f"🇩🇪|(?i:德国|德國|法兰克福|Germany|Frankfurt)|{L}DEU?{R}"),
+    ("🇫🇷 法国", f"🇫🇷|(?i:法国|法國|巴黎|France|Paris)|{L}FRA?{R}"),
+    ("🇳🇱 荷兰", f"🇳🇱|(?i:荷兰|荷蘭|阿姆斯特丹|Netherlands|Amsterdam)|{L}NLD?{R}"),
+    ("🇨🇦 加拿大", f"🇨🇦|(?i:加拿大|多伦多|温哥华|Canada|Toronto|Vancouver)|{L}CAN?{R}"),
+    ("🇦🇺 澳大利亚", f"🇦🇺|(?i:澳大利亚|澳洲|悉尼|墨尔本|Australia|Sydney|Melbourne)|{L}AUS?{R}"),
+    ("🇷🇺 俄罗斯", f"🇷🇺|(?i:俄罗斯|俄羅斯|莫斯科|Russia|Moscow)|{L}RUS?{R}"),
+    ("🇮🇳 印度", f"🇮🇳|(?i:印度|孟买|India|Mumbai)|{L}IND?{R}"),
+    ("🇹🇷 土耳其", f"🇹🇷|(?i:土耳其|伊斯坦布尔|Turkey|Türkiye|Istanbul)|{L}TUR?{R}"),
+    ("🇲🇾 马来西亚", f"🇲🇾|(?i:马来|馬來|吉隆坡|Malaysia)|{L}MYS?{R}"),
+    ("🇹🇭 泰国", f"🇹🇭|(?i:泰国|泰國|曼谷|Thailand|Bangkok)|{L}THA?{R}"),
+    ("🇻🇳 越南", f"🇻🇳|(?i:越南|胡志明|Vietnam)|{L}VNM?{R}"),
+    ("🇵🇭 菲律宾", f"🇵🇭|(?i:菲律宾|菲律賓|马尼拉|Philippines)|{L}PHL?{R}"),
+    ("🇦🇷 阿根廷", f"🇦🇷|(?i:阿根廷|Argentina)|{L}ARG?{R}"),
+    ("🇧🇷 巴西", f"🇧🇷|(?i:巴西|圣保罗|Brazil)|{L}BRA?{R}"),
 ]
+PRIMARY_REGIONS = 5
+G_OTHER = "🌐 其他"
+LB_SUFFIX, AUTO_SUFFIX = "均衡", "自动"
+GROUP_TYPES = ("select", "url-test", "fallback", "load-balance")
+LB_STRATEGIES = ("consistent-hashing", "round-robin", "sticky-sessions")
 SIDE_GROUPS = [G_YT, G_GG, G_TG, G_AI, G_NF, G_FINAL]
 BUILTIN_POLICIES = {"DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE"}
 HC = "https://www.gstatic.com/generate_204"
@@ -310,9 +337,9 @@ def parse_link(line):
     raise ValueError("不支持的链接类型")
 
 
-def add_links(text, existing):
+def add_links(text, existing, d=None):
     """解析多行链接，返回 (新增节点列表, 错误列表)；节点名自动去重"""
-    taken = {n["proxy"]["name"] for n in existing} | reserved_names()
+    taken = {n["proxy"]["name"] for n in existing} | reserved_names(d)
     out, errs = [], []
     for i, line in enumerate([x.strip() for x in text.splitlines() if x.strip()], 1):
         try:
@@ -331,12 +358,214 @@ def add_links(text, existing):
     return out, errs
 
 
-def reserved_names():
-    return {G_SEL, G_AUTO, "GLOBAL"} | set(SIDE_GROUPS) | {r[0] for r in REGIONS} | BUILTIN_POLICIES
+def reserved_names(d=None):
+    regs = [r[0] for r in REGIONS] + [G_OTHER]
+    out = {G_SEL, G_AUTO, "GLOBAL"} | set(SIDE_GROUPS) | BUILTIN_POLICIES
+    for r in regs:
+        out |= {r, r + LB_SUFFIX, r + AUTO_SUFFIX}
+    if d:
+        out |= {g["name"] for g in d.get("custom_groups") or []}
+    return out
+
+
+# ---------------------------------------------------------------- 策略组
+PROV_FILE = os.path.join(PANEL_DIR, "provider_nodes.json")
+PROV = {"t": 0, "data": None}
+RX_CACHE = {}
+
+
+def rx(pattern):
+    """编译正则（缓存）；无效时返回 None"""
+    if pattern not in RX_CACHE:
+        try:
+            RX_CACHE[pattern] = re.compile(pattern)
+        except re.error:
+            RX_CACHE[pattern] = None
+    return RX_CACHE[pattern]
+
+
+def provider_nodes(fresh=False):
+    """订阅（proxy-provider）里的节点名 {订阅名: [节点名]}：优先读运行中的核心，缓存到文件供核心未运行时生成配置"""
+    now = time.time()
+    if not fresh and PROV["data"] is not None and now - PROV["t"] < 60:
+        return PROV["data"]
+    data = None
+    j = None if os.environ.get("PANEL_OFFLINE") else core_json("/providers/proxies", timeout=3)
+    if j is not None:
+        data = {}
+        for name, p in (j.get("providers") or {}).items():
+            if p.get("vehicleType") in ("HTTP", "File", "Inline") and p.get("proxies") is not None:
+                data[name] = [x.get("name") for x in p["proxies"] if x.get("name")]
+        if data != read_json(PROV_FILE, None):
+            try:
+                write_json(PROV_FILE, data)
+            except Exception:
+                pass
+    if data is None:
+        data = read_json(PROV_FILE, {})
+    PROV.update(t=now, data=data)
+    return data
+
+
+def gcfg(d):
+    gc = dict(GROUPS_DEFAULT)
+    gc.update({k: v for k, v in (d.get("groups_cfg") or {}).items() if k in GROUPS_DEFAULT})
+    if gc["type"] not in GROUP_TYPES:
+        gc["type"] = "url-test"
+    if gc["strategy"] not in LB_STRATEGIES:
+        gc["strategy"] = "consistent-hashing"
+    return gc
+
+
+def group_opts(t, gc, extra=None):
+    """各类型策略组的公共参数"""
+    e = extra or {}
+    g = {"type": t}
+    if t != "select":
+        g.update({"url": e.get("url") or gc["url"], "interval": int(e.get("interval") or gc["interval"]), "lazy": bool(gc["lazy"])})
+        if t == "url-test":
+            g["tolerance"] = int(e.get("tolerance") if e.get("tolerance") not in (None, "") else gc["tolerance"])
+        if t == "load-balance":
+            g["strategy"] = e.get("strategy") if e.get("strategy") in LB_STRATEGIES else gc["strategy"]
+    return g
+
+
+def region_plan(d, names, use):
+    """返回 [(地区名, 正则或 None, exclude 正则或 None, 手动节点, 节点总数, 是否未知)]，只保留确实有节点的地区"""
+    if not (use or names) or not d.get("region_groups", True):
+        return []
+    gc = gcfg(d)
+    pn = provider_nodes() if use else {}
+    subs = [s["name"] for s in d["subs"]]
+    unknown = any(s not in pn for s in subs)
+    pnames = [n for s in subs for n in pn.get(s, [])]
+    regs = REGIONS if gc["extra"] else REGIONS[:PRIMARY_REGIONS]
+    out = []
+    for i, (rname, flt) in enumerate(regs):
+        r = rx(flt)
+        matched = [n for n in names if r.search(n)]
+        total = len(matched) + sum(1 for n in pnames if r.search(n))
+        if total or (unknown and i < PRIMARY_REGIONS):  # 订阅还没加载过：沿用旧行为，先生成 5 个常用地区
+            out.append((rname, flt, None, matched, total, unknown))
+    if gc["other"]:
+        alls = [rx(f) for _, f in regs]
+        matched = [n for n in names if not any(r.search(n) for r in alls)]
+        total = len(matched) + sum(1 for n in pnames if not any(r.search(n) for r in alls))
+        if total:
+            out.append((G_OTHER, None, "|".join(f for _, f in regs), matched, total, unknown))
+    return out
+
+
+def all_node_names(d):
+    """手动节点 + 已知订阅节点"""
+    pn = provider_nodes() if d["subs"] else {}
+    return [n["proxy"]["name"] for n in d.get("nodes", [])] + [n for s in d["subs"] for n in pn.get(s["name"], [])]
+
+
+def find_cycle(groups):
+    """策略组之间的循环引用，返回环路径或 None"""
+    gmap = {g["name"]: [m for m in g.get("proxies", [])] for g in groups}
+    state, stack = {}, []
+
+    def dfs(n):
+        state[n] = 1
+        stack.append(n)
+        for m in gmap.get(n, []):
+            if m in gmap:
+                if state.get(m) == 1:
+                    return stack[stack.index(m):] + [m]
+                if not state.get(m):
+                    c = dfs(m)
+                    if c:
+                        return c
+        state[n] = 2
+        stack.pop()
+        return None
+
+    for n in gmap:
+        if not state.get(n):
+            c = dfs(n)
+            if c:
+                return c
+    return None
+
+
+NAME_BAD = re.compile(r"[,#\n\r\t\"]")
+
+
+def clean_custom_group(b):
+    """校验并规范化一个自定义策略组（不含引用检查）"""
+    name = str(b.get("name") or "").strip()
+    if not name or len(name) > 40 or NAME_BAD.search(name):
+        raise ValueError("名称不能为空、不超过 40 字，且不能包含逗号、# 或引号")
+    t = b.get("type") or "select"
+    if t not in GROUP_TYPES:
+        raise ValueError("类型只能是 select / url-test / fallback / load-balance")
+    members = []
+    for m in b.get("proxies") or []:
+        m = str(m).strip()
+        if m and m not in members:
+            members.append(m)
+    flt = str(b.get("filter") or "").strip()
+    if flt and rx(flt) is None:
+        raise ValueError(f"筛选正则无效：{flt}")
+    if not members and not flt:
+        raise ValueError("请至少选择一个成员，或填写筛选正则")
+    icon = str(b.get("icon") or "").strip()
+    if icon and not re.match(r"^https?://\S{4,500}$", icon):
+        raise ValueError("图标必须是 http(s) 图片地址")
+    g = {"name": name, "type": t, "proxies": members, "filter": flt, "subs": bool(b.get("subs", True)),
+         "expose": bool(b.get("expose", True)), "icon": icon}
+    if t != "select":
+        try:
+            iv = int(b.get("interval") or 0)
+            tol = int(b.get("tolerance") or 0)
+        except (TypeError, ValueError):
+            raise ValueError("测速间隔 / 容差必须是数字")
+        if iv and not 30 <= iv <= 86400:
+            raise ValueError("测速间隔应在 30–86400 秒之间")
+        if not 0 <= tol <= 1000:
+            raise ValueError("容差应在 0–1000 ms 之间")
+        g.update(interval=iv, tolerance=tol)
+        if t == "load-balance":
+            st = b.get("strategy") or "consistent-hashing"
+            if st not in LB_STRATEGIES:
+                raise ValueError("负载均衡策略无效")
+            g["strategy"] = st
+    return g
+
+
+def validate_groups(d):
+    """生成配置后检查自定义组：重名、成员不存在、循环引用"""
+    errs = []
+    nodes = all_node_names(d)
+    fixed = reserved_names()
+    seen = set()
+    for cg in d.get("custom_groups") or []:
+        n = cg["name"]
+        if n in seen:
+            errs.append(f"策略组重名：{n}")
+        if n in fixed:
+            errs.append(f"「{n}」与内置策略组或策略同名")
+        if n in nodes:
+            errs.append(f"「{n}」与节点同名")
+        seen.add(n)
+    cfg = build_config(d, strict=True)
+    names = {g["name"] for g in cfg["proxy-groups"]} | BUILTIN_POLICIES | {p["name"] for p in cfg["proxies"]}
+    for cg in d.get("custom_groups") or []:
+        miss = [m for m in cg["proxies"] if m not in names]
+        if miss:
+            errs.append(f"「{cg['name']}」的成员不存在：" + "、".join(miss[:5]))
+        if cg["name"] in cg["proxies"]:
+            errs.append(f"「{cg['name']}」不能包含自己")
+    cyc = find_cycle(cfg["proxy-groups"])
+    if cyc:
+        errs.append("策略组循环引用：" + " → ".join(cyc) + "（加入「节点选择 / 分流组」的组不能再引用这些组，可关闭“加入节点选择”）")
+    return errs
 
 
 # ---------------------------------------------------------------- 生成配置
-def build_config(d):
+def build_config(d, strict=False):
     providers = {}
     for s in d["subs"]:
         pv = {
@@ -353,37 +582,80 @@ def build_config(d):
     use = list(providers)
     proxies = [n["proxy"] for n in d.get("nodes", [])]
     names = [p["name"] for p in proxies]
-    regions = []
-    if (use or names) and d.get("region_groups", True):
-        for rname, flt in REGIONS:
-            matched = [n for n in names if re.search(flt, n)]
-            if use or matched:
-                regions.append((rname, flt, matched))
-    rnames = [r[0] for r in regions]
+    gc = gcfg(d)
 
-    def with_src(g, members):
+    def with_src(g, members, src=True):
         if members:
             g["proxies"] = members
-        if use:
-            g["use"] = use
+        if use and src:
+            g["use"] = list(use)
+        if not g.get("proxies") and not g.get("use"):
+            g["proxies"] = ["COMPATIBLE"]
         return g
 
-    if use or names:
+    # 地区分组：主组（类型可选，默认 url-test）+ 「均衡」负载均衡组（≥2 个节点）+ 「自动」url-test（主组不是 url-test 时）
+    region_groups, rnames = [], []
+    for rname, flt, exc, matched, total, unknown in region_plan(d, names, use):
+        variants = [(rname, gc["type"])]
+        if gc["auto"] and gc["type"] != "url-test":
+            variants.append((rname + AUTO_SUFFIX, "url-test"))
+        if gc["lb"] and gc["type"] != "load-balance" and (total >= 2 or (unknown and use)):
+            variants.append((rname + LB_SUFFIX, "load-balance"))
+        for gname, t in variants:
+            g = with_src(dict({"name": gname}, **group_opts(t, gc)), matched)
+            if use:
+                if flt:
+                    g["filter"] = flt
+                if exc:
+                    g["exclude-filter"] = exc
+            region_groups.append(g)
+            rnames.append(gname)
+
+    # 自定义策略组
+    custom_groups, cnames, exposed = [], [], []
+    region_set = set(rnames)
+    for cg in d.get("custom_groups") or []:
+        try:
+            cg = clean_custom_group(cg)
+        except ValueError:
+            continue
+        members = list(cg["proxies"])
+        if cg["filter"]:
+            r = rx(cg["filter"])
+            members += [n for n in names if r.search(n) and n not in members]
+        g = dict({"name": cg["name"]}, **group_opts(cg["type"], gc, cg))
+        g["_members"] = members
+        if cg["icon"]:
+            g["icon"] = cg["icon"]
+        if cg["filter"] and cg["subs"] and use:
+            g["use"], g["filter"] = list(use), cg["filter"]
+        custom_groups.append(g)
+        cnames.append(cg["name"])
+        if cg["expose"]:
+            exposed.append(cg["name"])
+
+    if use or names or cnames:
         groups = [
-            with_src({"name": G_SEL, "type": "select"}, [G_AUTO] + rnames + names + ["DIRECT"]),
-            with_src({"name": G_AUTO, "type": "url-test", "url": HC, "interval": 300, "tolerance": 50}, names),
+            with_src({"name": G_SEL, "type": "select"}, [G_AUTO] + rnames + exposed + names + ["DIRECT"]),
+            with_src(dict({"name": G_AUTO}, **group_opts("url-test", gc)), names),
         ]
-        side = [G_SEL, G_AUTO] + rnames + ["DIRECT"] + names
+        side = [G_SEL, G_AUTO] + rnames + exposed + ["DIRECT"] + names
     else:
         groups = [{"name": G_SEL, "type": "select", "proxies": ["DIRECT"]}]
         side = [G_SEL, "DIRECT"]
     for g in SIDE_GROUPS:
         groups.append(with_src({"name": g, "type": "select"}, list(side)))
-    for name, flt, matched in regions:
-        g = with_src({"name": name, "type": "url-test", "url": HC, "interval": 300, "tolerance": 50}, matched)
-        if use:
-            g["filter"] = flt
+    known = {g["name"] for g in groups} | region_set | set(cnames) | BUILTIN_POLICIES | set(names)
+    for g in custom_groups:
+        members = g.pop("_members")
+        if not strict:  # 成员已不存在（地区组消失、节点被删）时跳过，避免整份配置无法加载
+            members = [m for m in members if m in known]
+        if members:
+            g["proxies"] = members
+        if not g.get("proxies") and not g.get("use"):
+            g["proxies"] = ["COMPATIBLE"]
         groups.append(g)
+    groups += region_groups
     policies = {g["name"] for g in groups} | BUILTIN_POLICIES | set(names)
 
     rule_providers = {}
@@ -462,7 +734,7 @@ def build_config(d):
             "mmdb": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.metadb",
         },
         "profile": {"store-selected": True, "store-fake-ip": True},
-        "sniffer": {"enable": True, "sniff": {
+        "sniffer": {"enable": bool(d.get("sniffer", True)), "sniff": {
             "HTTP": {"ports": [80, "8080-8880"], "override-destination": True},
             "TLS": {"ports": [443, 8443]}, "QUIC": {"ports": [443, 8443]}}},
         "dns": dns, "tun": tun,
@@ -560,7 +832,7 @@ def check_config(path):
     code, out = sh(f"'{MIHOMO_BIN}' -t -d '{CONF_DIR}' -f '{path}'", timeout=90)
     if code == 0:
         return True, ""
-    lines = [l for l in out.splitlines() if "level=error" in l or "level=fatal" in l or "test failed" in l.lower()]
+    lines = [l for l in out.splitlines() if "level=error" in l or "level=fatal" in l or "test failed" in l.lower() or l.startswith("panic:")]
     return False, "\n".join(lines[-3:]) or out[-400:]
 
 
@@ -611,6 +883,155 @@ def reload_core(prev=None):
         sh(SVC + " restart")
         return True, "已写入配置并重启 mihomo"
     return code < 300, body.decode(errors="ignore") or "配置已重载"
+
+
+def group_sig(cfg):
+    return [(g["name"], g["type"], g.get("filter", ""), tuple(g.get("proxies") or [])) for g in cfg.get("proxy-groups") or []]
+
+
+def refresh_regions():
+    """订阅节点变化后，地区分组（存在哪些地区、是否生成均衡组）可能变化：与当前配置不同就重新生成并重载"""
+    if not core_alive():  # 核心没在运行（可能是手动停止）时不重载，免得把它拉起来
+        return False, "核心未运行"
+    provider_nodes(fresh=True)
+    cur = read_json(os.path.join(CONF_DIR, "config.yaml"), None)
+    if not cur:
+        return False, "当前配置不存在"
+    if group_sig(cur) == group_sig(build_config(load())):
+        return True, "地区分组无变化"
+    ok, msg = reload_core()
+    print(time.strftime("%F %T"), "[groups] 订阅节点变化，已重新生成地区分组：", ok, msg[:120], flush=True)
+    return ok, "地区分组已按最新订阅节点更新" if ok else msg
+
+
+def refresh_after_sub(name, wait=90):
+    """新订阅加入后等核心下载完节点，再更新地区分组"""
+    def run():
+        end = time.time() + wait
+        while time.time() < end:
+            time.sleep(4)
+            if name in provider_nodes(fresh=True):
+                break
+        try:
+            refresh_regions()
+        except Exception as e:
+            print("refresh regions error", e, flush=True)
+    threading.Thread(target=run, daemon=True).start()
+
+
+# ---------------------------------------------------------------- 面板在线更新
+PANEL_RAW = os.environ.get("PANEL_RAW", "https://raw.githubusercontent.com/Skycnhe/mihomo-panel/Hk001")
+UPD_FILES = ["server.py", "index.html", "tproxy.sh", "selftest.sh", "init.d/mihomo", "init.d/mihomo-panel"]
+UPD_STATE = {"busy": False}
+
+
+def local_file(f):
+    if f.startswith("init.d/"):
+        sysf = "/etc/init.d/" + f[7:]
+        return sysf if BASE == "/opt/mihomo-panel" and os.path.isfile(sysf) else os.path.join(BASE, f)
+    return os.path.join(BASE, f)
+
+
+def fetch_raw(f, gh):
+    url = PANEL_RAW.rstrip("/") + "/" + f
+    tries = [(gh.rstrip("/") + "/" + url, False)] if gh else []
+    tries += [(url, True), (url, False)]  # 先经 mihomo 代理，再直连
+    err = ""
+    for u, use_proxy in tries:
+        try:
+            req = urllib.request.Request(u + ("&" if "?" in u else "?") + "t=" + str(int(time.time())), headers={"User-Agent": UA})
+            with proxy_opener(use_proxy).open(req, timeout=20) as r:
+                return r.read(4 << 20)
+        except Exception as e:
+            err = f"{u.split('://')[0]}{'(代理)' if use_proxy else ''}: {str(e)[:120]}"
+    raise IOError(f"下载 {f} 失败：{err}")
+
+
+def remote_version(src):
+    m = re.search(rb'^PANEL_VERSION = "([^"]+)"', src, re.M)
+    return m.group(1).decode() if m else "?"
+
+
+def self_update(apply=False, gh=""):
+    """检查 / 应用 GitHub 上的新版面板：下载全部文件 → 校验 → 备份 → 替换 → 重启面板"""
+    if UPD_STATE["busy"]:
+        return False, {"message": "正在更新中"}
+    UPD_STATE["busy"] = True
+    try:
+        files, changed = {}, []
+        for f in UPD_FILES:
+            data = fetch_raw(f, gh)
+            files[f] = data
+            try:
+                with open(local_file(f), "rb") as fh:
+                    same = fh.read() == data
+            except OSError:
+                same = False
+            if not same:
+                changed.append(f)
+        info = {"current": PANEL_VERSION, "remote": remote_version(files["server.py"]), "changed": changed,
+                "source": PANEL_RAW}
+        if not apply:
+            info["message"] = "已是最新" if not changed else f"有 {len(changed)} 个文件可更新"
+            return True, info
+        if not changed:
+            info["message"] = "已是最新，无需更新"
+            return True, info
+        try:  # 校验：Python 语法、HTML 完整、shell 语法
+            compile(files["server.py"], "server.py", "exec")
+        except SyntaxError as e:
+            raise ValueError(f"新版 server.py 语法错误：{e}")
+        if b"</html>" not in files["index.html"] or b"<script>" not in files["index.html"]:
+            raise ValueError("新版 index.html 不完整")
+        tmpd = os.path.join(BASE, ".update")
+        shutil.rmtree(tmpd, ignore_errors=True)
+        os.makedirs(os.path.join(tmpd, "init.d"))
+        for f, data in files.items():
+            with open(os.path.join(tmpd, f), "wb") as fh:
+                fh.write(data)
+            if f.endswith(".sh") or f.startswith("init.d/"):
+                code, out = sh(f"sh -n '{os.path.join(tmpd, f)}'")
+                if code != 0:
+                    raise ValueError(f"新版 {f} 语法错误：{out[-200:]}")
+        bak = os.path.join(BASE, ".backup")
+        shutil.rmtree(bak, ignore_errors=True)
+        os.makedirs(os.path.join(bak, "init.d"))
+        for f in UPD_FILES:
+            if os.path.isfile(local_file(f)):
+                shutil.copy2(local_file(f), os.path.join(bak, f))
+        for f in changed:
+            dst = local_file(f)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copyfile(os.path.join(tmpd, f), dst + ".new")
+            os.chmod(dst + ".new", 0o755 if (f.endswith(".sh") or f.startswith("init.d/")) else 0o644)
+            os.replace(dst + ".new", dst)
+        shutil.rmtree(tmpd, ignore_errors=True)
+        restart_self()
+        info["message"] = f"已更新 {len(changed)} 个文件（{'、'.join(changed)}），面板正在重启；旧版本已备份，可回滚"
+        return True, info
+    except Exception as e:
+        return False, {"message": str(e)}
+    finally:
+        UPD_STATE["busy"] = False
+
+
+def self_rollback():
+    bak = os.path.join(BASE, ".backup")
+    if not os.path.isfile(os.path.join(bak, "server.py")):
+        return False, "没有可回滚的备份"
+    for f in UPD_FILES:
+        src = os.path.join(bak, f)
+        if os.path.isfile(src):
+            shutil.copy2(src, local_file(f))
+    restart_self()
+    return True, "已回滚到更新前的版本，面板正在重启"
+
+
+def config_view(d=None, masked=True):
+    cfg = build_config(d or load())
+    if masked:
+        cfg["secret"] = "******"
+    return json.dumps(cfg, ensure_ascii=False, indent=2)
 
 
 def sh(cmd, timeout=60):
@@ -793,7 +1214,7 @@ def monitor_loop():
     while True:
         time.sleep(WD_INTERVAL)
         n += 1
-        for fn, every in ((watchdog_tick, 1), (check_nodes, 20), (check_subs, 120)):
+        for fn, every in ((watchdog_tick, 1), (check_nodes, 20), (check_subs, 120), (refresh_regions, 20)):
             if n % every == 0 or (fn is check_subs and n == 2):
                 try:
                     if fn is watchdog_tick or WD["status"] in ("ok", "off"):
@@ -1713,6 +2134,10 @@ def run_task(name):
             code, _ = core("PUT", "/providers/proxies/" + quote(s["name"]), timeout=120)
             if code >= 300:
                 bad.append(s["name"])
+        try:
+            refresh_regions()
+        except Exception:
+            pass
         return not bad, "订阅已更新" if not bad else "以下订阅更新失败：" + "、".join(bad)
     if name == "core_restart":
         WD["manual_stop"] = False
@@ -2024,7 +2449,52 @@ class Server(ThreadingHTTPServer):
 
 
 def restart_self():
-    sh("(sleep 1; rc-service mihomo-panel restart) >/dev/null 2>&1 &")
+    sh("(sleep 1; %s) >/dev/null 2>&1 &" % os.environ.get("PANEL_RESTART", "rc-service mihomo-panel restart"))
+
+
+def group_meta(d, cfg):
+    cn = {g["name"] for g in d.get("custom_groups") or []}
+    meta = {}
+    for g in cfg["proxy-groups"]:
+        n = g["name"]
+        kind = ("custom" if n in cn else "select" if n == G_SEL else "auto" if n == G_AUTO else
+                "service" if n in SIDE_GROUPS else "lb" if n.endswith(LB_SUFFIX) else "region")
+        meta[n] = {"kind": kind, "type": g["type"], "strategy": g.get("strategy", ""), "filter": g.get("filter", ""),
+                   "subs": bool(g.get("use")), "icon": g.get("icon", "")}
+    return meta
+
+
+def rename_policy(d, old, new):
+    """策略组改名 / 删除时同步更新自定义规则、规则集、其他自定义组、代理 DNS 的引用；返回受影响条目数"""
+    n = 0
+    rules = []
+    for r in d["rules"]:
+        parts = r.split(",")
+        i = rule_policy_index(parts)
+        if not r.startswith("#") and i > 0 and parts[i].strip() == old:
+            parts[i] = new
+            n += 1
+        rules.append(",".join(parts))
+    d["rules"] = rules
+    for r in d["rulesets"]:
+        if r.get("target") == old:
+            r["target"] = new
+            n += 1
+    for g in d["custom_groups"]:
+        if old in g.get("proxies", []):
+            g["proxies"] = [new if m == old else m for m in g["proxies"]] if new != G_SEL else [m for m in g["proxies"] if m != old]
+            n += 1
+    dc = d["dns"]
+    for k in ("direct", "proxy"):
+        out = []
+        for x in dc.get(k) or []:
+            if dns_policy_of(x) == old:
+                head, _, tail = x.partition("#")
+                x = head + "#" + new + tail[len(old):]
+                n += 1
+            out.append(x)
+        dc[k] = out
+    return n
 
 
 # ---------------------------------------------------------------- HTTP
@@ -2239,6 +2709,114 @@ class H(BaseHTTPRequestHandler):
             core("POST", "/cache/fakeip/flush") if dc["mode"] == "fake-ip" else None
         return self.reply(ok, "DNS 设置已生效" if ok else msg)
 
+    def groups_info(self):
+        d = load()
+        cfg = build_config(d)
+        names = [p["name"] for p in cfg["proxies"]]
+        plan = region_plan(d, names, list(cfg["proxy-providers"]))
+        gnames = [g["name"] for g in cfg["proxy-groups"]]
+        regions = [{"name": r[0], "total": r[4], "manual": len(r[3]), "unknown": r[5],
+                    "groups": [g for g in gnames if g in (r[0], r[0] + LB_SUFFIX, r[0] + AUTO_SUFFIX)]} for r in plan]
+        return self.send(200, {"cfg": gcfg(d), "region_groups": d["region_groups"], "custom": d["custom_groups"],
+                               "regions": regions, "groups": gnames, "manual": names, "nodes": all_node_names(d),
+                               "meta": group_meta(d, cfg), "types": GROUP_TYPES, "strategies": LB_STRATEGIES,
+                               "region_names": [r[0] for r in REGIONS], "primary": PRIMARY_REGIONS})
+
+    def save_groups_cfg(self, b):
+        gc = gcfg(load())
+        for k in ("lb", "auto", "extra", "other", "lazy"):
+            if k in b:
+                gc[k] = bool(b[k])
+        if "type" in b:
+            if b["type"] not in GROUP_TYPES:
+                return self.send(400, {"message": "地区分组类型无效"})
+            gc["type"] = b["type"]
+        if "strategy" in b:
+            if b["strategy"] not in LB_STRATEGIES:
+                return self.send(400, {"message": "负载均衡策略无效"})
+            gc["strategy"] = b["strategy"]
+        try:
+            if "interval" in b:
+                gc["interval"] = int(b["interval"])
+            if "tolerance" in b:
+                gc["tolerance"] = int(b["tolerance"])
+        except (TypeError, ValueError):
+            return self.send(400, {"message": "测速间隔 / 容差必须是数字"})
+        if not 30 <= gc["interval"] <= 86400:
+            return self.send(400, {"message": "测速间隔应在 30–86400 秒之间"})
+        if not 0 <= gc["tolerance"] <= 1000:
+            return self.send(400, {"message": "容差应在 0–1000 ms 之间"})
+        if "url" in b:
+            u = str(b["url"]).strip()
+            if not re.match(r"^https?://\S+$", u):
+                return self.send(400, {"message": "测速地址必须是 http(s) 链接"})
+            gc["url"] = u
+
+        def fn(d):
+            d["groups_cfg"] = gc
+            if "region_groups" in b:
+                d["region_groups"] = bool(b["region_groups"])
+        test = load()
+        fn(test)
+        errs = validate_groups(test)
+        if errs:
+            return self.send(400, {"message": "；".join(errs[:3])})
+        prev = update(fn)
+        ok, msg = reload_core(prev)
+        return self.reply(ok, "策略组设置已生效" if ok else msg)
+
+    def save_custom_group(self, b):
+        try:
+            g = clean_custom_group(b)
+        except ValueError as e:
+            return self.send(400, {"message": str(e)})
+        orig = str(b.get("orig") or "").strip()
+        cur = load()
+        if orig and not any(x["name"] == orig for x in cur["custom_groups"]):
+            return self.send(404, {"message": f"策略组不存在：{orig}"})
+        if g["name"] != orig and any(x["name"] == g["name"] for x in cur["custom_groups"]):
+            return self.send(400, {"message": f"已存在同名策略组：{g['name']}"})
+        info = {"refs": 0}
+
+        def fn(d):
+            if orig:
+                d["custom_groups"] = [g if x["name"] == orig else x for x in d["custom_groups"]]
+                if g["name"] != orig:
+                    info["refs"] = rename_policy(d, orig, g["name"])
+            else:
+                d["custom_groups"].append(g)
+        test = copy.deepcopy(cur)
+        fn(test)
+        errs = validate_groups(test)
+        if errs:
+            return self.send(400, {"message": "；".join(errs[:3])})
+        prev = update(fn)
+        ok, msg = reload_core(prev)
+        if not ok:
+            return self.send(500, {"message": msg})
+        extra = f"，已同步更新 {info['refs']} 处引用" if info["refs"] else ""
+        return self.send(200, {"message": ("已保存策略组 " if orig else "已创建策略组 ") + g["name"] + extra})
+
+    def delete_custom_group(self, b):
+        name = str(b.get("name") or "")
+        cur = load()
+        if not any(x["name"] == name for x in cur["custom_groups"]):
+            return self.send(404, {"message": f"策略组不存在：{name}"})
+        users = [x["name"] for x in cur["custom_groups"] if name in x.get("proxies", [])]
+        if users and not b.get("force"):
+            return self.send(409, {"message": f"「{name}」被其他策略组引用：{'、'.join(users)}。确认删除会同时从这些组中移除它", "users": users})
+        info = {"refs": 0}
+
+        def fn(d):
+            d["custom_groups"] = [x for x in d["custom_groups"] if x["name"] != name]
+            info["refs"] = rename_policy(d, name, G_SEL)
+        prev = update(fn)
+        ok, msg = reload_core(prev)
+        if not ok:
+            return self.send(500, {"message": msg})
+        extra = f"，{info['refs']} 处引用已改为「{G_SEL}」" if info["refs"] else ""
+        return self.send(200, {"message": f"已删除 {name}{extra}"})
+
     def api(self, m, p, q):
         b = self.body() if m in ("POST", "PUT", "PATCH", "DELETE") else {}
         # 透传到 mihomo external-controller
@@ -2254,7 +2832,8 @@ class H(BaseHTTPRequestHandler):
             except Exception:
                 version = "-"
             has = bool(d["subs"] or d["nodes"])
-            groups = [g["name"] for g in build_config(d)["proxy-groups"]]
+            cfg = build_config(d)
+            groups = [g["name"] for g in cfg["proxy-groups"]]
             return self.send(200, {"mode": d["mode"], "tproxy": d["tproxy"], "subs": d["subs"], "rules": d["rules"],
                                    "running": "started" in st or code == 200, "version": version, "groups": groups,
                                    "has_nodes": has, "nodes": [{"name": n["proxy"]["name"], "type": n["proxy"]["type"],
@@ -2266,9 +2845,57 @@ class H(BaseHTTPRequestHandler):
                                    "default_exclude": DEFAULT_EXCLUDE, "proxy_mode": d["proxy_mode"], "tun": d["tun"],
                                    "log_limit": d["log_limit"], "dns": d["dns"], "dns_default": DNS_DEFAULT,
                                    "schedule": d["schedule"], "devices": d["devices"], "adblock_on": d["adblock"]["enabled"],
-                                   "sched_events": list(SCHED["events"])[:20],
+                                   "sched_events": list(SCHED["events"])[:20], "group_meta": group_meta(d, cfg),
+                                   "custom_groups": d["custom_groups"], "groups_cfg": gcfg(d), "sniffer": d["sniffer"],
+                                   "gh_proxy": d["gh_proxy"], "panel_version": PANEL_VERSION,
                                    "wd": {"status": WD["status"], "fails": WD["fails"], "last_check": WD["last_check"],
                                           "events": list(WD["events"])[:20]}})
+        if p == "/api/groups" and m == "GET":
+            return self.groups_info()
+        if p == "/api/groups/cfg" and m == "PUT":
+            return self.save_groups_cfg(b)
+        if p == "/api/groups" and m == "POST":
+            return self.save_custom_group(b)
+        if p == "/api/groups" and m == "DELETE":
+            return self.delete_custom_group(b)
+        if p == "/api/groups/preview" and m == "POST":
+            flt = str(b.get("filter") or "").strip()
+            if not flt:
+                return self.send(200, {"matched": [], "total": 0})
+            r = rx(flt)
+            if r is None:
+                return self.send(400, {"message": "正则无效"})
+            d = load()
+            manual = [n["proxy"]["name"] for n in d["nodes"]]
+            allnodes = all_node_names(d) if b.get("subs", True) else manual
+            hit = [n for n in allnodes if r.search(n)]
+            return self.send(200, {"matched": hit[:200], "total": len(hit), "of": len(allnodes)})
+        if p == "/api/groups/refresh" and m == "POST":
+            return self.reply(*refresh_regions())
+        if p == "/api/config" and m == "GET":
+            txt = config_view(load(), masked=True)
+            if "download" in parse_qs(q):
+                return self.send(200, txt.encode(), "application/x-yaml")
+            return self.send(200, {"text": txt, "path": os.path.join(CONF_DIR, "config.yaml"), "size": len(txt.encode())})
+        if p == "/api/selfupdate" and m == "GET":
+            ok, info = self_update(False, load().get("gh_proxy") or "")
+            return self.send(200 if ok else 502, info)
+        if p == "/api/selfupdate" and m == "POST":
+            if b.get("action") == "rollback":
+                return self.reply(*self_rollback())
+            ok, info = self_update(True, load().get("gh_proxy") or "")
+            return self.send(200 if ok else 500, info)
+        if p == "/api/subs/update" and m == "POST":
+            name = b.get("name") or ""
+            names = [s["name"] for s in load()["subs"]] if not name else [name]
+            bad = []
+            for nm in names:
+                code, raw = core("PUT", "/providers/proxies/" + quote(nm), timeout=120)
+                if code >= 300:
+                    bad.append(nm + "：" + raw.decode(errors="ignore")[:100])
+            ok2, msg2 = refresh_regions()
+            msg = ("已更新" if not bad else "更新失败：" + "；".join(bad)) + ("；" + msg2 if msg2 and "无变化" not in msg2 else "")
+            return self.reply(not bad, msg)
         if p == "/api/delay":
             return self.send(200, delay_test())
         if p == "/api/unlock":
@@ -2282,20 +2909,23 @@ class H(BaseHTTPRequestHandler):
             if not name or not url.startswith("http"):
                 return self.send(400, {"message": "名称或订阅链接无效"})
             flt, exc = (b.get("filter") or "").strip(), (b["exclude"] if "exclude" in b else DEFAULT_EXCLUDE).strip()
-            for rx in (flt, exc):
+            for pat in (flt, exc):
                 try:
-                    re.compile(rx)
+                    re.compile(pat)
                 except re.error as e:
-                    return self.send(400, {"message": f"正则表达式无效：{rx}（{e}）"})
+                    return self.send(400, {"message": f"正则表达式无效：{pat}（{e}）"})
             prev = update(lambda d: d.update(subs=[s for s in d["subs"] if s["name"] != name] +
                                               [{"name": name, "url": url, "filter": flt, "exclude": exc}]))
-            return self.reply(*reload_core(prev))
+            ok, msg = reload_core(prev)
+            if ok:
+                refresh_after_sub(name)  # 订阅下载完成后按实际节点生成地区 / 均衡分组
+            return self.reply(ok, msg)
         if p == "/api/subs" and m == "DELETE":
             prev = update(lambda d: d.update(subs=[s for s in d["subs"] if s["name"] != b.get("name")]))
             return self.reply(*reload_core(prev))
         if p == "/api/nodes" and m == "POST":
             d = load()
-            added, errs = add_links(b.get("links") or "", d["nodes"])
+            added, errs = add_links(b.get("links") or "", d["nodes"], d)
             if not added:
                 return self.send(400, {"message": "没有可导入的节点" + ("：\n" + "\n".join(errs) if errs else "")})
             prev = update(lambda d: d["nodes"].extend(added))
@@ -2441,13 +3071,22 @@ class H(BaseHTTPRequestHandler):
             _, out = sh(f"tail -n 300 '{MIHOMO_LOG}'")
             return self.send(200, {"log": out})
         if p == "/api/settings" and m == "PUT":
-            allowed = {"rulesets", "bypass", "tests", "sub_interval", "region_groups", "ipv6", "watchdog", "tg_token", "tg_chat", "log_limit"}
+            allowed = {"rulesets", "bypass", "tests", "sub_interval", "region_groups", "ipv6", "watchdog", "tg_token", "tg_chat",
+                       "log_limit", "sniffer", "gh_proxy"}
+            if "gh_proxy" in b:
+                b["gh_proxy"] = str(b["gh_proxy"] or "").strip()
+                if b["gh_proxy"] and not re.match(r"^https?://[\w.\-:]+/?$", b["gh_proxy"]):
+                    return self.send(400, {"message": "GitHub 加速地址格式应为 https://ghfast.top/"})
+                if b["gh_proxy"] and not b["gh_proxy"].endswith("/"):
+                    b["gh_proxy"] += "/"
+            if "sniffer" in b:
+                b["sniffer"] = bool(b["sniffer"])
             if "log_limit" in b and b["log_limit"] not in (1, 2, 5, 10, 20):
                 return self.send(400, {"message": "日志上限只能是 1 / 2 / 5 / 10 / 20 MB"})
             prev = update(lambda d: d.update({k: v for k, v in b.items() if k in allowed}))
             d = load()
             msg = "已保存"
-            if set(b) & {"rulesets", "sub_interval", "region_groups", "ipv6"} or ("bypass" in b and d["proxy_mode"] == "tun"):
+            if set(b) & {"rulesets", "sub_interval", "region_groups", "ipv6", "sniffer"} or ("bypass" in b and d["proxy_mode"] == "tun"):
                 ok, msg = reload_core(prev)
                 if not ok:
                     return self.send(500, {"message": msg})
@@ -2476,7 +3115,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/restore" and m == "POST":
             keys = ("mode", "tproxy", "subs", "rules", "rulesets", "bypass", "tests", "sub_interval", "region_groups",
                     "nodes", "ipv6", "watchdog", "tg_token", "tg_chat", "proxy_mode", "tun", "log_limit", "adblock", "dns",
-                    "devices", "schedule")
+                    "devices", "schedule", "groups_cfg", "custom_groups", "sniffer", "gh_proxy")
 
             def apply_backup(d):
                 d.update({k: b[k] for k in keys if k in b})
