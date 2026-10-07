@@ -36,8 +36,24 @@ DEFAULT_FAKE_FILTER = ["*.lan", "+.local", "+.msftconnecttest.com", "+.msftncsi.
                        "+.stun.*.*", "+.market.xiaomi.com", "localhost.ptlogin2.qq.com"]
 DNS_DEFAULT = {"direct": ["https://doh.pub/dns-query", "https://dns.alidns.com/dns-query"],
                "proxy": ["https://1.1.1.1/dns-query#🚀 节点选择", "https://dns.google/dns-query#🚀 节点选择"],
-               "default": ["223.5.5.5", "119.29.29.29"], "mode": "fake-ip", "fake_filter": DEFAULT_FAKE_FILTER,
-               "cache": "arc", "policy": True}
+               "default": ["223.5.5.5", "119.29.29.29"], "pserver": [], "mode": "fake-ip", "fake_filter": DEFAULT_FAKE_FILTER,
+               "cache": "arc", "policy": True, "respect_rules": True, "block_bypass": False, "hosts": [], "policies": []}
+DNS_LISTS = ("direct", "proxy", "default", "pserver", "fake_filter")
+# 客户端绕过 mihomo DNS 的常见公共 DoH / DoT 服务器（阻止客户端绕过 DNS 时拒绝 LAN 设备直连它们的 443 / 853）
+DOH_IPS = ["1.1.1.1/32", "1.0.0.1/32", "8.8.8.8/32", "8.8.4.4/32", "9.9.9.9/32", "149.112.112.112/32", "208.67.222.222/32",
+           "208.67.220.220/32", "94.140.14.14/32", "94.140.15.15/32", "101.101.101.101/32", "185.222.222.222/32", "45.11.45.11/32",
+           "223.5.5.5/32", "223.6.6.6/32", "119.29.29.29/32", "1.12.12.12/32", "120.53.53.53/32", "180.76.76.76/32",
+           "180.184.1.1/32", "180.184.2.2/32", "2606:4700:4700::1111/128", "2606:4700:4700::1001/128", "2001:4860:4860::8888/128",
+           "2001:4860:4860::8844/128", "2620:fe::fe/128", "2400:3200::1/128", "2400:3200:baba::1/128", "2402:4e00::/128"]
+DOH_DOMAINS = ["+.dns.google", "+.cloudflare-dns.com", "+.one.one.one.one", "+.dns.quad9.net", "+.doh.opendns.com", "+.dns.adguard-dns.com",
+               "+.dns.adguard.com", "+.dns.nextdns.io", "+.doh.pub", "+.dot.pub", "+.dns.alidns.com", "+.doh.360.cn", "+.dns.twnic.tw",
+               "+.mozilla.cloudflare-dns.com", "+.chrome.cloudflare-dns.com", "+.dns.sb", "+.doh.dns.sb"]
+LAN_IN = "IN-TYPE,TPROXY/TUN/REDIR"  # 只针对透明代理进来的局域网流量；mihomo 自己的 DNS 查询（Inner）与 7890 端口不受影响
+# 国内（会看到你查询国外域名就算泄露）的 DNS 服务器特征
+CN_DNS = re.compile(r"(?i)(?:^|[/@\[])(?:223\.5\.5\.5|223\.6\.6\.6|2400:3200|119\.29\.29\.29|119\.28\.28\.28|182\.254\.11[68]\.116|"
+                    r"1\.12\.12\.12|120\.53\.53\.53|2402:4e00|114\.114\.11[45]\.11[45]|180\.76\.76\.76|180\.184\.[12]\.[12]|"
+                    r"101\.226\.4\.6|218\.30\.118\.6|117\.50\.\d+\.\d+|52\.80\.\d+\.\d+|"
+                    r"[\w.-]*(?:alidns\.com|doh\.pub|dot\.pub|dnspod\.(?:cn|com)|360\.cn|114dns\.com|onedns\.net|baidu\.com|volces\.com))(?:[:/#\]]|$)")
 AB_DEFAULT = {"enabled": False, "lists": [], "black": [], "white": [], "interval": 86400, "dns": False}
 AB_PRESETS = [{"name": "AdGuard DNS filter", "url": "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt"},
               {"name": "anti-AD", "url": "https://anti-ad.net/easylist.txt"}]
@@ -50,7 +66,7 @@ DEFAULT = {"password": "admin", "secret": "", "mode": "rule", "tproxy": True, "s
            "nodes": [], "ipv6": False, "https": False, "watchdog": True, "tg_token": "", "tg_chat": "",
            "proxy_mode": "", "tun": TUN_DEFAULT, "log_limit": 5, "adblock": AB_DEFAULT, "dns": DNS_DEFAULT,
            "devices": {}, "schedule": SCHED_DEFAULT, "groups_cfg": GROUPS_DEFAULT, "custom_groups": [], "sniffer": True,
-           "gh_proxy": ""}
+           "gh_proxy": "", "schema": 0}
 TESTS = [
     {"name": "Google", "url": "https://www.google.com/generate_204"},
     {"name": "YouTube", "url": "https://www.youtube.com/generate_204"},
@@ -58,9 +74,15 @@ TESTS = [
     {"name": "GitHub", "url": "https://github.com"},
     {"name": "百度", "url": "https://www.baidu.com"},
 ]
-G_SEL, G_AUTO, G_YT, G_GG, G_TG, G_FINAL = "🚀 节点选择", "♻️ 自动选择", "📹 YouTube", "🔍 Google", "📲 Telegram", "🐟 漏网之鱼"
+G_SEL, G_YT, G_GG, G_TG, G_FINAL = "🚀 节点选择", "📹 YouTube", "🔍 Google", "📲 Telegram", "🐟 漏网之鱼"
 G_AI, G_NF = "🤖 AI 服务", "🎬 Netflix"
-PANEL_VERSION = "5.0"
+G_MANUAL, G_AUTO, G_DIRECT = "\U0001F590\uFE0F 手动选择", "⚡ 全局自动选择", "🏠 直连"
+LB_PREFIX, AUTO_TAIL, LB_TAIL = "\u2696\uFE0F ", "自动优选", "负载均衡"
+LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据时自动迁移
+AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
+LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
+SCHEMA = 6
+PANEL_VERSION = "6.0"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -88,7 +110,7 @@ REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 
 ]
 PRIMARY_REGIONS = 5
 G_OTHER = "🌐 其他"
-LB_SUFFIX, AUTO_SUFFIX = "均衡", "自动"
+LB_SUFFIX, AUTO_SUFFIX = "均衡", "自动"  # 旧版（v5）地区组后缀，仅用于迁移
 GROUP_TYPES = ("select", "url-test", "fallback", "load-balance")
 LB_STRATEGIES = ("consistent-hashing", "round-robin", "sticky-sessions")
 SIDE_GROUPS = [G_YT, G_GG, G_TG, G_AI, G_NF, G_FINAL]
@@ -114,10 +136,98 @@ def load():
     d["tproxy"] = d["proxy_mode"] == "tproxy"
     if not d["tests"]:
         d["tests"] = [dict(t) for t in TESTS]
+    dirty = False
     if not d["secret"]:
         d["secret"] = secrets.token_hex(16)
+        dirty = True
+    if int(d.get("schema") or 0) < SCHEMA:  # v5 → v6：地区组改名（如 🇺🇸 美国 → 🇺🇸 美国自动优选），同步所有引用
+        migrate_names(d)
+        d["schema"] = SCHEMA
+        dirty = True
+    if dirty:
         save(d)
     return d
+
+
+def region_label(rname):
+    """「🇺🇸 美国」→ (「🇺🇸」, 「美国」)"""
+    flag, _, label = rname.partition(" ")
+    return flag, label
+
+
+def auto_name(rname):
+    flag, label = region_label(rname)
+    return f"{flag} {label}{AUTO_TAIL}"
+
+
+def lb_name(rname):
+    return LB_PREFIX + region_label(rname)[1] + LB_TAIL
+
+
+def legacy_map():
+    """旧版策略组名 → 新名称"""
+    m = {LEGACY_AUTO: G_AUTO}
+    for rname in [r[0] for r in REGIONS] + [G_OTHER]:
+        m[rname] = m[rname + AUTO_SUFFIX] = auto_name(rname)
+        m[rname + LB_SUFFIX] = lb_name(rname)
+    return m
+
+
+def map_dns_server(x, mp):
+    pol = dns_policy_of(x)
+    if pol and pol in mp:
+        head, _, tail = x.partition("#")
+        return head + "#" + mp[pol] + tail[len(pol):]
+    return x
+
+
+def map_refs(d, mp, drop=()):
+    """按 mp {旧名: 新名} 改写自定义规则、规则集、自定义组成员、各 DNS 列表里的策略组引用；drop 中的名字从自定义组成员里删除。返回改动数"""
+    n = 0
+    rules = []
+    for r in d.get("rules") or []:
+        parts = r.split(",")
+        i = rule_policy_index(parts)
+        if not r.startswith("#") and i > 0 and parts[i].strip() in mp:
+            parts[i] = mp[parts[i].strip()]
+            n += 1
+        rules.append(",".join(parts))
+    d["rules"] = rules
+    for r in d.get("rulesets") or []:
+        if r.get("target") in mp:
+            r["target"] = mp[r["target"]]
+            n += 1
+    for g in d.get("custom_groups") or []:
+        old = list(g.get("proxies") or [])
+        new = []
+        for m in old:
+            if m in drop:
+                continue
+            m = mp.get(m, m)
+            if m not in new:
+                new.append(m)
+        if new != old:
+            g["proxies"] = new
+            n += 1
+    dc = d.get("dns") or {}
+    for k in ("direct", "proxy", "pserver"):
+        out = []
+        for x in dc.get(k) or []:
+            y = map_dns_server(x, mp)
+            n += y != x
+            out.append(y)
+        if k in dc:
+            dc[k] = out
+    for pe in dc.get("policies") or []:
+        out = [map_dns_server(x, mp) for x in pe.get("servers") or []]
+        n += out != pe.get("servers")
+        pe["servers"] = out
+    return n
+
+
+def migrate_names(d):
+    mp = legacy_map()
+    return map_refs(d, {k: v for k, v in mp.items() if k != v})
 
 
 def save(d):
@@ -130,13 +240,44 @@ def save(d):
 
 
 def update(fn):
-    """在锁内读-改-写 data.json，返回修改前的副本（用于配置校验失败时回滚）"""
+    """在锁内读-改-写 data.json，返回修改前的副本（用于配置校验失败时回滚）；有实际变化时把旧版本记入配置快照"""
     with LOCK:
         d = load()
         prev = copy.deepcopy(d)
         fn(d)
         save(d)
+        try:
+            history_push(prev, d)
+        except Exception as e:
+            print("history error", e, flush=True)
     return prev
+
+
+HISTORY_FILE = os.path.join(PANEL_DIR, "history.json")
+HISTORY_MAX = 10
+HISTORY_SKIP = {"password", "secret", "devices", "https", "schema"}
+KEY_LABEL = {"subs": "订阅", "nodes": "节点", "rules": "自定义规则", "rulesets": "规则集", "dns": "DNS", "adblock": "广告拦截",
+             "custom_groups": "自定义策略组", "groups_cfg": "地区分组", "region_groups": "地区分组", "proxy_mode": "代理方式",
+             "tun": "TUN", "ipv6": "IPv6", "bypass": "绕过设备", "mode": "代理模式", "sniffer": "域名嗅探", "schedule": "定时任务",
+             "tests": "延迟站点", "sub_interval": "订阅间隔", "tg_token": "Telegram", "tg_chat": "Telegram", "watchdog": "看门狗",
+             "log_limit": "日志上限", "gh_proxy": "GitHub 加速", "tproxy": "代理方式"}
+
+
+def history_push(prev, cur):
+    keys = sorted(k for k in set(prev) | set(cur) if k not in HISTORY_SKIP and prev.get(k) != cur.get(k))
+    if not keys:
+        return
+    h = read_json(HISTORY_FILE, [])
+    snap = {k: v for k, v in prev.items() if k not in HISTORY_SKIP}
+    if h and h[0].get("data") == snap:
+        return
+    labels = []
+    for k in keys:
+        lb = KEY_LABEL.get(k, k)
+        if lb not in labels:
+            labels.append(lb)
+    h.insert(0, {"id": secrets.token_hex(4), "t": int(time.time()), "changed": labels, "data": snap})
+    write_json(HISTORY_FILE, h[:HISTORY_MAX])
 
 
 def read_json(path, default):
@@ -360,9 +501,9 @@ def add_links(text, existing, d=None):
 
 def reserved_names(d=None):
     regs = [r[0] for r in REGIONS] + [G_OTHER]
-    out = {G_SEL, G_AUTO, "GLOBAL"} | set(SIDE_GROUPS) | BUILTIN_POLICIES
+    out = {G_SEL, G_AUTO, G_MANUAL, G_DIRECT, LEGACY_AUTO, "GLOBAL"} | set(SIDE_GROUPS) | BUILTIN_POLICIES
     for r in regs:
-        out |= {r, r + LB_SUFFIX, r + AUTO_SUFFIX}
+        out |= {r, r + LB_SUFFIX, r + AUTO_SUFFIX, auto_name(r), lb_name(r)}
     if d:
         out |= {g["name"] for g in d.get("custom_groups") or []}
     return out
@@ -410,8 +551,7 @@ def provider_nodes(fresh=False):
 def gcfg(d):
     gc = dict(GROUPS_DEFAULT)
     gc.update({k: v for k, v in (d.get("groups_cfg") or {}).items() if k in GROUPS_DEFAULT})
-    if gc["type"] not in GROUP_TYPES:
-        gc["type"] = "url-test"
+    gc["type"] = "url-test"  # v6：地区「自动优选」组固定为 url-test（旧的地区主组类型设置不再使用）
     if gc["strategy"] not in LB_STRATEGIES:
         gc["strategy"] = "consistent-hashing"
     return gc
@@ -560,7 +700,7 @@ def validate_groups(d):
             errs.append(f"「{cg['name']}」不能包含自己")
     cyc = find_cycle(cfg["proxy-groups"])
     if cyc:
-        errs.append("策略组循环引用：" + " → ".join(cyc) + "（加入「节点选择 / 分流组」的组不能再引用这些组，可关闭“加入节点选择”）")
+        errs.append("策略组循环引用：" + " → ".join(cyc) + "（加入分流组候选的自定义组不能再引用 YouTube / Google 等分流组，可关闭“加入分流组候选”）")
     return errs
 
 
@@ -593,23 +733,27 @@ def build_config(d, strict=False):
             g["proxies"] = ["COMPATIBLE"]
         return g
 
-    # 地区分组：主组（类型可选，默认 url-test）+ 「均衡」负载均衡组（≥2 个节点）+ 「自动」url-test（主组不是 url-test 时）
-    region_groups, rnames = [], []
+    # 地区分组：「<旗> <地区>自动优选」(url-test) + 「⚖️ <地区>负载均衡」(load-balance，≥2 个节点时)
+    autos, lbs = [], []
     for rname, flt, exc, matched, total, unknown in region_plan(d, names, use):
-        variants = [(rname, gc["type"])]
-        if gc["auto"] and gc["type"] != "url-test":
-            variants.append((rname + AUTO_SUFFIX, "url-test"))
-        if gc["lb"] and gc["type"] != "load-balance" and (total >= 2 or (unknown and use)):
-            variants.append((rname + LB_SUFFIX, "load-balance"))
-        for gname, t in variants:
+        label = region_label(rname)[1]
+        variants = [(auto_name(rname), "url-test", autos)]
+        if gc["lb"] and (total >= 2 or (unknown and use)):
+            variants.append((lb_name(rname), "load-balance", lbs))
+        for gname, t, bucket in variants:
             g = with_src(dict({"name": gname}, **group_opts(t, gc)), matched)
             if use:
                 if flt:
                     g["filter"] = flt
                 if exc:
                     g["exclude-filter"] = exc
-            region_groups.append(g)
-            rnames.append(gname)
+            bucket.append((label, g))
+
+    def ordered(items, order):
+        rank = {n: i for i, n in enumerate(order)}
+        return [g for i, (label, g) in sorted(enumerate(items), key=lambda x: (rank.get(x[1][0], len(order)), x[0]))]
+    region_groups = ordered(autos, AUTO_ORDER) + ordered(lbs, LB_ORDER)
+    rnames = [g["name"] for g in region_groups]
 
     # 自定义策略组
     custom_groups, cnames, exposed = [], [], []
@@ -634,15 +778,17 @@ def build_config(d, strict=False):
         if cg["expose"]:
             exposed.append(cg["name"])
 
-    if use or names or cnames:
-        groups = [
-            with_src({"name": G_SEL, "type": "select"}, [G_AUTO] + rnames + exposed + names + ["DIRECT"]),
-            with_src(dict({"name": G_AUTO}, **group_opts("url-test", gc)), names),
-        ]
-        side = [G_SEL, G_AUTO] + rnames + exposed + ["DIRECT"] + names
+    # 🚀 节点选择 只包含：各地区自动优选 → 各地区负载均衡 → 🖐️ 手动选择 → ⚡ 全局自动选择 → 🏠 直连
+    have = bool(use or names)
+    direct_g = {"name": G_DIRECT, "type": "select", "proxies": ["DIRECT"]}
+    if have:
+        groups = [{"name": G_SEL, "type": "select", "proxies": rnames + [G_MANUAL, G_AUTO, G_DIRECT]}] + region_groups + [
+            with_src({"name": G_MANUAL, "type": "select"}, names),
+            with_src(dict({"name": G_AUTO}, **group_opts("url-test", gc)), names), direct_g]
+        side = [G_SEL] + rnames + [G_MANUAL, G_AUTO] + exposed + ["DIRECT"] + names
     else:
-        groups = [{"name": G_SEL, "type": "select", "proxies": ["DIRECT"]}]
-        side = [G_SEL, "DIRECT"]
+        groups = [{"name": G_SEL, "type": "select", "proxies": [G_DIRECT]}, direct_g]
+        side = [G_SEL] + exposed + ["DIRECT"]
     for g in SIDE_GROUPS:
         groups.append(with_src({"name": g, "type": "select"}, list(side)))
     known = {g["name"] for g in groups} | region_set | set(cnames) | BUILTIN_POLICIES | set(names)
@@ -655,7 +801,6 @@ def build_config(d, strict=False):
         if not g.get("proxies") and not g.get("use"):
             g["proxies"] = ["COMPATIBLE"]
         groups.append(g)
-    groups += region_groups
     policies = {g["name"] for g in groups} | BUILTIN_POLICIES | set(names)
 
     rule_providers = {}
@@ -677,7 +822,15 @@ def build_config(d, strict=False):
                 pass
     ab_prov, ab_rules = adblock_providers(d)
     rule_providers.update(ab_prov)
-    rules = pre + ab_rules + [x for x in custom if x] + rs_rules + [
+    dc = dns_cfg(d)
+    guard = []
+    if dc["block_bypass"]:  # 阻止局域网设备绕过 mihomo DNS：拒绝 DoT/DoQ(853) 与已知公共 DoH 服务器
+        rule_providers["dns-bypass-ip"] = {"type": "inline", "behavior": "ipcidr", "payload": list(DOH_IPS)}
+        rule_providers["dns-bypass-domain"] = {"type": "inline", "behavior": "domain", "payload": list(DOH_DOMAINS)}
+        guard = [f"AND,(({LAN_IN}),(DST-PORT,853)),REJECT",
+                 f"AND,(({LAN_IN}),(DST-PORT,443),(RULE-SET,dns-bypass-ip,no-resolve)),REJECT",
+                 f"AND,(({LAN_IN}),(RULE-SET,dns-bypass-domain)),REJECT"]
+    rules = pre + guard + ab_rules + [x for x in custom if x] + rs_rules + [
         "GEOSITE,private,DIRECT", "GEOIP,private,DIRECT,no-resolve",
         f"GEOSITE,category-ai-!cn,{G_AI}", f"GEOSITE,netflix,{G_NF}", f"GEOIP,netflix,{G_NF},no-resolve",
         f"GEOSITE,youtube,{G_YT}", f"GEOSITE,google,{G_GG}", f"GEOIP,google,{G_GG},no-resolve",
@@ -685,20 +838,25 @@ def build_config(d, strict=False):
         f"GEOSITE,geolocation-!cn,{G_SEL}", "GEOSITE,cn,DIRECT", "GEOIP,CN,DIRECT", f"MATCH,{G_FINAL}",
     ]
     v6 = bool(d.get("ipv6"))
-    dc = d.get("dns") or DNS_DEFAULT
-    direct = [fix_dns_policy(x, policies) for x in dc.get("direct") or DNS_DEFAULT["direct"]]
-    proxy_dns = [fix_dns_policy(x, policies) for x in dc.get("proxy") or []]
-    mode = dc.get("mode") if dc.get("mode") in ("fake-ip", "redir-host") else "fake-ip"
+    fx = lambda xs: [fix_dns_policy(x, policies) for x in xs]
+    direct = fx(dc["direct"] or DNS_DEFAULT["direct"])
+    proxy_dns = fx(dc["proxy"])
+    plain_direct = [x.split("#", 1)[0] for x in direct]
+    mode = dc["mode"]
+    # 防泄露布局：默认 nameserver = 代理 DNS（经节点发出），只有 geosite:cn / private 用直连 DNS；
+    # 节点域名由 proxy-server-nameserver 解析，DIRECT 连接由 direct-nameserver 解析；不使用 fallback
     dns = {
         "enable": True, "listen": "[::]:1053" if v6 else "0.0.0.0:1053", "ipv6": v6, "enhanced-mode": mode,
-        "cache-algorithm": dc.get("cache") if dc.get("cache") in ("arc", "lru") else "arc",
-        "default-nameserver": [x for x in dc.get("default") or DNS_DEFAULT["default"]],
-        "nameserver": direct,
-        "proxy-server-nameserver": direct,
+        "cache-algorithm": dc["cache"], "prefer-h3": False, "use-hosts": True, "use-system-hosts": False,
+        "respect-rules": bool(dc["respect_rules"]),
+        "default-nameserver": list(dc["default"] or DNS_DEFAULT["default"]),
+        "nameserver": proxy_dns or direct,
+        "proxy-server-nameserver": [x.split("#", 1)[0] for x in dc["pserver"]] or plain_direct,
+        "direct-nameserver": plain_direct, "direct-nameserver-follow-policy": False,
     }
     if mode == "fake-ip":
         dns["fake-ip-range"] = "198.18.0.1/16"
-        dns["fake-ip-filter"] = [x for x in (dc.get("fake_filter") if dc.get("fake_filter") is not None else DEFAULT_FAKE_FILTER) if x.strip()]
+        dns["fake-ip-filter"] = [x for x in dc["fake_filter"] if x.strip()]
         if v6:
             dns["fake-ip-range6"] = "fdfe:dcba:9876::1/64"
     pol = {}
@@ -709,11 +867,18 @@ def build_config(d, strict=False):
         for k in ab_prov:
             if k != "ad-allow":
                 pol["rule-set:" + k] = "rcode://name_error"
-    if dc.get("policy", True) and proxy_dns:  # 按域名归属分流 DNS（JSON 保序，mihomo 按顺序匹配）
-        pol["geosite:cn"] = direct
-        pol["geosite:geolocation-!cn"] = proxy_dns
+    for pe in dc["policies"]:  # 用户自定义的 nameserver-policy（排在内置分流之前，JSON 保序，mihomo 按顺序匹配）
+        if pe["match"] not in pol:
+            pol[pe["match"]] = fx(pe["servers"])
+    if dc["policy"] and proxy_dns:  # 国内域名走直连 DNS，其余（含未知域名）走代理 DNS
+        pol.setdefault("geosite:cn,private", direct)
     if pol:
         dns["nameserver-policy"] = pol
+    hosts = {}
+    for h in dc["hosts"]:
+        vals = hosts.setdefault(h["domain"], [])
+        vals += [v for v in h["value"] if v not in vals]
+    hosts = {k: (v[0] if len(v) == 1 else v) for k, v in hosts.items()}
     tc = d.get("tun") or TUN_DEFAULT
     if d.get("proxy_mode") == "tun":
         tun = {"enable": True, "stack": tc.get("stack") if tc.get("stack") in TUN_STACKS else "mixed",
@@ -737,7 +902,7 @@ def build_config(d, strict=False):
         "sniffer": {"enable": bool(d.get("sniffer", True)), "sniff": {
             "HTTP": {"ports": [80, "8080-8880"], "override-destination": True},
             "TLS": {"ports": [443, 8443]}, "QUIC": {"ports": [443, 8443]}}},
-        "dns": dns, "tun": tun,
+        "dns": dns, "tun": tun, "hosts": hosts,
         "proxies": proxies,
         "proxy-providers": providers, "rule-providers": rule_providers, "proxy-groups": groups, "rules": rules,
     }
@@ -769,6 +934,62 @@ def safe_dev(name):
 
 DNS_RX = re.compile(r"^(?:(?:https|tls|quic|udp|tcp|h3)://[^\s#]+|dhcp://[\w.\-]+|system(?:://)?|rcode://\w+|"
                     r"\[?[0-9a-fA-F:.]+\]?(?::\d+)?)(?:#\S.*)?$")
+HOST_KEY_RX = re.compile(r"^(?:\+\.|\*\.)?(?:[a-z0-9_*](?:[a-z0-9_\-*]{0,61}[a-z0-9_*])?\.)*[a-z0-9_\-]{1,63}$")
+POLICY_DOMAIN_RX = re.compile(r"^(?:\+\.|\*\.|\.)?(?:[a-z0-9_*\-]+\.)*[a-z0-9_*\-]+$", re.I)
+POLICY_NAME_RX = re.compile(r"^[\w@!\-.]+$")
+
+
+def norm_policy_match(m):
+    """nameserver-policy 的键：geosite:a,b / rule-set:x,y / 域名1,域名2（mihomo 不支持在一个键里混用）"""
+    parts = [x.strip() for x in str(m).split(",") if x.strip()]
+    for pre in ("geosite:", "rule-set:"):
+        if parts and parts[0].lower().startswith(pre):
+            return pre + ",".join(x[len(pre):] if x.lower().startswith(pre) else x for x in parts)
+    return ",".join(parts)
+
+
+def policy_parts(m):
+    """返回 (类型, [名称])：类型为 geosite / rule-set / domain"""
+    for pre in ("geosite:", "rule-set:"):
+        if m.lower().startswith(pre):
+            return pre[:-1], m[len(pre):].split(",")
+    return "domain", m.split(",")
+
+
+def is_ip_addr(v):
+    try:
+        ipaddress.ip_address(v)
+        return True
+    except ValueError:
+        return False
+
+
+def dns_cfg(d):
+    """data.json 里的 dns 设置补齐默认值并规范化（旧版数据没有的键用默认值）"""
+    dc = dict(DNS_DEFAULT)
+    dc.update(d.get("dns") or {})
+    for k in DNS_LISTS:
+        dc[k] = [str(x).strip() for x in (dc.get(k) if isinstance(dc.get(k), list) else DNS_DEFAULT[k]) if str(x).strip()]
+    if dc.get("mode") not in ("fake-ip", "redir-host"):
+        dc["mode"] = "fake-ip"
+    if dc.get("cache") not in ("arc", "lru"):
+        dc["cache"] = "arc"
+    for k in ("policy", "respect_rules", "block_bypass"):
+        dc[k] = bool(dc.get(k, DNS_DEFAULT[k]))
+    hosts = []
+    for h in dc.get("hosts") or []:
+        if isinstance(h, dict) and h.get("domain") and h.get("value"):
+            v = h["value"] if isinstance(h["value"], list) else str(h["value"]).replace(",", " ").split()
+            hosts.append({"domain": str(h["domain"]).strip().lower(), "value": [str(x).strip() for x in v if str(x).strip()]})
+    dc["hosts"] = hosts
+    pols = []
+    for pe in dc.get("policies") or []:
+        if isinstance(pe, dict) and pe.get("match") and pe.get("servers"):
+            sv = pe["servers"] if isinstance(pe["servers"], list) else str(pe["servers"]).split(",")
+            pols.append({"match": norm_policy_match(pe["match"]),
+                         "servers": [str(x).strip() for x in sv if str(x).strip()]})
+    dc["policies"] = pols
+    return dc
 
 
 def dns_policy_of(server):
@@ -788,17 +1009,57 @@ def fix_dns_policy(server, policies):
     return server
 
 
+def check_host_entry(h):
+    dom, vals = h.get("domain", ""), h.get("value") or []
+    if not HOST_KEY_RX.match(dom):
+        return f"hosts 域名格式无效：{dom or '(空)'}（可用 example.com、+.example.com、*.example.com）"
+    if not vals:
+        return f"hosts「{dom}」没有填写 IP"
+    for v in vals:
+        if not is_ip_addr(v) and not (DOMAIN_RX.match(v.lower()) and not is_ip_addr(dom)):
+            return f"hosts「{dom}」的值无效：{v}（应为 IP，或单个域名作为别名）"
+    if len(vals) > 1 and not all(is_ip_addr(v) for v in vals):
+        return f"hosts「{dom}」：别名域名只能填一个"
+    return ""
+
+
 def validate_dns(dc, d):
     pol = {g["name"] for g in build_config(dict(d, rules=[]))["proxy-groups"]} | BUILTIN_POLICIES | {n["proxy"]["name"] for n in d["nodes"]}
     errs = []
-    for key, label in (("direct", "直连 DNS"), ("proxy", "代理 DNS"), ("default", "默认 DNS")):
+    for key, label in (("direct", "直连 DNS"), ("proxy", "代理 DNS"), ("default", "默认 DNS"), ("pserver", "节点域名解析 DNS")):
         for s in dc.get(key) or []:
-            if not DNS_RX.match(s):
+            if not DNS_RX.match(s) or s.startswith("rcode://"):
                 errs.append(f"{label} 格式无效：{s}")
             elif key == "default" and not re.match(r"^(?:(?:udp|tcp|tls|https)://)?\[?[0-9a-fA-F:.]+\]?(?::\d+)?(?:/|$)", s):
                 errs.append(f"默认 DNS 必须是 IP（用于解析 DoH 域名）：{s}")
+            elif key in ("default", "pserver") and dns_policy_of(s):
+                errs.append(f"{label} 不能指定 #策略组（解析节点域名本身不能经过节点）：{s}")
             elif dns_policy_of(s) and dns_policy_of(s) not in pol:
                 errs.append(f"{label} 引用的策略组不存在：{s}")
+    for s in dc.get("fake_filter") or []:
+        if not re.match(r"^(?:geosite:|rule-set:)?[\w*+.\-!@:]+$", s):
+            errs.append(f"Fake-IP 过滤格式无效：{s}")
+    for h in dc.get("hosts") or []:
+        e = check_host_entry(h)
+        if e:
+            errs.append(e)
+    seen = set()
+    for pe in dc.get("policies") or []:
+        m = pe.get("match", "")
+        kind, parts = policy_parts(m)
+        for part in parts:
+            if not (POLICY_NAME_RX if kind != "domain" else POLICY_DOMAIN_RX).match(part) or ":" in part:
+                errs.append(f"nameserver-policy 匹配项无效：{part}（一条只能是 geosite:a,b、rule-set:x 或 域名列表 +.example.com,example.com，不能混用）")
+        if m in seen:
+            errs.append(f"nameserver-policy 重复：{m}")
+        seen.add(m)
+        if not pe.get("servers"):
+            errs.append(f"nameserver-policy「{m}」没有填写 DNS 服务器")
+        for s in pe.get("servers") or []:
+            if not DNS_RX.match(s):
+                errs.append(f"nameserver-policy「{m}」的 DNS 格式无效：{s}")
+            elif dns_policy_of(s) and dns_policy_of(s) not in pol:
+                errs.append(f"nameserver-policy「{m}」引用的策略组不存在：{s}")
     if not dc.get("direct"):
         errs.append("直连 DNS 不能为空")
     if not dc.get("default"):
@@ -1534,11 +1795,13 @@ def static_rule(host):
         if ips is None:
             if is_ip(host):
                 ips = [ipaddress.ip_address(host)]
-            else:
-                try:
-                    ips = list({ipaddress.ip_address(a[4][0].split("%")[0]) for a in socket.getaddrinfo(host, 443)})
-                except Exception:
-                    ips = []
+            else:  # 经 mihomo 的 DNS 解析（按 nameserver-policy 分流），不用本机系统 DNS，避免把国外域名泄露给本机上游
+                ips = []
+                for qt in ("A", "AAAA"):
+                    j = core_json(f"/dns/query?name={quote(host)}&type={qt}", timeout=8) or {}
+                    for a in j.get("Answer") or []:
+                        if a.get("type") in (1, 28) and is_ip(str(a.get("data"))):
+                            ips.append(ipaddress.ip_address(a["data"]))
         return ips
 
     for r in rules:
@@ -2402,6 +2665,293 @@ def diagnose():
     return out
 
 
+# ---------------------------------------------------------------- DNS 防泄露
+RESOLV_FILE = os.environ.get("PANEL_RESOLV", "/etc/resolv.conf")
+CN_GEO = re.compile(r"(?i)^(?:cn|private|.*@cn|.*-cn|tld-cn|geolocation-cn)$")
+CN_DOMAIN = re.compile(r"(?i)^[+*.]*[\w.\-]*\.(?:cn|lan|local|arpa|home|localdomain)$")
+
+
+def is_cn_dns(x):
+    x = x.split("#", 1)[0]
+    return bool(CN_DNS.search(x)) or x.startswith(("system", "dhcp://"))
+
+
+def antileak_dns(cur):
+    """一键防泄露：fake-ip + respect-rules + 默认上游走代理 DNS + 国内域名走直连 DNS + 阻止客户端绕过"""
+    dc = copy.deepcopy(cur)
+    dc.update(mode="fake-ip", respect_rules=True, policy=True, block_bypass=True)
+    dc["direct"] = [x for x in dc["direct"] if "#" not in x] or list(DNS_DEFAULT["direct"])
+    proxy = []
+    for x in dc["proxy"]:
+        if is_cn_dns(x) or x.startswith("rcode://"):
+            continue  # 国内 / 本机 DNS 不能作为代理 DNS
+        if not dns_policy_of(x):
+            x = x.split("#", 1)[0] + "#" + G_SEL
+        proxy.append(x)
+    dc["proxy"] = proxy or list(DNS_DEFAULT["proxy"])
+    dc["pserver"] = [x for x in dc["pserver"] if "#" not in x and is_cn_dns(x)]
+    if not dc["fake_filter"]:
+        dc["fake_filter"] = list(DEFAULT_FAKE_FILTER)
+    dc["policies"] = [pe for pe in dc["policies"] if not leaky_policy(pe)]
+    return dc
+
+
+def leaky_policy(pe):
+    """自定义 nameserver-policy 把非国内域名交给国内 DNS"""
+    kind, parts = policy_parts(pe["match"])
+    if kind == "rule-set" or all((CN_GEO if kind == "geosite" else CN_DOMAIN).match(p) for p in parts):
+        return False
+    return any(is_cn_dns(x) for x in pe["servers"]) and not all(x.startswith("rcode://") for x in pe["servers"])
+
+
+def host_match(pattern, name):
+    pattern = pattern.lower()
+    if pattern.startswith("+."):
+        return name == pattern[2:] or name.endswith(pattern[1:])
+    if pattern.startswith("."):
+        return name.endswith(pattern)
+    if "*" in pattern:
+        return bool(re.fullmatch(re.escape(pattern).replace(r"\*", r"[^.]+"), name))
+    return name == pattern
+
+
+def dns_route(name, d):
+    """估算一个域名由哪组上游解析（GEOSITE 需要核心数据库，这里按规则顺序给出说明）"""
+    dc = dns_cfg(d)
+    short = lambda xs: "、".join(x.replace("https://", "").replace("/dns-query", "") for x in xs[:2]) + (" 等" if len(xs) > 2 else "")
+    for h in dc["hosts"]:
+        if host_match(h["domain"], name):
+            return f"hosts 静态记录（{h['domain']} → {', '.join(h['value'][:3])}，不查询上游）"
+    for pe in dc["policies"]:
+        kind, parts = policy_parts(pe["match"])
+        for part in parts if kind == "domain" else []:
+            if host_match(part, name):
+                return f"自定义策略 {part} → {short(pe['servers'])}"
+    geo = [pe["match"] for pe in dc["policies"] if policy_parts(pe["match"])[0] != "domain"]
+    head = ("先匹配自定义 " + "、".join(geo[:3]) + "；") if geo else ""
+    if not dc["proxy"]:
+        return head + f"全部走直连 DNS（{short(dc['direct'])}）——未设置代理 DNS，国外域名会泄露"
+    if dc["policy"]:
+        return head + f"属于 geosite:cn / private → 直连 DNS（{short(dc['direct'])}）；其他域名 → 代理 DNS（{short(dc['proxy'])}）"
+    return head + f"全部走代理 DNS（{short(dc['proxy'])}）"
+
+
+def dns_probe_ip(name, server=("127.0.0.1", 1053)):
+    """向 mihomo DNS 端口查询 A 记录，返回 (rcode, [IP])"""
+    qid = secrets.randbits(16)
+    pkt = qid.to_bytes(2, "big") + b"\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
+    pkt += b"".join(bytes([len(x)]) + x.encode() for x in name.split(".")) + b"\x00\x00\x01\x00\x01"
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.settimeout(4)
+    try:
+        s.sendto(pkt, server)
+        data = s.recv(1500)
+    finally:
+        s.close()
+    rcode, an = data[3] & 0x0F, int.from_bytes(data[6:8], "big")
+    i, ips = 12, []
+    while data[i]:  # 跳过问题部分
+        i += data[i] + 1
+    i += 5
+    for _ in range(an):
+        if data[i] & 0xC0 == 0xC0:
+            i += 2
+        else:
+            while data[i]:
+                i += data[i] + 1
+            i += 1
+        typ, rdlen = int.from_bytes(data[i:i + 2], "big"), int.from_bytes(data[i + 8:i + 10], "big")
+        i += 10
+        if typ == 1 and rdlen == 4:
+            ips.append(".".join(str(b) for b in data[i:i + 4]))
+        i += rdlen
+    return rcode, ips
+
+
+def resolv_servers():
+    try:
+        with open(RESOLV_FILE) as f:
+            return [l.split()[1] for l in f if l.strip().startswith("nameserver") and len(l.split()) > 1]
+    except OSError:
+        return []
+
+
+def leak_live():
+    """经代理访问 bash.ws 的 DNS 泄露测试：用 mihomo 的解析器（/dns/query，与客户端走同样的上游分流）
+    解析一组随机子域名，再读取 bash.ws 记录到的递归解析器 IP / 国家"""
+    out = {"ok": None, "resolvers": [], "egress": [], "error": "", "source": "bash.ws"}
+    try:
+        code, _, tid = fetch("https://bash.ws/id", timeout=10)
+        tid = tid.strip()
+        if code != 200 or not re.fullmatch(r"[a-z0-9]{6,40}", tid):
+            raise IOError(f"获取测试 ID 失败（HTTP {code}）")
+        ths = [threading.Thread(target=core, args=("GET", f"/dns/query?name={i}.{tid}.bash.ws&type=A"), kwargs={"timeout": 10})
+               for i in range(1, 9)]
+        [t.start() for t in ths]
+        [t.join(12) for t in ths]
+        time.sleep(1)
+        code, _, body = fetch(f"https://bash.ws/dnsleak/test/{tid}?json", timeout=15)
+        items = json.loads(body)
+        for x in items:
+            e = {"ip": x.get("ip"), "country": (x.get("country") or "").upper(), "country_name": x.get("country_name") or "",
+                 "org": x.get("asn") or x.get("org") or ""}
+            if x.get("type") == "dns":
+                e["cn"] = e["country"] == "CN"
+                out["resolvers"].append(e)
+            elif x.get("type") == "ip":
+                out["egress"].append(e)
+        if not out["resolvers"]:
+            out["error"] = "bash.ws 没有记录到解析请求（代理 DNS 可能不可用）"
+        else:
+            out["ok"] = not any(r["cn"] for r in out["resolvers"])
+    except Exception as e:
+        out["error"] = "在线检测失败：" + (str(e)[:160] or e.__class__.__name__)
+    return out
+
+
+def leak_check(live=True):
+    d = load()
+    dc = dns_cfg(d)
+    items = []
+
+    def item(name, ok, detail, fix=""):
+        items.append({"name": name, "ok": ok, "detail": detail, "fix": fix if ok is not True else ""})
+
+    item("增强模式", True if dc["mode"] == "fake-ip" else "warn",
+         "fake-ip：客户端只拿到 198.18.x.x，域名由 mihomo 按规则处理" if dc["mode"] == "fake-ip" else
+         "redir-host：客户端拿到真实 IP，可能绕过按域名分流", "改用 fake-ip")
+    ns = dc["proxy"] or dc["direct"]
+    bad_ns = [x for x in ns if is_cn_dns(x)]
+    unrouted = [x for x in dc["proxy"] if not dns_policy_of(x) and not dc["respect_rules"]]
+    if not dc["proxy"]:
+        item("默认上游（未知 / 国外域名）", False, "未设置代理 DNS，所有域名都发给直连 DNS：" + "、".join(dc["direct"][:2]),
+             "添加代理 DNS，如 https://1.1.1.1/dns-query#🚀 节点选择")
+    elif bad_ns:
+        item("默认上游（未知 / 国外域名）", False, "代理 DNS 里有国内 / 本机解析器：" + "、".join(bad_ns[:3]), "从代理 DNS 中删除它们，国内 DNS 只放在直连 DNS")
+    elif unrouted:
+        item("默认上游（未知 / 国外域名）", "warn", "这些代理 DNS 没有指定 #策略组，且未开启 respect-rules，会直连发出：" + "、".join(unrouted[:2]),
+             "开启 respect-rules，或在地址后加 #🚀 节点选择")
+    else:
+        item("默认上游（未知 / 国外域名）", True, "代理 DNS 经节点查询：" + "、".join(dc["proxy"][:2]))
+    item("国内域名分流", True if dc["policy"] else "warn",
+         "geosite:cn / private → 直连 DNS，其余全部走代理 DNS（不再按 geolocation-!cn 白名单，未知域名也不会发给国内 DNS）"
+         if dc["policy"] else "国内域名也走代理 DNS：不泄露，但国内 CDN 解析可能不是最近节点", "开启「国内域名走直连 DNS」")
+    item("respect-rules", True if dc["respect_rules"] else "warn",
+         "DNS 查询连接遵循分流规则，节点域名用国内 DoH 解析（proxy-server-nameserver）" if dc["respect_rules"] else "未开启",
+         "开启 respect-rules")
+    item("fallback / 系统 hosts", True, "未使用 fallback（避免同时向国内外 DNS 发同一查询）；use-system-hosts 已关闭；prefer-h3 已关闭")
+    lp = [pe["match"] for pe in dc["policies"] if leaky_policy(pe)]
+    if lp:
+        item("自定义 DNS 策略", False, "以下非国内域名被交给国内 DNS：" + "、".join(lp[:3]), "改为代理 DNS，或删除这些策略")
+    item("阻止客户端绕过 DNS", True if dc["block_bypass"] else "warn",
+         "已拒绝局域网设备的 DoT / DoQ（853）与常见公共 DoH 服务器" if dc["block_bypass"] else
+         "未开启：浏览器 / 手机的“安全 DNS”、私人 DNS 可能直连国内 DoH，绕过 mihomo", "开启「阻止客户端绕过 DNS」")
+    mode = d["proxy_mode"]
+    if mode == "off":
+        item("DNS 劫持", "warn", "透明代理已关闭，客户端 DNS 不经过 mihomo", "在设置里选择 TProxy 或 TUN，并把客户端 DNS 设为旁路由")
+    else:
+        _, st = sh(TPROXY_SH + " status", timeout=10)
+        st = st.strip().splitlines()[-1] if st.strip() else "off"
+        okh = st in ("tproxy", "dns") or mode == "tun"
+        item("DNS 劫持", True if okh else False, ("TUN dns-hijack any:53" if mode == "tun" else "发往旁路由 53 端口的查询重定向到 1053")
+             if okh else "未检测到 53 → 1053 重定向规则", "执行 /opt/mihomo-panel/tproxy.sh apply")
+    has6 = bool(re.search(r"inet6 [23]", sh("ip -o -6 addr show scope global 2>/dev/null")[1]))
+    if not d.get("ipv6"):
+        item("IPv6", "warn" if has6 else True, "本机有公网 IPv6，但 IPv6 透明代理未开启：客户端可能通过主路由下发的 IPv6 DNS（RDNSS）绕过"
+             if has6 else "未开启 IPv6，mihomo DNS 不返回 AAAA，与透明代理一致",
+             "在主路由关闭 IPv6 DNS 下发 / DHCPv6，或开启 IPv6 透明代理")
+    else:
+        item("IPv6", True, "IPv6 透明代理已开启，DNS 同时处理 AAAA")
+    item("域名嗅探", True if d.get("sniffer", True) else "warn", "已开启：按 IP 发起的连接也能识别域名分流" if d.get("sniffer", True)
+         else "未开启：Fake-IP 过滤的域名、直接按 IP 的连接无法按域名分流", "设置 → 核心服务 → 开启域名嗅探")
+    rs = resolv_servers()
+    item("旁路由本机解析", True if rs else "warn",
+         ("/etc/resolv.conf：" + "、".join(rs[:3]) + "。面板自身的外网请求经 mihomo 代理（远端解析），规则测试改用 mihomo DNS，本机只解析国内 / 直连目标")
+         if rs else "/etc/resolv.conf 没有 nameserver", "把 /etc/resolv.conf 指向主路由或国内 DNS（如 223.5.5.5）")
+    out = {"items": items, "live": None, "fakeip": None}
+    if live and core_alive():
+        try:
+            rc, ips = dns_probe_ip("www.google.com")
+            fake = bool(ips) and all(ipaddress.ip_address(i) in ipaddress.ip_network("198.18.0.0/15") for i in ips)
+            out["fakeip"] = {"name": "www.google.com", "ips": ips, "rcode": rc, "fake": fake}
+            if dc["mode"] == "fake-ip":
+                item("客户端查询测试", True if fake else "warn", f"www.google.com → {', '.join(ips) or '无记录'}" +
+                     ("（Fake-IP，客户端查询不触发上游解析）" if fake else ""), "检查 Fake-IP 过滤列表是否包含该域名")
+        except Exception as e:
+            item("客户端查询测试", False, f"向 127.0.0.1:1053 查询失败：{e}", "确认核心 DNS 已监听 1053")
+        out["live"] = leak_live()
+        lv = out["live"]
+        if lv["ok"] is True:
+            item("在线泄露检测", True, "上游解析器：" + "、".join(f"{r['ip']}（{r['country'] or '?'} {r['org'][:30]}）" for r in lv["resolvers"][:4]))
+        elif lv["ok"] is False:
+            cn = [r for r in lv["resolvers"] if r["cn"]]
+            item("在线泄露检测", False, "发现国内解析器：" + "、".join(f"{r['ip']}（{r['org'][:30]}）" for r in cn[:4]), "点击「一键应用防泄露设置」")
+        else:
+            item("在线泄露检测", "warn", lv["error"], "确认节点可用后重试；离线时以上配置检查仍然有效")
+    elif live:
+        item("在线泄露检测", "warn", "核心未运行，只做了配置检查", "启动核心后重试")
+    out["bad"] = sum(1 for x in items if x["ok"] is False)
+    out["warn"] = sum(1 for x in items if x["ok"] == "warn")
+    return out
+
+
+# ---------------------------------------------------------------- v5 → v6 升级：保留节点选择
+SEL_FILE = os.path.join(PANEL_DIR, "selected.json")
+
+
+def snapshot_selections(force=False):
+    """记录各手动选择组当前选中的节点 / 分组（升级改名前调用）"""
+    if os.path.isfile(SEL_FILE) and not force:
+        return None
+    j = core_json("/proxies", timeout=5)
+    if not j:
+        return None
+    sel = {n: p["now"] for n, p in (j.get("proxies") or {}).items() if p.get("type") == "Selector" and p.get("now") and n != "GLOBAL"}
+    write_json(SEL_FILE, sel)
+    return sel
+
+
+def restore_selections():
+    """按新名称恢复升级前的选择；返回恢复的组数"""
+    sel = read_json(SEL_FILE, None)
+    if not sel:
+        return 0
+    mp = legacy_map()
+    proxies = (core_json("/proxies", timeout=5) or {}).get("proxies") or {}
+    n = 0
+    for g, now in sel.items():
+        g2, now2 = mp.get(g, g), mp.get(now, now)
+        p = proxies.get(g2) or {}
+        if p.get("type") == "Selector" and now2 in (p.get("all") or []) and p.get("now") != now2:
+            code, _ = core("PUT", "/proxies/" + quote(g2), {"name": now2})
+            n += code < 300
+    try:
+        os.remove(SEL_FILE)
+    except OSError:
+        pass
+    print(time.strftime("%F %T"), f"[upgrade] 已按新名称恢复 {n} 个策略组的选择", flush=True)
+    return n
+
+
+def startup_migrate():
+    """面板升级后首次启动：核心还在跑旧配置（旧组名）时，先记下选择，再生成新配置并恢复选择"""
+    for _ in range(30):
+        if core_alive():
+            break
+        time.sleep(2)
+    else:
+        return
+    cur = read_json(os.path.join(CONF_DIR, "config.yaml"), None) or {}
+    old = set(legacy_map())
+    if any(g.get("name") in old for g in cur.get("proxy-groups") or []):
+        snapshot_selections()
+        ok, msg = reload_core()
+        print(time.strftime("%F %T"), "[upgrade] 已按新版策略组重新生成配置：", ok, msg[:120], flush=True)
+        time.sleep(1)
+    if os.path.isfile(SEL_FILE):
+        restore_selections()
+
+
 # ---------------------------------------------------------------- 登录防爆破
 FAILS = {}  # ip -> [失败次数, 解锁时间]
 
@@ -2452,49 +3002,39 @@ def restart_self():
     sh("(sleep 1; %s) >/dev/null 2>&1 &" % os.environ.get("PANEL_RESTART", "rc-service mihomo-panel restart"))
 
 
+def group_kind(n, custom=()):
+    if n in custom:
+        return "custom"
+    if n == G_SEL:
+        return "select"
+    if n == G_MANUAL:
+        return "manual"
+    if n == G_AUTO:
+        return "auto"
+    if n == G_DIRECT:
+        return "direct"
+    if n in SIDE_GROUPS:
+        return "service"
+    if n.startswith(LB_PREFIX) and n.endswith(LB_TAIL):
+        return "lb"
+    if n.endswith(AUTO_TAIL):
+        return "region"
+    return "other"
+
+
 def group_meta(d, cfg):
     cn = {g["name"] for g in d.get("custom_groups") or []}
     meta = {}
     for g in cfg["proxy-groups"]:
         n = g["name"]
-        kind = ("custom" if n in cn else "select" if n == G_SEL else "auto" if n == G_AUTO else
-                "service" if n in SIDE_GROUPS else "lb" if n.endswith(LB_SUFFIX) else "region")
-        meta[n] = {"kind": kind, "type": g["type"], "strategy": g.get("strategy", ""), "filter": g.get("filter", ""),
+        meta[n] = {"kind": group_kind(n, cn), "type": g["type"], "strategy": g.get("strategy", ""), "filter": g.get("filter", ""),
                    "subs": bool(g.get("use")), "icon": g.get("icon", "")}
     return meta
 
 
 def rename_policy(d, old, new):
-    """策略组改名 / 删除时同步更新自定义规则、规则集、其他自定义组、代理 DNS 的引用；返回受影响条目数"""
-    n = 0
-    rules = []
-    for r in d["rules"]:
-        parts = r.split(",")
-        i = rule_policy_index(parts)
-        if not r.startswith("#") and i > 0 and parts[i].strip() == old:
-            parts[i] = new
-            n += 1
-        rules.append(",".join(parts))
-    d["rules"] = rules
-    for r in d["rulesets"]:
-        if r.get("target") == old:
-            r["target"] = new
-            n += 1
-    for g in d["custom_groups"]:
-        if old in g.get("proxies", []):
-            g["proxies"] = [new if m == old else m for m in g["proxies"]] if new != G_SEL else [m for m in g["proxies"] if m != old]
-            n += 1
-    dc = d["dns"]
-    for k in ("direct", "proxy"):
-        out = []
-        for x in dc.get(k) or []:
-            if dns_policy_of(x) == old:
-                head, _, tail = x.partition("#")
-                x = head + "#" + new + tail[len(old):]
-                n += 1
-            out.append(x)
-        dc[k] = out
-    return n
+    """策略组改名 / 删除（new 为节点选择）时同步更新自定义规则、规则集、其他自定义组、DNS 的引用；返回受影响条目数"""
+    return map_refs(d, {old: new}, drop={old} if new == G_SEL else ())
 
 
 # ---------------------------------------------------------------- HTTP
@@ -2688,26 +3228,53 @@ class H(BaseHTTPRequestHandler):
         return self.send(200, {"message": "已保存并生效"})
 
     def save_dns(self, b):
-        cur = load()["dns"]
-        lines = lambda k: [x.strip() for x in (b.get(k) if isinstance(b.get(k), list) else cur.get(k) or []) if str(x).strip()]
-        dc = {"direct": lines("direct"), "proxy": lines("proxy"), "default": lines("default"),
-              "mode": b.get("mode", cur.get("mode")), "fake_filter": lines("fake_filter"),
-              "cache": b.get("cache", cur.get("cache")), "policy": bool(b.get("policy", cur.get("policy", True)))}
+        d0 = load()
+        cur = dns_cfg(d0)
         if b.get("reset"):
             dc = copy.deepcopy(DNS_DEFAULT)
+        elif b.get("preset") == "antileak":
+            dc = antileak_dns(cur)
+        else:
+            dc = dict(cur)
+            for k in DNS_LISTS:
+                if k in b:
+                    if not isinstance(b[k], list):
+                        return self.send(400, {"message": f"{k} 应为列表"})
+                    dc[k] = [str(x).strip() for x in b[k] if str(x).strip()]
+            for k in ("mode", "cache"):
+                if k in b:
+                    dc[k] = b[k]
+            for k in ("policy", "respect_rules", "block_bypass"):
+                if k in b:
+                    dc[k] = bool(b[k])
+            for k in ("hosts", "policies"):
+                if k in b:
+                    if not isinstance(b[k], list):
+                        return self.send(400, {"message": f"{k} 应为列表"})
+                    dc[k] = b[k]
         if dc["mode"] not in ("fake-ip", "redir-host"):
             return self.send(400, {"message": "增强模式只能是 fake-ip 或 redir-host"})
         if dc["cache"] not in ("arc", "lru"):
             return self.send(400, {"message": "缓存算法只能是 arc 或 lru"})
-        errs = validate_dns(dc, load())
+        dc = dns_cfg({"dns": dc})
+        errs = validate_dns(dc, d0)
         if errs:
             return self.send(400, {"message": "；".join(errs[:5])})
-        prev = update(lambda d: d.update(dns=dc))
+        sniff = b.get("preset") == "antileak" and not d0.get("sniffer", True)
+
+        def fn(d):
+            d["dns"] = dc
+            if sniff:
+                d["sniffer"] = True
+        prev = update(fn)
         ok, msg = reload_core(prev)
+        if ok and dns_cfg(prev)["block_bypass"] != dc["block_bypass"] and prev.get("proxy_mode") != "off":
+            sh(TPROXY_SH + " apply")  # 重新加载 nftables：是否劫持发往任意服务器的 53 端口
         if ok:
             core("POST", "/cache/dns/flush")
             core("POST", "/cache/fakeip/flush") if dc["mode"] == "fake-ip" else None
-        return self.reply(ok, "DNS 设置已生效" if ok else msg)
+        done = "已应用防泄露设置" if b.get("preset") == "antileak" else "DNS 设置已生效"
+        return self.reply(ok, done if ok else msg)
 
     def groups_info(self):
         d = load()
@@ -2716,21 +3283,18 @@ class H(BaseHTTPRequestHandler):
         plan = region_plan(d, names, list(cfg["proxy-providers"]))
         gnames = [g["name"] for g in cfg["proxy-groups"]]
         regions = [{"name": r[0], "total": r[4], "manual": len(r[3]), "unknown": r[5],
-                    "groups": [g for g in gnames if g in (r[0], r[0] + LB_SUFFIX, r[0] + AUTO_SUFFIX)]} for r in plan]
+                    "groups": [g for g in gnames if g in (auto_name(r[0]), lb_name(r[0]))]} for r in plan]
+        sel = next((g.get("proxies") or [] for g in cfg["proxy-groups"] if g["name"] == G_SEL), [])
         return self.send(200, {"cfg": gcfg(d), "region_groups": d["region_groups"], "custom": d["custom_groups"],
                                "regions": regions, "groups": gnames, "manual": names, "nodes": all_node_names(d),
                                "meta": group_meta(d, cfg), "types": GROUP_TYPES, "strategies": LB_STRATEGIES,
-                               "region_names": [r[0] for r in REGIONS], "primary": PRIMARY_REGIONS})
+                               "region_names": [r[0] for r in REGIONS], "primary": PRIMARY_REGIONS, "selector": sel})
 
     def save_groups_cfg(self, b):
         gc = gcfg(load())
-        for k in ("lb", "auto", "extra", "other", "lazy"):
+        for k in ("lb", "extra", "other", "lazy"):
             if k in b:
                 gc[k] = bool(b[k])
-        if "type" in b:
-            if b["type"] not in GROUP_TYPES:
-                return self.send(400, {"message": "地区分组类型无效"})
-            gc["type"] = b["type"]
         if "strategy" in b:
             if b["strategy"] not in LB_STRATEGIES:
                 return self.send(400, {"message": "负载均衡策略无效"})
@@ -2843,7 +3407,7 @@ class H(BaseHTTPRequestHandler):
                                    "ipv6": d["ipv6"], "https": d["https"], "https_active": isinstance(self.connection, ssl.SSLSocket),
                                    "watchdog": d["watchdog"], "tg_token": d["tg_token"], "tg_chat": d["tg_chat"],
                                    "default_exclude": DEFAULT_EXCLUDE, "proxy_mode": d["proxy_mode"], "tun": d["tun"],
-                                   "log_limit": d["log_limit"], "dns": d["dns"], "dns_default": DNS_DEFAULT,
+                                   "log_limit": d["log_limit"], "dns": dns_cfg(d), "dns_default": DNS_DEFAULT,
                                    "schedule": d["schedule"], "devices": d["devices"], "adblock_on": d["adblock"]["enabled"],
                                    "sched_events": list(SCHED["events"])[:20], "group_meta": group_meta(d, cfg),
                                    "custom_groups": d["custom_groups"], "groups_cfg": gcfg(d), "sniffer": d["sniffer"],
@@ -2996,6 +3560,26 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, ab_check(b.get("domain") or ""))
         if p == "/api/dns" and m == "PUT":
             return self.save_dns(b)
+        if p == "/api/dnsleak" and m == "GET":
+            return self.send(200, leak_check(live="nolive" not in parse_qs(q)))
+        if p == "/api/history" and m == "GET":
+            h = read_json(HISTORY_FILE, [])
+            return self.send(200, [{"id": x["id"], "t": x["t"], "changed": x["changed"]} for x in h])
+        if p == "/api/history" and m == "POST":
+            h = {x["id"]: x for x in read_json(HISTORY_FILE, [])}
+            snap = h.get(str(b.get("id") or ""))
+            if not snap:
+                return self.send(404, {"message": "快照不存在"})
+
+            def apply_snap(d):
+                d.update({k: v for k, v in snap["data"].items() if k not in HISTORY_SKIP})
+                migrate_names(d)
+            prev = update(apply_snap)
+            ab_compose(load())
+            ok, msg = reload_core(prev)
+            if ok:
+                sh(TPROXY_SH + " apply")
+            return self.reply(ok, ("已恢复到 " + time.strftime("%m-%d %H:%M", time.localtime(snap["t"])) + " 的配置") if ok else msg)
         if p == "/api/dnsquery" and m == "POST":
             name = clean_target(b.get("name") or "")
             qtype = (b.get("type") or "A").upper()
@@ -3010,12 +3594,8 @@ class H(BaseHTTPRequestHandler):
                 j = {"message": raw.decode(errors="ignore")}
             if code != 200:
                 return self.send(502 if code == 502 else code, {"message": j.get("message") or "查询失败"})
-            pol = "直连 DNS"
-            dc = load()["dns"]
-            if dc.get("policy", True) and dc.get("proxy"):
-                pol = "按 nameserver-policy 分流（geosite:cn → 直连，geolocation-!cn → 代理）"
             return self.send(200, {"name": name, "type": qtype, "ms": ms, "status": j.get("Status"),
-                                   "answer": j.get("Answer") or [], "policy": pol})
+                                   "answer": j.get("Answer") or [], "policy": dns_route(name, load())})
         if p == "/api/devices" and m == "GET":
             ips = set(arp_table()) | set(read_leases())
             if STATS:
@@ -3121,6 +3701,7 @@ class H(BaseHTTPRequestHandler):
                 d.update({k: b[k] for k in keys if k in b})
                 if "proxy_mode" not in b and "tproxy" in b:
                     d["proxy_mode"] = "tproxy" if b["tproxy"] else "off"
+                migrate_names(d)  # 旧版备份里的地区组名自动换成新名称
             prev = update(apply_backup)
             ab_compose(load())
             ok, msg = reload_core(prev)
@@ -3157,7 +3738,7 @@ def tp_env():
             pass
     return (f"B_IP='{','.join(ips)}'\nB_MAC='{','.join(macs)}'\nB_IP6='{','.join(ip6s)}'\n"
             f"LOCAL6='{','.join(sorted(set(local6)))}'\nIPV6={1 if d.get('ipv6') else 0}\nTPROXY={1 if d.get('tproxy') else 0}\n"
-            f"MODE={d['proxy_mode']}")
+            f"MODE={d['proxy_mode']}\nDNS_ALL={1 if dns_cfg(d)['block_bypass'] else 0}")
 
 
 if __name__ == "__main__":
@@ -3171,6 +3752,9 @@ if __name__ == "__main__":
     if "--gen" in sys.argv:
         print(write_config(load()))
         sys.exit(0)
+    if "--snapshot" in sys.argv:  # install.sh 升级前调用：记下各组当前选择，新配置生效后由面板恢复
+        print("saved" if snapshot_selections() is not None else "skip")
+        sys.exit(0)
     if "--gen-cert" in sys.argv:
         ok, out = gen_cert()
         print(out)
@@ -3180,7 +3764,7 @@ if __name__ == "__main__":
     STATS = Stats()
     AD_STATS = AdStats()
     for target, args in ((STATS.loop, ()), (monitor_loop, ()), (AD_STATS.loop, ()), (live_loop, ("/traffic",)),
-                         (live_loop, ("/memory",)), (log_loop, ()), (sched_loop, ()), (rdns_loop, ())):
+                         (live_loop, ("/memory",)), (log_loop, ()), (sched_loop, ()), (rdns_loop, ()), (startup_migrate, ())):
         threading.Thread(target=target, args=args, daemon=True).start()
     srv = Server(("0.0.0.0", PORT), H)
     scheme = "http"

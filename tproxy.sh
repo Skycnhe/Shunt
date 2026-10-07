@@ -16,7 +16,7 @@ SERVER="$SELF/server.py"
 [ -f "$SERVER" ] || SERVER=/opt/mihomo-panel/server.py
 
 load_env() {
-  B_IP=""; B_MAC=""; B_IP6=""; LOCAL6=""; IPV6=0; MODE=""
+  B_IP=""; B_MAC=""; B_IP6=""; LOCAL6=""; IPV6=0; MODE=""; DNS_ALL=0
   ENV=$(python3 "$SERVER" --tpenv 2>/dev/null) && eval "$ENV"
   if [ -z "$MODE" ]; then  # 面板脚本不可用时直接读 data.json
     if grep -q '"proxy_mode": *"tun"' "$DATA" 2>/dev/null; then MODE=tun
@@ -77,13 +77,16 @@ NFT
 }
 
 dns_chain() {
+  # DNS_ALL=1（面板“阻止客户端绕过 DNS”）：客户端发往任意服务器的 53 端口查询（如手动设置 114.114.114.114）也交给 mihomo
+  DST="fib daddr type local "; [ "$DNS_ALL" = 1 ] && DST=""
   cat <<NFT
   chain dns {
     type nat hook prerouting priority dstnat; policy accept;
     ip saddr @bypass return
+    ip6 saddr @bypass6 return
     ether saddr @bypass_mac return
-    $DNS_FAMILY fib daddr type local udp dport 53 redirect to :$DNS_PORT
-    $DNS_FAMILY fib daddr type local tcp dport 53 redirect to :$DNS_PORT
+    $DNS_FAMILY ${DST}udp dport 53 redirect to :$DNS_PORT
+    $DNS_FAMILY ${DST}tcp dport 53 redirect to :$DNS_PORT
   }
 NFT
 }
@@ -97,6 +100,7 @@ start() {
   ip route replace local 0.0.0.0/0 dev lo table $TABLE_ID
 
   V6_RULES=""; DNS_FAMILY="meta nfproto ipv4"
+  DNS_SKIP=""; [ "$DNS_ALL" = 1 ] && DNS_SKIP="meta l4proto { tcp, udp } th dport 53 return"  # 交给 dns 链重定向，不走 TProxy
   if [ "$IPV6" = 1 ]; then
     sysctl -qw net.ipv6.conf.all.forwarding=1
     modprobe nf_tproxy_ipv6 2>/dev/null
@@ -118,6 +122,7 @@ $(dns_chain)
   chain prerouting {
     type filter hook prerouting priority mangle; policy accept;
     fib daddr type local return
+    $DNS_SKIP
     meta nfproto ipv4 ip saddr @bypass return
     ether saddr @bypass_mac return
     meta nfproto ipv4 ip daddr @reserved return

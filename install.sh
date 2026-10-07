@@ -120,6 +120,8 @@ done
 [ -c /dev/net/tun ] || { mkdir -p /dev/net && mknod /dev/net/tun c 10 200 2>/dev/null && chmod 666 /dev/net/tun; }
 [ -c /dev/net/tun ] && echo ">> TUN 可用（/dev/net/tun）" || echo "!! 未找到 /dev/net/tun，TUN 模式不可用，请使用 TProxy"
 
+# 升级安装：先记下各策略组当前选择（v6 地区组改名，如「🇺🇸 美国」→「🇺🇸 美国自动优选」），面板启动后按新名称恢复
+[ -z "$NEWPW" ] && python3 /opt/mihomo-panel/server.py --snapshot >/dev/null 2>&1 || true
 python3 /opt/mihomo-panel/server.py --gen >/dev/null
 if [ -n "$SELFTEST" ]; then
   echo ">> 校验配置"
