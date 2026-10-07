@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<script>document.documentElement.dataset.theme=localStorage.getItem('mp_theme')||(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark')</script>
+<title>Mihomo 旁路由面板</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ctext y=%22.9em%22 font-size=%2290%22%3E⚡%3C/text%3E%3C/svg%3E">
+<style>
+:root{--bg:#0a0c13;--txt:#f5f5f7;--sub:#a3a6b4;--card:rgba(32,35,48,.58);--card-b:rgba(255,255,255,.09);--hl:rgba(255,255,255,.06);--line:rgba(255,255,255,.08);
+  --pri:#0a84ff;--pri2:#5e5ce6;--ok:#30d158;--warn:#ffd60a;--bad:#ff453a;--in:rgba(255,255,255,.07);--in-b:rgba(255,255,255,.1);--b2:rgba(255,255,255,.1);--b2h:rgba(255,255,255,.16);
+  --pre:rgba(0,0,0,.28);--nbg:rgba(255,255,255,.045);--nsel:rgba(10,132,255,.2);--segbg:rgba(118,118,128,.24);--segon:rgba(99,99,102,.85);--segtxt:#fff;
+  --shadow:0 10px 40px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.06);--sw-off:rgba(120,120,128,.36);
+  --blob1:rgba(94,92,230,.42);--blob2:rgba(10,132,255,.32);--blob3:rgba(255,55,95,.22);--blob4:rgba(48,209,88,.16)}
+:root[data-theme=light]{--bg:#eef0f7;--txt:#1c1c1e;--sub:#5f6270;--card:rgba(255,255,255,.62);--card-b:rgba(255,255,255,.75);--hl:rgba(255,255,255,.5);--line:rgba(60,60,67,.12);
+  --pri:#007aff;--pri2:#5856d6;--ok:#1f9d48;--warn:#b26a00;--bad:#e0322b;--in:rgba(255,255,255,.72);--in-b:rgba(60,60,67,.16);--b2:rgba(120,120,128,.13);--b2h:rgba(120,120,128,.2);
+  --pre:rgba(246,247,251,.75);--nbg:rgba(255,255,255,.55);--nsel:rgba(0,122,255,.12);--segbg:rgba(118,118,128,.14);--segon:#fff;--segtxt:#1c1c1e;
+  --shadow:0 8px 32px rgba(31,38,135,.08),0 1px 2px rgba(0,0,0,.04),inset 0 1px 0 rgba(255,255,255,.7);--sw-off:rgba(120,120,128,.22);
+  --blob1:rgba(175,82,222,.34);--blob2:rgba(0,122,255,.3);--blob3:rgba(255,149,0,.26);--blob4:rgba(52,199,89,.24)}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html{background:var(--bg)}
+body{margin:0;min-height:100vh;font:14px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Helvetica Neue","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  color:var(--txt);background:transparent;-webkit-font-smoothing:antialiased;letter-spacing:.01em}
+body{position:relative;overflow-x:hidden}
+body::before{content:"";position:absolute;inset:0;min-height:100vh;z-index:-1;pointer-events:none;
+  background:radial-gradient(38vw 38vw at 8% 0%,var(--blob1),transparent 70%),radial-gradient(42vw 42vw at 94% 2%,var(--blob2),transparent 70%),
+  radial-gradient(34vw 34vw at 70% 45%,var(--blob3),transparent 70%),radial-gradient(36vw 36vw at 4% 55%,var(--blob2),transparent 70%),
+  radial-gradient(36vw 36vw at 90% 96%,var(--blob3),transparent 70%),radial-gradient(40vw 40vw at 14% 100%,var(--blob4),transparent 70%)}
+.glass,.card{background:var(--card);border:1px solid var(--card-b);box-shadow:var(--shadow);-webkit-backdrop-filter:blur(28px) saturate(180%);backdrop-filter:blur(28px) saturate(180%)}
+header{position:sticky;top:0;z-index:20;border-radius:0 0 22px 22px;border-top:0;padding:10px 18px 8px;margin:0 auto;max-width:1340px}
+.hrow{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:8px;font-weight:700;font-size:17px;letter-spacing:-.01em;white-space:nowrap}
+.logo{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;background:linear-gradient(135deg,var(--pri),var(--pri2));color:#fff;font-size:16px;box-shadow:0 4px 12px rgba(10,132,255,.35)}
+.corebox{display:flex;align-items:center;gap:6px;padding:3px 4px 3px 10px;border-radius:999px;background:var(--b2)}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;white-space:nowrap}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--sub);box-shadow:0 0 0 3px rgba(128,128,128,.18)}
+.dot.on{background:var(--ok);box-shadow:0 0 0 3px rgba(48,209,88,.22)}.dot.off{background:var(--bad);box-shadow:0 0 0 3px rgba(255,69,58,.2)}
+.ver{font-size:11px;color:var(--sub);white-space:nowrap}
+.ib{display:inline-flex;align-items:center;gap:4px;border:0;background:var(--b2);color:var(--txt);height:28px;padding:0 10px;border-radius:999px;cursor:pointer;font-size:12px;font-weight:600;transition:background .2s,transform .1s;white-space:nowrap}
+.ib:hover{background:var(--b2h)}.ib:active{transform:scale(.96)}.ib svg{width:14px;height:14px;flex:none}
+.ib.stop{color:var(--bad)}.ib.go{color:var(--ok)}.ib.round{width:34px;height:34px;padding:0;justify-content:center}
+.hstats{display:flex;gap:6px;margin-left:auto;align-items:stretch}
+.chip{display:flex;flex-direction:column;justify-content:center;min-width:92px;padding:3px 11px;border-radius:12px;background:var(--b2);line-height:1.25}
+.chip .k{font-size:10.5px;color:var(--sub);white-space:nowrap}.chip b{font-size:13px;font-weight:650;font-variant-numeric:tabular-nums;white-space:nowrap}
+.chip .k i{font-style:normal;font-weight:700}.up i{color:var(--ok)}.down i{color:var(--pri)}
+.theme .sun{display:none}:root:not([data-theme=light]) .theme .sun{display:block}:root:not([data-theme=light]) .theme .moon{display:none}
+nav{display:flex;gap:2px;margin-top:8px;padding:2px;border-radius:12px;background:var(--segbg);overflow-x:auto;scrollbar-width:none;width:max-content;max-width:100%}
+nav::-webkit-scrollbar{display:none}
+nav button{flex:0 0 auto;background:none;border:0;color:var(--txt);opacity:.75;padding:5px 14px;border-radius:10px;cursor:pointer;font-size:13.5px;font-weight:500;transition:all .2s}
+nav button:hover{opacity:1}nav button.on{background:var(--segon);color:var(--segtxt);opacity:1;font-weight:600;box-shadow:0 2px 8px rgba(0,0,0,.12)}
+main{padding:18px;max-width:1340px;margin:auto}
+.card{border-radius:22px;padding:18px 20px;margin-bottom:16px;transition:background .3s}
+.card h3{margin:0 0 12px;font-size:15.5px;font-weight:650;letter-spacing:-.01em}
+.grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(190px,1fr))}
+.cols{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(100%,540px),1fr));align-items:start}.cols>div>.card:last-child{margin-bottom:0}
+.cols>div{display:flex;flex-direction:column;gap:16px}.cols>div>.card{margin-bottom:0}
+.g4{grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}.stat{padding:16px 18px}.stat .v{font-size:24px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;margin-top:2px}.stat .k{color:var(--sub);font-size:12.5px;font-weight:500}
+.stat .s{font-size:12px;color:var(--sub);margin-top:2px}
+.btn{background:var(--pri);color:#fff;border:0;border-radius:11px;padding:7px 15px;cursor:pointer;font-size:13px;font-weight:600;transition:filter .2s,transform .1s,background .2s;white-space:nowrap}
+.btn:hover{filter:brightness(1.08)}.btn:active{transform:scale(.97)}
+.btn.g{background:var(--b2);color:var(--txt)}.btn.g:hover{background:var(--b2h)}.btn.r{background:var(--bad);color:#fff}.btn:disabled{opacity:.5;cursor:default}
+.btn.sm{padding:4px 10px;font-size:12px;border-radius:9px}
+.icon{background:none;border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:3px 9px;cursor:pointer;font-size:15px}
+input,select,textarea{background:var(--in);border:1px solid var(--in-b);color:var(--txt);border-radius:11px;padding:8px 11px;font:inherit;font-size:13px;max-width:100%;outline:none;transition:border-color .2s,box-shadow .2s}
+input:focus,select:focus,textarea:focus{border-color:var(--pri);box-shadow:0 0 0 3px rgba(10,132,255,.2)}
+select{-webkit-appearance:none;appearance:none;padding-right:28px;background-image:linear-gradient(45deg,transparent 50%,var(--sub) 50%),linear-gradient(135deg,var(--sub) 50%,transparent 50%);background-position:calc(100% - 15px) 52%,calc(100% - 10px) 52%;background-size:5px 5px;background-repeat:no-repeat}
+input[type=file]{padding:5px 8px}input[type=checkbox]{accent-color:var(--pri)}
+textarea{width:100%;font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;resize:vertical}
+.tw{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:8px 9px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:middle}
+tr:last-child td{border-bottom:0}th{color:var(--sub);font-weight:500;font-size:12px}td.w{white-space:normal;word-break:break-all}
+.node{border:1px solid var(--line);border-radius:14px;padding:9px 12px;cursor:pointer;background:var(--nbg);transition:transform .15s,border-color .2s,background .2s}
+.node:hover{transform:translateY(-1px);border-color:var(--b2h)}
+.node.sel{border-color:var(--pri);background:var(--nsel)}.node .n{font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.node .d{font-size:12px;display:flex;justify-content:space-between;gap:6px;margin-top:2px}.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}.mut{color:var(--sub)}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.sp{flex:1;min-width:0}.small{font-size:12px}.mt{margin-top:10px}.mb{margin-bottom:10px}
+.seg{display:inline-flex;padding:2px;border-radius:10px;background:var(--segbg);gap:1px;flex-wrap:nowrap;max-width:100%;overflow-x:auto}
+.seg button{background:none;color:var(--txt);opacity:.8;border:0;padding:5px 14px;cursor:pointer;border-radius:8px;font-size:13px;font-weight:500;transition:all .2s;white-space:nowrap}
+.seg button.on{background:var(--segon);color:var(--segtxt);opacity:1;font-weight:600;box-shadow:0 2px 6px rgba(0,0,0,.14)}
+.sw{position:relative;display:inline-block;width:51px;height:31px;flex:none}
+.sw input{position:absolute;inset:0;opacity:0;margin:0;cursor:pointer;z-index:1}
+.sw span{position:absolute;inset:0;border-radius:31px;background:var(--sw-off);transition:background .25s}
+.sw span::after{content:"";position:absolute;top:2px;left:2px;width:27px;height:27px;border-radius:50%;background:#fff;box-shadow:0 3px 8px rgba(0,0,0,.18),0 1px 1px rgba(0,0,0,.12);transition:transform .25s cubic-bezier(.3,1.4,.6,1)}
+.sw input:checked+span{background:var(--ok)}.sw input:checked+span::after{transform:translateX(20px)}
+.sw.sm{width:42px;height:25px}.sw.sm span::after{width:21px;height:21px}.sw.sm input:checked+span::after{transform:translateX(17px)}
+.opt{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--line)}.opt:last-child{border-bottom:0;padding-bottom:0}.opt:first-of-type{padding-top:2px}
+.opt .t{font-weight:550}.opt .dsc{font-size:12px;color:var(--sub);margin-top:1px}
+.sub-panel{margin-top:10px;padding:12px 14px;border-radius:14px;background:var(--b2)}
+.sub-panel.dim{opacity:.82}
+pre{background:var(--pre);padding:12px;border-radius:14px;max-height:65vh;overflow:auto;font:12px/1.55 "SF Mono",ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-all;margin:0}
+#livelog div{padding:1px 0;border-bottom:1px dashed var(--line)}#livelog .lv{display:inline-block;width:58px;font-weight:600}
+#toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,20px);opacity:0;pointer-events:none;background:var(--card);color:var(--txt);padding:11px 18px;border-radius:16px;max-width:min(460px,calc(100vw - 24px));z-index:50;white-space:pre-wrap;
+  border:1px solid var(--card-b);box-shadow:0 12px 40px rgba(0,0,0,.25);-webkit-backdrop-filter:blur(30px) saturate(180%);backdrop-filter:blur(30px) saturate(180%);transition:opacity .25s,transform .25s;font-weight:500}
+#toast.show{opacity:1;transform:translate(-50%,0)}
+#login{max-width:360px;margin:16vh auto;padding:26px}.tag{font-size:11px;background:var(--b2);padding:1px 7px;border-radius:6px;color:var(--sub);font-weight:500;white-space:nowrap}
+.ev{font-size:12px;padding:4px 0;border-bottom:1px dashed var(--line)}.ev:last-child{border-bottom:0}
+.hide{display:none!important}
+.bar{height:6px;border-radius:3px;background:linear-gradient(90deg,var(--bad),#ff9f0a);min-width:2px}
+.diag{display:flex;gap:10px;padding:9px 0;border-bottom:1px solid var(--line)}.diag:last-child{border-bottom:0}
+.diag .ic{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;color:#fff;font-size:12px;font-weight:700;flex:none;margin-top:1px}
+.ic.ok{background:var(--ok)}.ic.warn{background:#ff9f0a}.ic.bad{background:var(--bad)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:13px}.kv>span:nth-child(odd){color:var(--sub)}
+.dev small{display:block;color:var(--sub);font-size:11px}
+.lbl code,.dsc code,.mut code{font-size:11.5px;padding:0 4px;border-radius:5px;background:var(--b2)}
+.lbl{font-size:12px;color:var(--sub);margin:10px 0 4px;font-weight:500}
+@media (max-width:1100px){.hstats{order:5;margin-left:0;width:100%;overflow-x:auto;scrollbar-width:none}.hstats::-webkit-scrollbar{display:none}.theme{margin-left:auto}}
+@media (max-width:720px){
+  header{padding:8px 10px 7px;border-radius:0 0 18px 18px}.brand{font-size:15px}.brand b{display:none}.logo{width:28px;height:28px}
+  .hrow{gap:8px}.ver{display:none}.ib .tx{display:none}.ib{padding:0 8px}
+  .hstats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;overflow:visible}
+  .chip{min-width:0;padding:3px 6px;border-radius:10px}.chip b{font-size:11px;overflow:hidden;text-overflow:ellipsis}.chip .k{font-size:9.5px;overflow:hidden;text-overflow:ellipsis}
+  .g4{grid-template-columns:1fr 1fr}.g4 .stat{padding:12px 14px}.g4 .seg button{padding:5px 9px}
+  nav{width:100%}nav button{padding:5px 11px}
+  main{padding:10px}.card{padding:14px;margin-bottom:10px;border-radius:18px}.cols,.cols>div{gap:10px}
+  .grid{grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}.stat .v{font-size:19px}
+  .row>input,.row>select{flex:1 1 100%;width:100%!important}
+  th,td{padding:7px 6px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div id="login" class="card hide">
+  <div class="row" style="margin-bottom:16px"><span class="logo">⚡</span><h3 class="sp" style="margin:0">Mihomo 旁路由面板</h3>
+    <button class="ib round theme" onclick="toggleTheme()" title="切换主题"><svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" viewBox="0 0 24 24" fill="currentColor"><path d="M20.5 14.6A8.5 8.5 0 0 1 9.4 3.5a8.5 8.5 0 1 0 11.1 11.1z"/></svg></button></div>
+  <div class="row"><input id="pw" type="password" placeholder="面板密码" class="sp" onkeydown="if(event.key==='Enter')login()"><button class="btn" onclick="login()">登录</button></div>
+</div>
+<div id="app" class="hide">
+<header class="glass">
+  <div class="hrow">
+    <div class="brand"><span class="logo">⚡</span><b>Mihomo 面板</b></div>
+    <div class="corebox">
+      <span class="pill"><i class="dot" id="h-dot"></i><span id="h-run">-</span></span><span class="ver" id="h-ver"></span>
+      <button class="ib hide" id="h-restart" onclick="svc('restart')" title="重启 mihomo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg><span class="tx">重启</span></button>
+      <button class="ib go hide" id="h-start" onclick="svc('start')" title="启动 mihomo"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l13-7.5z"/></svg><span class="tx">启动</span></button>
+      <button class="ib stop hide" id="h-stop" onclick="svc('stop')" title="停止 mihomo"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="5.5" y="5.5" width="13" height="13" rx="2.5"/></svg><span class="tx">停止</span></button>
+    </div>
+    <div class="hstats">
+      <div class="chip up" title="当前上传速率"><span class="k"><i>↑</i> 上传</span><b id="h-up">-</b></div>
+      <div class="chip down" title="当前下载速率"><span class="k"><i>↓</i> 下载</span><b id="h-down">-</b></div>
+      <div class="chip up" title="核心启动以来累计上传"><span class="k">累计上传</span><b id="h-ut">-</b></div>
+      <div class="chip down" title="核心启动以来累计下载"><span class="k">累计下载</span><b id="h-dt">-</b></div>
+      <div class="chip" title="mihomo 内存占用"><span class="k">内存</span><b id="h-mem">-</b></div>
+    </div>
+    <button class="ib round theme" onclick="toggleTheme()" title="切换深色 / 浅色"><svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" viewBox="0 0 24 24" fill="currentColor"><path d="M20.5 14.6A8.5 8.5 0 0 1 9.4 3.5a8.5 8.5 0 1 0 11.1 11.1z"/></svg></button>
+  </div>
+  <nav id="nav"></nav>
+</header>
+<main>
+  <!-- 概览 -->
+  <section data-tab="概览">
+    <div class="grid g4" style="margin-bottom:16px">
+      <div class="card stat" style="margin:0"><div class="k">代理模式</div><div class="seg" id="mode" style="margin-top:8px"><button data-m="rule">规则</button><button data-m="global">全局</button><button data-m="direct">直连</button></div></div>
+      <div class="card stat" style="margin:0"><div class="k">代理方式</div><div class="v" id="s-pm">-</div><div class="s" id="s-pm2"></div></div>
+      <div class="card stat" style="margin:0"><div class="k">活动连接</div><div class="v" id="s-conn">-</div><div class="s" id="s-devs"></div></div>
+      <div class="card stat" style="margin:0"><div class="k">今日拦截广告</div><div class="v" id="s-ad">-</div><div class="s" id="s-ad2"></div></div>
+    </div>
+    <div class="card"><div class="row"><h3 class="sp" style="margin:0">实时流量（近 2 分钟）</h3><span class="small" style="color:var(--pri)">● 下载</span><span class="small" style="color:var(--ok)">● 上传</span></div>
+      <canvas id="chart" height="170" style="width:100%;margin-top:8px;display:block"></canvas></div>
+    <div class="cols">
+      <div>
+        <div class="card"><h3>设备排行（按当前连接）</h3><div class="tw"><table><thead><tr><th>设备</th><th>连接</th><th>下载</th><th>上传</th><th>最常访问</th></tr></thead><tbody id="devices"></tbody></table></div></div>
+        <div class="card"><div class="row"><h3 class="sp" style="margin:0">网络诊断</h3><button class="btn g" id="diag-btn" onclick="runDiag()">一键诊断</button></div>
+          <div class="mut small" style="margin-top:4px">检查核心、透明代理 / TUN、IP 转发、DNS 解析与出站连通性，并给出修复建议</div>
+          <div id="diag" style="margin-top:8px"></div></div>
+      </div>
+      <div>
+        <div class="card"><div class="row"><h3 class="sp" style="margin:0">站点延迟（每 60 秒）</h3><button class="btn g sm" onclick="testSites()">立即检测</button></div>
+          <div class="grid" id="sites" style="margin-top:12px;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px"></div></div>
+        <div class="card"><div class="row"><h3 class="sp" style="margin:0">流媒体 / AI 解锁检测</h3><button class="btn g sm" id="unlock-btn" onclick="testUnlock()">检测</button></div>
+          <div class="mut small" style="margin-top:4px">经由 mixed 端口按当前规则分流检测，结果反映各服务实际走的节点</div>
+          <div class="grid" id="unlock" style="margin-top:12px;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px"><span class="mut" style="grid-column:1/-1">点击“检测”开始（约 10 秒）</span></div></div>
+        <div class="card"><div class="row"><h3 class="sp" style="margin:0">故障自动直连（看门狗）</h3><span id="wd-status"></span></div>
+          <div class="mut small" style="margin:4px 0 8px">每 30 秒检查核心；无响应时自动重启，连续 2 次失败则关闭透明代理让局域网直连，核心恢复后自动重新接管</div>
+          <div id="wd-events"></div></div>
+      </div>
+    </div>
+  </section>
+  <!-- 节点 -->
+  <section data-tab="节点">
+    <div class="row" style="margin-bottom:12px"><span class="sp mut">点击节点切换；延迟测试走 gstatic generate_204</span>
+      <div class="seg" id="nsort"><button data-v="default">默认顺序</button><button data-v="delay">按延迟</button></div>
+      <button class="btn g" id="test-all" onclick="testAll(this)">全部测速</button><button class="btn g" onclick="loadProxies()">刷新</button></div>
+    <div id="groups"></div>
+  </section>
+  <!-- 订阅 -->
+  <section data-tab="订阅">
+    <div class="card"><h3 id="sub-title">添加订阅（Clash / Mihomo YAML 或 Base64 节点链接均可）</h3>
+      <div class="row"><input id="sub-name" placeholder="名称，如 机场A" style="width:160px"><input id="sub-url" placeholder="订阅链接 https://..." class="sp"></div>
+      <div class="row" style="margin-top:8px"><input id="sub-filter" placeholder="保留节点（正则，可空），如 港|日|新" class="sp">
+        <input id="sub-exclude" placeholder="排除节点（正则）" class="sp"></div>
+      <div class="row" style="margin-top:8px"><span class="sp mut small">排除规则默认过滤“剩余流量 / 到期时间 / 官网”等信息节点；清空表示不排除</span>
+        <button class="btn g hide" id="sub-cancel" onclick="resetSubForm()">取消</button><button class="btn" id="sub-btn" onclick="addSub()">添加并应用</button></div></div>
+    <div class="card"><h3>订阅列表</h3><div class="tw"><table><thead><tr><th>名称</th><th>节点数</th><th>过滤</th><th>流量</th><th>到期</th><th>更新时间</th><th></th></tr></thead><tbody id="subs"></tbody></table></div></div>
+    <div class="card"><h3>手动导入单个节点</h3>
+      <div class="mut small" style="margin-bottom:6px">每行一个链接，支持 vless:// vmess:// ss:// trojan:// hysteria2:// (hy2://) tuic://；导入的节点会加入“节点选择 / 自动选择 / 地区分组”</div>
+      <textarea id="node-links" rows="4" placeholder="vless://uuid@host:443?security=reality&...#香港 01"></textarea>
+      <div class="row" style="margin-top:8px"><span class="sp"></span><button class="btn" onclick="importNodes()">导入并应用</button></div>
+      <div class="tw" style="margin-top:10px"><table><thead><tr><th>名称</th><th>类型</th><th>服务器</th><th>延迟</th><th></th></tr></thead><tbody id="mynodes"></tbody></table></div></div>
+  </section>
+  <!-- 规则 -->
+  <section data-tab="规则">
+    <div class="card"><h3>规则测试</h3>
+      <div class="row"><input id="rt-target" placeholder="输入域名或 IP，如 chatgpt.com / 8.8.8.8" class="sp" onkeydown="if(event.key==='Enter')ruleTest()"><button class="btn" id="rt-btn" onclick="ruleTest()">测试</button></div>
+      <div id="rt-result" style="margin-top:10px"></div></div>
+    <div class="card"><h3>自定义规则（优先于内置规则）</h3>
+      <div class="row" style="margin-bottom:10px">
+        <select id="r-type"><option>DOMAIN-SUFFIX</option><option>DOMAIN</option><option>DOMAIN-KEYWORD</option><option>GEOSITE</option><option>IP-CIDR</option><option>GEOIP</option><option>SRC-IP-CIDR</option><option>DST-PORT</option><option>PROCESS-NAME</option></select>
+        <input id="r-val" placeholder="例如 openai.com" class="sp"><select id="r-target"></select><button class="btn" onclick="addRule()">添加</button></div>
+      <div class="tw"><table><tbody id="myrules"></tbody></table></div>
+      <div class="row" style="margin-top:10px"><span class="sp mut">也可批量编辑，每行一条：</span></div>
+      <textarea id="r-bulk" rows="6"></textarea>
+      <div class="row" style="margin-top:8px"><span class="sp"></span><button class="btn" onclick="saveBulk()">保存批量规则</button></div></div>
+    <div class="card"><h3>规则集订阅（rule-providers）</h3>
+      <div class="row" style="margin-bottom:8px"><span class="mut">快速添加：</span>
+        <button class="btn g sm" onclick="presetRS('广告拦截','category-ads-all','REJECT')">广告拦截</button>
+        <button class="btn g sm" onclick="presetRS('OpenAI','openai','🤖 AI 服务')">OpenAI</button>
+        <button class="btn g sm" onclick="presetRS('Apple','apple','DIRECT')">Apple 直连</button>
+        <button class="btn g sm" onclick="presetRS('微软','microsoft','DIRECT')">微软 直连</button>
+        <button class="btn g sm" onclick="presetRS('Steam','steam','🚀 节点选择')">Steam</button></div>
+      <div class="row" style="margin-bottom:10px"><input id="rs-name" placeholder="名称" style="width:120px"><input id="rs-url" placeholder="规则集链接" class="sp">
+        <select id="rs-beh"><option value="domain">domain</option><option value="ipcidr">ipcidr</option><option value="classical">classical</option></select>
+        <select id="rs-fmt"><option value="yaml">yaml</option><option value="text">text</option><option value="mrs">mrs</option></select>
+        <select id="rs-target"></select><button class="btn" onclick="addRS()">添加</button></div>
+      <div class="tw"><table><thead><tr><th>名称</th><th>类型</th><th>策略</th><th>规则数</th><th>更新</th><th></th></tr></thead><tbody id="rulesets"></tbody></table></div></div>
+    <div class="card"><div class="row"><h3 class="sp" style="margin:0">当前生效规则</h3><input id="r-filter" placeholder="搜索" oninput="renderActiveRules()"></div>
+      <div class="tw"><table style="margin-top:10px"><thead><tr><th>#</th><th>类型</th><th>内容</th><th>策略</th></tr></thead><tbody id="rules"></tbody></table></div></div>
+  </section>
+  <!-- 广告拦截 -->
+  <section data-tab="广告拦截">
+    <div class="card"><div class="opt" style="padding-top:0"><div class="sp"><div class="t" style="font-size:16px">广告拦截</div>
+        <div class="dsc">订阅 AdGuard / ABP / hosts / 域名列表，转换为 mihomo 域名规则集，排在所有规则之前拒绝连接；白名单与列表中的 @@ 例外优先放行，被放行的域名照常分流。</div></div>
+        <label class="sw"><input type="checkbox" id="ab-on"><span></span></label></div>
+      <div class="grid mt" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr))">
+        <div class="stat" style="padding:4px 0"><div class="k">已加载规则</div><div class="v" id="ab-total">-</div></div>
+        <div class="stat" style="padding:4px 0"><div class="k">今日拦截</div><div class="v" id="ab-today">-</div></div>
+        <div class="stat" style="padding:4px 0"><div class="k">订阅列表</div><div class="v" id="ab-nlist">-</div></div>
+        <div class="stat" style="padding:4px 0"><div class="k">上次更新</div><div class="v" id="ab-last" style="font-size:16px;margin-top:6px">-</div></div>
+      </div>
+      <div class="row mt"><span id="ab-msg" class="sp mut small"></span><button class="btn" id="ab-upd" onclick="abUpdate()">立即更新全部</button></div></div>
+    <div class="cols">
+      <div>
+        <div class="card"><h3>过滤列表</h3>
+          <div class="tw"><table><thead><tr><th>启用</th><th>名称</th><th>规则数</th><th>今日拦截</th><th>更新</th><th></th></tr></thead><tbody id="ab-lists"></tbody></table></div>
+          <div class="lbl">添加列表（AdGuard / ABP、hosts、纯域名格式）</div>
+          <div class="row mb"><span class="mut small">预设：</span><span id="ab-presets" class="row"></span></div>
+          <div class="row"><input id="ab-name" placeholder="名称" style="width:130px"><input id="ab-url" placeholder="https://.../filter.txt" class="sp"><button class="btn" onclick="abAdd()">添加</button></div>
+          <div class="opt mt"><div class="sp"><div class="t">自动更新</div><div class="dsc">按间隔重新下载全部列表，只刷新规则文件，不中断连接</div></div>
+            <select id="ab-int" onchange="abSave({interval:+this.value},'已保存')"><option value="0">不自动更新</option><option value="21600">每 6 小时</option><option value="43200">每 12 小时</option><option value="86400">每天</option><option value="259200">每 3 天</option><option value="604800">每周</option></select></div>
+          <div class="opt"><div class="sp"><div class="t">DNS 层拦截</div><div class="dsc">命中列表的域名直接返回 NXDOMAIN（nameserver-policy + rcode）。客户端不再发起连接，因此不计入“今日拦截”统计</div></div>
+            <label class="sw sm"><input type="checkbox" id="ab-dns"><span></span></label></div></div>
+        <div class="card"><h3>自定义规则</h3>
+          <div class="mut small">每行一个：<code>example.com</code>（含子域）、<code>||example.com^</code>、<code>0.0.0.0 example.com</code>；白名单也接受 <code>@@||example.com^</code></div>
+          <div class="cols" style="margin-top:8px;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">
+            <div><div class="lbl" style="margin-top:0">黑名单（总是拦截）</div><textarea id="ab-black" rows="7" placeholder="ads.example.com"></textarea></div>
+            <div><div class="lbl" style="margin-top:0">白名单（总是放行，优先）</div><textarea id="ab-white" rows="7" placeholder="safe.example.com"></textarea></div></div>
+          <div class="row mt"><span class="sp"></span><button class="btn" onclick="abSaveBW()">保存并应用</button></div></div>
+      </div>
+      <div>
+        <div class="card"><h3>检测域名</h3>
+          <div class="row"><input id="ab-check" placeholder="如 ad.doubleclick.net" class="sp" onkeydown="if(event.key==='Enter')abCheck()"><button class="btn" onclick="abCheck()">检测</button></div>
+          <div id="ab-check-r" class="mt"></div></div>
+        <div class="card"><div class="row"><h3 class="sp" style="margin:0">今日拦截排行</h3><button class="btn g sm" onclick="loadAB()">刷新</button></div>
+          <div class="tw mt"><table><thead><tr><th>域名</th><th style="width:40%"></th><th>次数</th></tr></thead><tbody id="ab-top"></tbody></table></div>
+          <div class="mut small mt">从核心 info 日志统计被广告规则 REJECT 的连接；保留 14 天</div></div>
+      </div>
+    </div>
+  </section>
+  <!-- 连接 -->
+  <section data-tab="连接">
+    <div class="card"><div class="row" style="margin-bottom:10px"><input id="c-filter" placeholder="搜索 域名 / IP / 设备 / 规则 / 节点" class="sp"><label class="mut row" style="gap:4px"><input type="checkbox" id="c-pause"> 暂停</label><button class="btn r" onclick="closeAll()">断开全部</button></div>
+      <div class="tw"><table><thead><tr><th>主机</th><th>来源设备</th><th>网络</th><th>规则</th><th>链路</th><th>↓速度</th><th>↑速度</th><th>下载</th><th>时长</th><th></th></tr></thead><tbody id="conns"></tbody></table></div></div>
+  </section>
+  <!-- 统计 -->
+  <section data-tab="统计">
+    <div class="grid g4" style="margin-bottom:16px">
+      <div class="card stat" style="margin:0"><div class="k">今日 上传 / 下载</div><div class="v" id="st-today" style="font-size:17px">-</div></div>
+      <div class="card stat" style="margin:0"><div class="k">今日 合计</div><div class="v" id="st-today-sum">-</div></div>
+      <div class="card stat" style="margin:0"><div class="k">本月 上传 / 下载</div><div class="v" id="st-month" style="font-size:17px">-</div></div>
+      <div class="card stat" style="margin:0"><div class="k">本月 合计</div><div class="v" id="st-month-sum">-</div></div>
+    </div>
+    <div class="card"><div class="row"><h3 class="sp" style="margin:0">每日流量（近 30 天）</h3><span class="small" style="color:var(--pri)">● 下载</span><span class="small" style="color:var(--ok)">● 上传</span><button class="btn g sm" onclick="loadStats()">刷新</button></div>
+      <canvas id="daychart" height="180" style="width:100%;margin-top:10px;display:block"></canvas></div>
+    <div class="card"><div class="row" style="margin-bottom:10px"><h3 class="sp" style="margin:0">明细</h3>
+      <div class="seg" id="st-period"><button data-p="today" class="on">今日</button><button data-p="month">本月</button></div></div>
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
+        <div><div class="mut" style="margin-bottom:4px">按设备（点 ✎ 设置备注）</div><div class="tw"><table><thead><tr><th>设备</th><th>上传</th><th>下载</th><th>合计</th></tr></thead><tbody id="st-dev"></tbody></table></div></div>
+        <div><div class="mut" style="margin-bottom:4px">按节点</div><div class="tw"><table><thead><tr><th>节点</th><th>上传</th><th>下载</th><th>合计</th></tr></thead><tbody id="st-node"></tbody></table></div></div>
+      </div>
+      <div class="mut small" style="margin-top:8px">每 5 秒采样一次连接，按设备 / 节点累计；存活不足 5 秒的短连接可能计入总量但不计入明细。数据保留 60 天。</div></div>
+  </section>
+  <!-- 日志 -->
+  <section data-tab="日志">
+    <div class="card"><div class="row" style="margin-bottom:10px">
+      <div class="seg" id="log-src"><button data-s="live" class="on">实时</button><button data-s="file">日志文件</button></div>
+      <select id="log-level" onchange="startLive()"><option value="debug">debug</option><option value="info" selected>info</option><option value="warning">warning</option><option value="error">error</option></select>
+      <input id="log-kw" placeholder="关键字过滤" class="sp" oninput="renderLive()">
+      <label class="mut row" style="gap:4px"><input type="checkbox" id="log-pause"> 暂停</label>
+      <button class="btn g" onclick="clearLive()">清空</button><span id="log-st" class="mut small"></span></div>
+      <pre id="livelog"></pre>
+      <div id="filelog" class="hide"><div class="row" style="margin-bottom:10px"><span class="sp mut">核心日志文件最近 300 行</span><button class="btn g" onclick="loadLogs()">刷新</button></div><pre id="logs"></pre></div></div>
+  </section>
+  <!-- 设置 -->
+  <section data-tab="设置">
+   <div class="cols">
+    <div>
+    <div class="card"><h3>代理方式</h3>
+      <div class="row"><span class="sp mut small">把客户端（或主路由 DHCP 下发）的网关和 DNS 指向本机即可全局透明代理</span>
+        <div class="seg" id="pm"><button data-v="tproxy">TProxy</button><button data-v="tun">TUN</button><button data-v="off">关闭</button></div></div>
+      <div class="mut small mt" id="pm-desc"></div>
+      <div class="sub-panel" id="tun-panel"><div class="row"><b class="sp">TUN 选项</b><span class="tag" id="tun-tag"></span></div>
+        <div class="opt"><div class="sp"><div class="t">协议栈</div><div class="dsc">mixed：TCP 走 system、UDP 走 gVisor（推荐）</div></div>
+          <div class="seg" id="tun-stack"><button data-v="system">system</button><button data-v="gvisor">gvisor</button><button data-v="mixed">mixed</button></div></div>
+        <div class="opt"><div class="sp"><div class="t">网卡名称</div></div><input id="tun-dev" style="width:120px" maxlength="15"></div>
+        <div class="opt"><div class="sp"><div class="t">auto-redirect</div><div class="dsc">用 nftables 重定向 TCP，旁路由性能更好；内核不支持时自动关闭</div></div><label class="sw sm"><input type="checkbox" id="tun-ar"><span></span></label></div>
+        <div class="opt"><div class="sp"><div class="t">strict-route</div><div class="dsc">严格路由，防止流量绕过 TUN；可能影响局域网访问，默认关闭</div></div><label class="sw sm"><input type="checkbox" id="tun-sr"><span></span></label></div>
+        <div class="row mt"><span class="sp mut small">auto-route、auto-detect-interface 已开启，DNS 劫持 any:53</span><button class="btn sm" onclick="applyTun()">应用 TUN 设置</button></div></div>
+      <div class="opt mt"><div class="sp"><div class="t">IPv6 透明代理</div><div class="dsc">核心与 DNS 启用 IPv6，并代理 IPv6 流量；需客户端以本机作为 IPv6 网关</div></div><label class="sw"><input type="checkbox" id="v6"><span></span></label></div>
+      <div class="opt"><div class="sp"><div class="t">故障自动直连（看门狗）</div><div class="dsc">核心挂掉时自动重启，仍失败则关闭透明代理保证局域网能上网</div></div><label class="sw"><input type="checkbox" id="wd"><span></span></label></div></div>
+    <div class="card"><div class="row"><h3 class="sp" style="margin:0">DNS</h3><button class="btn g sm" onclick="resetDNS()">恢复默认</button></div>
+      <div class="opt mt"><div class="sp"><div class="t">增强模式</div><div class="dsc">fake-ip 响应最快；redir-host 返回真实 IP，兼容性更好</div></div>
+        <div class="seg" id="dns-mode"><button data-v="fake-ip">fake-ip</button><button data-v="redir-host">redir-host</button></div></div>
+      <div class="opt"><div class="sp"><div class="t">按域名分流 DNS</div><div class="dsc">nameserver-policy：geosite:cn → 直连 DNS，geolocation-!cn → 代理 DNS</div></div><label class="sw sm"><input type="checkbox" id="dns-policy"><span></span></label></div>
+      <div class="opt"><div class="sp"><div class="t">缓存算法</div></div><div class="seg" id="dns-cache"><button data-v="arc">ARC</button><button data-v="lru">LRU</button></div></div>
+      <div class="lbl">直连 DNS（国内域名、代理节点域名解析）</div><textarea id="dns-direct" rows="2"></textarea>
+      <div class="lbl">代理 DNS（国外域名；<code>#策略组</code> 表示经该组发出查询）</div><textarea id="dns-proxy" rows="2"></textarea>
+      <div class="cols" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">
+        <div><div class="lbl">默认 DNS（必须是 IP，用于解析 DoH 域名）</div><textarea id="dns-default" rows="3"></textarea></div>
+        <div id="ff-box"><div class="lbl">Fake-IP 过滤（这些域名返回真实 IP）</div><textarea id="dns-ff" rows="3"></textarea></div></div>
+      <div class="row mt"><span class="sp mut small">保存前会用 mihomo -t 校验，失败自动撤销</span><button class="btn" onclick="saveDNS()">保存 DNS 设置</button></div>
+      <div class="lbl" style="margin-top:14px">DNS 查询（经由 mihomo 解析）</div>
+      <div class="row"><input id="dq-name" placeholder="如 www.google.com" class="sp" onkeydown="if(event.key==='Enter')dnsQuery()"><select id="dq-type"><option>A</option><option>AAAA</option><option>CNAME</option><option>HTTPS</option><option>MX</option><option>TXT</option><option>NS</option></select><button class="btn" id="dq-btn" onclick="dnsQuery()">查询</button></div>
+      <div id="dq-r" class="mt"></div></div>
+    <div class="card"><h3>核心服务</h3><div class="row">
+      <button class="btn" onclick="svc('reload')">重载配置</button><button class="btn g" onclick="svc('geo')">更新 GEO 数据库</button>
+      <button class="btn g" onclick="flushFake()">清空 Fake-IP 缓存</button><button class="btn g" onclick="svc('upgrade')">在线升级 mihomo 核心</button></div>
+      <div class="mut small mt">启动 / 停止 / 重启按钮在页面顶部的运行状态旁</div></div>
+    </div>
+    <div>
+    <div class="card"><h3>日志清理</h3>
+      <div class="opt"><div class="sp"><div class="t">日志上限</div><div class="dsc">超过上限时自动截断，只保留最后 200 行（每分钟检查）</div></div>
+        <div class="seg" id="log-limit"><button data-v="1">1M</button><button data-v="2">2M</button><button data-v="5">5M</button><button data-v="10">10M</button><button data-v="20">20M</button></div></div>
+      <div id="log-sizes" class="mt small"></div>
+      <div class="row mt"><span class="sp"></span><button class="btn g" onclick="cleanLogs()">立即清理</button></div></div>
+    <div class="card"><h3>定时任务</h3>
+      <div class="opt"><div class="sp"><div class="t">每天更新订阅</div><div class="dsc">留空不执行</div></div><input type="time" id="sc-sub"><button class="btn g sm" onclick="runTask('sub_update')">立即执行</button></div>
+      <div class="opt"><div class="sp"><div class="t">每天重启核心</div><div class="dsc">释放内存、刷新连接</div></div><input type="time" id="sc-restart"><button class="btn g sm" onclick="runTask('core_restart')">立即执行</button></div>
+      <div class="opt"><div class="sp"><div class="t">每天更新 GEO 数据库</div></div><input type="time" id="sc-geo"><button class="btn g sm" onclick="runTask('geo_update')">立即执行</button></div>
+      <div class="opt"><div class="sp"><div class="t">节点自动测速</div><div class="dsc">定时测试全部节点，节点页可按延迟排序</div></div>
+        <select id="sc-lat"><option value="0">关闭</option><option value="10">每 10 分钟</option><option value="30">每 30 分钟</option><option value="60">每小时</option><option value="180">每 3 小时</option></select><button class="btn g sm" onclick="runTask('latency')">立即执行</button></div>
+      <div class="row mt"><span class="sp mut small">按旁路由本机时区执行</span><button class="btn" onclick="saveSchedule()">保存</button></div>
+      <div id="sc-events" class="mt"></div></div>
+    <div class="card"><h3>设备备注</h3>
+      <div class="mut small" style="margin-bottom:6px">每行一个：<code>IP 或 MAC = 名称</code>。未备注的设备会依次尝试 DHCP 租约、/etc/hosts、反向解析获取名称</div>
+      <textarea id="dev-names" rows="4" placeholder="192.168.1.23 = 客厅电视&#10;AA:BB:CC:DD:EE:FF = 书房 NAS"></textarea>
+      <div class="row" style="margin-top:8px"><span class="sp"></span><button class="btn" onclick="saveDevNames()">保存</button></div></div>
+    <div class="card"><h3>绕过设备（不走代理）</h3>
+      <div class="mut small" style="margin-bottom:6px">每行一个 IP、网段或 MAC（如 192.168.1.50、2408:xxxx::/64、AA:BB:CC:DD:EE:FF）。TUN 模式下按 IP / 网段生成直连规则（MAC 仅 TProxy 有效）。被绕过的设备请把 DNS 设为主路由。</div>
+      <textarea id="bypass" rows="3"></textarea><div class="row" style="margin-top:8px"><span class="sp"></span><button class="btn" onclick="saveBypass()">保存</button></div></div>
+    <div class="card"><h3>订阅与分组</h3><div class="row">
+      <span>订阅自动更新间隔</span><select id="sub-int"><option value="3600">1 小时</option><option value="21600">6 小时</option><option value="43200">12 小时</option><option value="86400">24 小时</option><option value="259200">3 天</option></select></div>
+      <div class="row mt"><label class="row" style="gap:6px"><input type="checkbox" id="region"> 自动生成地区分组（香港/台湾/日本/新加坡/美国）</label><span class="sp"></span><button class="btn" onclick="saveGroupOpts()">保存并应用</button></div></div>
+    <div class="card"><h3>Telegram 通知</h3>
+      <div class="mut small" style="margin-bottom:6px">看门狗事件、节点全部超时、订阅 3 天内到期或流量超 90% 时推送（同一状态只提醒一次）。先找 @BotFather 创建机器人，再给机器人发一条消息，用 @userinfobot 查 chat id。</div>
+      <div class="row"><input id="tg-token" placeholder="Bot Token，如 123456:ABC-..." class="sp"><input id="tg-chat" placeholder="Chat ID" style="width:150px"></div>
+      <div class="row mt"><span class="sp"></span><button class="btn g" onclick="tgTest()">发送测试</button><button class="btn" onclick="saveTg()">保存</button></div></div>
+    <div class="card"><h3>延迟检测站点</h3><div class="mut small" style="margin-bottom:6px">每行：名称|网址</div>
+      <textarea id="tests" rows="4"></textarea><div class="row" style="margin-top:8px"><span class="sp"></span><button class="btn" onclick="saveTests()">保存</button></div></div>
+    <div class="card"><h3>面板安全</h3>
+      <div class="opt"><div class="sp"><div class="t">HTTPS（自签名证书）</div><div class="dsc">开启后面板改用 https:// 访问，浏览器提示证书不受信任时选择继续。登录失败 5 次锁定该 IP 10 分钟。</div></div>
+        <label class="sw"><input type="checkbox" id="https"><span></span></label></div>
+      <div class="row" style="margin-top:12px"><input id="newpw" type="password" placeholder="新面板密码" class="sp"><button class="btn" onclick="chpw()">修改密码</button><button class="btn g" onclick="logout()">退出登录</button></div></div>
+    <div class="card"><h3>备份 / 恢复</h3><div class="row"><button class="btn g" onclick="backup()">下载备份</button>
+      <input type="file" id="restore-file" accept=".json" class="sp"><button class="btn g" onclick="restore()">从文件恢复</button></div>
+      <div class="mut small" style="margin-top:6px">备份含订阅链接、手动节点、广告拦截与 DNS 设置和 Telegram Token，请妥善保管</div></div>
+    </div>
+   </div>
+  </section>
+</main>
+</div>
+<div id="toast"></div>
+<script>
+const $=s=>document.querySelector(s);
+let TOKEN=localStorage.getItem('mp_token')||'',STATE={},TAB='概览',ACTIVE_RULES=[],timers=[],DEVS={},LIVE={},CONNS=[];
+const TABS=['概览','节点','订阅','规则','广告拦截','连接','统计','日志','设置'];
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt=b=>{b=+b||0;const u=['B','KB','MB','GB','TB'];let i=0;while(b>=1024&&i<4){b/=1024;i++}return b.toFixed(i?(b<10?2:1):0)+' '+u[i]};
+const dcls=ms=>ms===undefined?'mut':ms<=0?'bad':ms<300?'ok':ms<800?'warn':'bad';
+const dtxt=ms=>ms===undefined?'--':ms<0||ms===0?'超时':ms+' ms';
+const cssv=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const ago=t=>{if(!t)return '-';const s=Math.floor(Date.now()/1000-t);return s<60?'刚刚':s<3600?Math.floor(s/60)+' 分钟前':s<86400?Math.floor(s/3600)+' 小时前':Math.floor(s/86400)+' 天前'};
+const lines=v=>v.split('\n').map(s=>s.trim()).filter(Boolean);
+function toast(t){const e=$('#toast');e.textContent=t;e.classList.add('show');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove('show'),t.length>60?7000:3500)}
+function toggleTheme(){const t=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=t;localStorage.setItem('mp_theme',t);drawChart();if(TAB==='统计')drawDays()}
+async function api(path,method='GET',body){
+  const r=await fetch(path,{method,headers:{'X-Token':TOKEN,'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
+  if(r.status===401&&path!=='/api/login'){showLogin();throw new Error('未登录')}
+  const t=await r.text();let j;try{j=t?JSON.parse(t):{}}catch{j={message:t}}
+  if(!r.ok)throw new Error(j.message||('HTTP '+r.status));return j}
+const core=(p,m,b)=>api('/api/core'+p,m,b);
+function showLogin(){stopLive();$('#app').classList.add('hide');$('#login').classList.remove('hide')}
+async function login(){try{const j=await api('/api/login','POST',{password:$('#pw').value});TOKEN=j.token;localStorage.setItem('mp_token',TOKEN);start()}catch(e){toast(e.message)}}
+function logout(){TOKEN='';localStorage.removeItem('mp_token');timers.forEach(clearInterval);timers=[];showLogin()}
+
+function nav(){ $('#nav').innerHTML=TABS.map(t=>`<button class="${t===TAB?'on':''}" onclick="go('${t}')">${t}</button>`).join('');
+  document.querySelectorAll('section').forEach(s=>s.classList.toggle('hide',s.dataset.tab!==TAB))}
+function go(t){if(TAB==='日志'&&t!=='日志')stopLive();TAB=t;nav();scrollTo({top:0});
+  ({节点:loadProxies,订阅:loadSubs,规则:loadRules,广告拦截:loadAB,统计:loadStats,日志:openLogs,设置:renderSettings,概览:renderOverview,连接:loadDevs})[t]?.()}
+
+// 顶栏：核心状态 + 启停 + 实时数据
+const PM_TXT={tproxy:'TProxy',tun:'TUN',off:'已关闭'};
+async function loadState(){STATE=await api('/api/state');renderCore(STATE.running);renderMode();renderWD();renderPMStat()}
+function renderCore(run){$('#h-dot').className='dot '+(run?'on':'off');$('#h-run').textContent=run?'运行中':'已停止';
+  $('#h-ver').textContent=run&&STATE.version&&STATE.version!=='-'?STATE.version:'';
+  $('#h-restart').classList.toggle('hide',!run);$('#h-stop').classList.toggle('hide',!run);$('#h-start').classList.toggle('hide',run)}
+function renderHdr(l){$('#h-up').textContent=fmt(l.up)+'/s';$('#h-down').textContent=fmt(l.down)+'/s';
+  $('#h-ut').textContent=fmt(l.upTotal);$('#h-dt').textContent=fmt(l.downTotal);$('#h-mem').textContent=l.inuse?fmt(l.inuse):'-';
+  if(l.running!==undefined&&l.running!==STATE.running){STATE.running=l.running;renderCore(l.running)}}
+function renderOverview(){renderMode();renderWD();renderPMStat();loadDevs();loadAdStat()}
+function renderPMStat(){$('#s-pm').textContent=PM_TXT[STATE.proxy_mode]||'-';
+  $('#s-pm2').textContent=STATE.proxy_mode==='tun'?`${STATE.tun.stack} · ${STATE.tun.device}`:STATE.proxy_mode==='tproxy'?('nftables'+(STATE.ipv6?' · IPv4+IPv6':' · IPv4')):'仅 7890 端口可用'}
+async function loadAdStat(){try{const a=await api('/api/adblock');$('#s-ad').textContent=a.enabled?a.stats.today:'未开启';
+  $('#s-ad2').textContent=a.enabled?('规则 '+Object.entries(a.loaded).filter(([k])=>k!=='ad-allow').reduce((s,[,v])=>s+(v||0),0).toLocaleString('zh-CN',{hour12:false})+' 条'):'在“广告拦截”中开启'}catch(e){}}
+function renderMode(){document.querySelectorAll('#mode button').forEach(b=>{b.classList.toggle('on',b.dataset.m===STATE.mode);
+  b.onclick=async()=>{try{await api('/api/mode','PUT',{mode:b.dataset.m});STATE.mode=b.dataset.m;renderMode();toast('已切换模式')}catch(e){toast(e.message)}}})}
+const WDS={ok:['ok','正常'],restarting:['warn','正在重启核心'],direct:['bad','已切换直连'],stopped:['mut','核心已手动停止'],off:['mut','已关闭']};
+function renderWD(){const w=STATE.wd||{};const s=WDS[w.status]||['mut',w.status||'-'];
+  $('#wd-status').innerHTML=`<span class="${s[0]}">● ${s[1]}</span>`+(w.last_check?` <span class="mut small">上次检查 ${new Date(w.last_check*1000).toLocaleTimeString('zh-CN',{hour12:false})}</span>`:'');
+  $('#wd-events').innerHTML=(w.events||[]).map(e=>`<div class="ev"><span class="mut">${new Date(e.t*1000).toLocaleString('zh-CN',{hour12:false})}</span> ${esc(e.msg)}</div>`).join('')||'<div class="mut small">暂无事件</div>'}
+
+// 每秒：/api/live（速率、累计、内存）；概览 / 连接页额外拉取连接列表
+let _cn=0;
+async function tick(){
+  try{LIVE=await api('/api/live');renderHdr(LIVE);pushHist(LIVE.up||0,LIVE.down||0)}catch(e){['#h-up','#h-down','#h-mem'].forEach(k=>$(k).textContent='-')}
+  if(TAB==='概览'||TAB==='连接'||(++_cn%5===0)){
+    try{const c=await core('/connections');CONNS=c.connections||[];$('#s-conn').textContent=CONNS.length;
+      $('#s-devs').textContent=new Set(CONNS.map(x=>x.metadata?.sourceIP).filter(Boolean)).size+' 台设备';
+      if(TAB==='概览')renderDevices(CONNS);
+      if(TAB==='连接'&&!$('#c-pause').checked)renderConns(CONNS)}catch(e){$('#s-conn').textContent='-'}}}
+async function testSites(){if(!$('#sites').children.length)$('#sites').innerHTML='<span class="mut">检测中…</span>';
+  try{const r=await api('/api/delay');$('#sites').innerHTML=r.map(s=>`<div class="node"><div class="n">${esc(s.name)}</div><div class="d ${dcls(s.ms)}" style="font-size:17px;font-weight:650">${dtxt(s.ms)}</div></div>`).join('')}catch(e){$('#sites').innerHTML=`<span class="bad">${esc(e.message)}</span>`}}
+async function testUnlock(){const b=$('#unlock-btn');b.disabled=true;b.textContent='检测中…';$('#unlock').innerHTML='<span class="mut" style="grid-column:1/-1">检测中，约需 10 秒…</span>';
+  try{const r=await api('/api/unlock');$('#unlock').innerHTML=r.map(s=>{const c=s.ok===true?'ok':s.ok==='partial'?'warn':'bad';
+    return `<div class="node"><div class="n">${esc(s.name)}</div><div class="d ${c}" style="font-size:14px;font-weight:600;justify-content:flex-start">${esc(s.text)}${s.region?` <span class="tag">${esc(s.region)}</span>`:''}</div></div>`}).join('')}
+  catch(e){$('#unlock').innerHTML=`<span class="bad">${esc(e.message)}</span>`}b.disabled=false;b.textContent='检测'}
+
+// 设备名称
+async function loadDevs(){try{const j=await api('/api/devices');DEVS=j.map||{};STATE.devices=j.custom||{}}catch(e){}}
+const dname=ip=>(DEVS[ip]&&DEVS[ip].name)||'';
+const devCell=ip=>{if(!ip||ip==='?')return '<span class="mut">mihomo 内部（DNS 等）</span>';const n=dname(ip);return n?`<span class="dev">${esc(n)}<small>${esc(ip)}</small></span>`:esc(ip)};
+async function editDev(ip){const mac=DEVS[ip]?.mac;const cur=(STATE.devices||{})[ip]||(mac&&(STATE.devices||{})[mac])||dname(ip);
+  const v=prompt(`设备 ${ip}${mac?'（'+mac+'）':''} 的备注名称（留空删除）`,cur);if(v===null)return;
+  const d=Object.assign({},STATE.devices||{});delete d[ip];if(mac)delete d[mac];if(v.trim())d[mac||ip]=v.trim();
+  try{await api('/api/devices','PUT',{devices:d});STATE.devices=d;await loadDevs();toast('已保存');if(TAB==='统计')loadStats()}catch(e){toast(e.message)}}
+
+// 节点
+let PROXIES={},NSORT=localStorage.getItem('mp_nsort')||'default';
+async function loadProxies(){document.querySelectorAll('#nsort button').forEach(b=>{b.classList.toggle('on',b.dataset.v===NSORT);b.onclick=()=>{NSORT=b.dataset.v;localStorage.setItem('mp_nsort',NSORT);loadProxies()}});
+  try{const j=await core('/proxies');PROXIES=j.proxies||{};renderGroups()}catch(e){$('#groups').innerHTML=`<div class="card bad">${esc(e.message)}</div>`}}
+function lastDelay(n){const p=PROXIES[n];if(!p||!p.history||!p.history.length)return undefined;return p.history[p.history.length-1].delay}
+function renderGroups(){
+  const order=(PROXIES.GLOBAL&&PROXIES.GLOBAL.all)||Object.keys(PROXIES);
+  const groups=order.filter(n=>PROXIES[n]&&PROXIES[n].all).concat(['GLOBAL']).filter((v,i,a)=>a.indexOf(v)===i&&PROXIES[v]);
+  const key=n=>{const d=lastDelay(n);return d===undefined?1e9-1:d<=0?1e9:d};
+  $('#groups').innerHTML=groups.map(g=>{const p=PROXIES[g];const all=NSORT==='delay'?p.all.slice().sort((a,b)=>key(a)-key(b)):p.all;
+    return `<div class="card"><div class="row" style="margin-bottom:12px"><h3 class="sp" style="margin:0">${esc(g)} <span class="tag">${esc(p.type)}</span> <span class="mut" style="font-weight:400;font-size:13px">→ ${esc(p.now||'')}</span></h3>
+    <button class="btn g sm" onclick="testGroup('${encodeURIComponent(g)}',this)">测速</button></div>
+    <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(178px,1fr));gap:10px">${all.map(n=>{const d=lastDelay(n);return `<div class="node ${n===p.now?'sel':''}" onclick="pick('${encodeURIComponent(g)}','${encodeURIComponent(n)}','${esc(p.type)}')" title="${esc(n)}">
+      <div class="n">${esc(n)}</div><div class="d"><span class="mut">${esc(PROXIES[n]?.type||'')}</span> <span class="${dcls(d)}">${dtxt(d)}</span></div></div>`}).join('')}</div></div>`}).join('')||'<div class="card mut">还没有节点，先去“订阅”添加订阅或导入节点</div>'}
+async function pick(g,n,type){if(type!=='Selector'){toast('该组为自动选择，无法手动切换');return}
+  try{await core('/proxies/'+g,'PUT',{name:decodeURIComponent(n)});toast('已切换到 '+decodeURIComponent(n));loadProxies()}catch(e){toast(e.message)}}
+async function testGroup(g,btn){btn.disabled=true;btn.textContent='测速中…';
+  try{await core(`/group/${g}/delay?url=${encodeURIComponent('https://www.gstatic.com/generate_204')}&timeout=5000`)}catch(e){}
+  btn.disabled=false;btn.textContent='测速';loadProxies()}
+async function testAll(btn){btn.disabled=true;btn.textContent='测速中…';try{await core(`/group/GLOBAL/delay?url=${encodeURIComponent('https://www.gstatic.com/generate_204')}&timeout=5000`)}catch(e){}
+  btn.disabled=false;btn.textContent='全部测速';loadProxies()}
+
+// 订阅
+let EDIT_SUB=null;
+async function loadSubs(){await loadState();let prov={};try{prov=(await core('/providers/proxies')).providers||{}}catch(e){}
+  if(!EDIT_SUB&&!$('#sub-exclude').value)$('#sub-exclude').value=STATE.default_exclude||'';
+  $('#subs').innerHTML=STATE.subs.map(s=>{const p=prov[s.name]||{};const si=p.subscriptionInfo||{};
+    const used=(si.Upload||0)+(si.Download||0);const exp=si.Expire?new Date(si.Expire*1000).toLocaleDateString('zh-CN'):'-';
+    const exc=s.exclude===undefined?STATE.default_exclude:s.exclude;
+    return `<tr><td>${esc(s.name)}<div class="mut w" style="max-width:340px;font-size:11px">${esc(s.url)}</div></td><td>${(p.proxies||[]).length}</td>
+    <td class="w" style="font-size:12px;max-width:220px">${s.filter?'保留：'+esc(s.filter)+'<br>':''}${exc?'<span class="mut">排除：'+esc(exc)+'</span>':'<span class="mut">不过滤</span>'}</td>
+    <td>${si.Total?fmt(used)+' / '+fmt(si.Total):'-'}</td><td>${exp}</td><td>${p.updatedAt?new Date(p.updatedAt).toLocaleString('zh-CN',{hour12:false}):'-'}</td>
+    <td><button class="btn g sm" onclick="updSub('${encodeURIComponent(s.name)}',this)">更新</button> <button class="btn g sm" onclick="editSub('${encodeURIComponent(s.name)}')">编辑</button> <button class="btn r sm" onclick="delSub('${encodeURIComponent(s.name)}')">删除</button></td></tr>`}).join('')||'<tr><td class="mut">暂无订阅</td></tr>';
+  renderNodes(prov)}
+function editSub(n){const s=STATE.subs.find(x=>x.name===decodeURIComponent(n));if(!s)return;EDIT_SUB=s.name;
+  $('#sub-name').value=s.name;$('#sub-name').disabled=true;$('#sub-url').value=s.url;$('#sub-filter').value=s.filter||'';
+  $('#sub-exclude').value=s.exclude===undefined?STATE.default_exclude:s.exclude;$('#sub-btn').textContent='保存修改';$('#sub-cancel').classList.remove('hide');
+  $('#sub-title').textContent='编辑订阅：'+s.name;$('#sub-title').scrollIntoView({behavior:'smooth'})}
+function resetSubForm(){EDIT_SUB=null;['#sub-name','#sub-url','#sub-filter'].forEach(k=>$(k).value='');$('#sub-name').disabled=false;
+  $('#sub-exclude').value=STATE.default_exclude||'';$('#sub-btn').textContent='添加并应用';$('#sub-cancel').classList.add('hide');
+  $('#sub-title').textContent='添加订阅（Clash / Mihomo YAML 或 Base64 节点链接均可）'}
+async function addSub(){const name=$('#sub-name').value.trim(),url=$('#sub-url').value.trim();if(!name||!url)return toast('请填写名称和链接');
+  try{toast('正在应用…');await api('/api/subs','POST',{name,url,filter:$('#sub-filter').value.trim(),exclude:$('#sub-exclude').value.trim()});
+    toast(EDIT_SUB?'订阅已更新':'订阅已添加');resetSubForm();setTimeout(loadSubs,1500)}catch(e){toast(e.message)}}
+async function updSub(n,btn){btn.disabled=true;try{await core('/providers/proxies/'+n,'PUT');toast('已更新')}catch(e){toast(e.message)}btn.disabled=false;loadSubs()}
+async function delSub(n){if(!confirm('删除订阅 '+decodeURIComponent(n)+'？'))return;try{await api('/api/subs','DELETE',{name:decodeURIComponent(n)});toast('已删除');loadSubs()}catch(e){toast(e.message)}}
+async function renderNodes(){let px={};try{px=(await core('/proxies')).proxies||{}}catch(e){}
+  $('#mynodes').innerHTML=(STATE.nodes||[]).map(n=>{const h=px[n.name]?.history||[];const d=h.length?h[h.length-1].delay:undefined;
+    return `<tr><td class="w">${esc(n.name)}</td><td>${esc(n.type)}</td><td class="w">${esc(n.server)}:${esc(n.port)}</td><td class="${dcls(d)}">${dtxt(d)}</td>
+    <td style="text-align:right"><button class="btn g sm" onclick="testNode('${encodeURIComponent(n.name)}',this)">测速</button> <button class="btn r sm" onclick="delNode('${encodeURIComponent(n.name)}')">删除</button></td></tr>`}).join('')||'<tr><td class="mut">暂无手动节点</td></tr>'}
+async function importNodes(){const links=$('#node-links').value.trim();if(!links)return toast('请粘贴节点链接');
+  try{toast('正在导入…');const j=await api('/api/nodes','POST',{links});toast(j.message);$('#node-links').value='';loadSubs()}catch(e){toast(e.message)}}
+async function delNode(n){if(!confirm('删除节点 '+decodeURIComponent(n)+'？'))return;try{await api('/api/nodes','DELETE',{name:decodeURIComponent(n)});toast('已删除');loadSubs()}catch(e){toast(e.message)}}
+async function testNode(n,btn){btn.disabled=true;try{const r=await core(`/proxies/${n}/delay?url=${encodeURIComponent('https://www.gstatic.com/generate_204')}&timeout=5000`);toast(decodeURIComponent(n)+'：'+r.delay+' ms')}catch(e){toast(decodeURIComponent(n)+'：超时')}btn.disabled=false;renderNodes()}
+
+// 规则
+async function loadRules(){await loadState();
+  $('#r-target').innerHTML=STATE.groups.concat(['DIRECT','REJECT']).map(g=>`<option>${esc(g)}</option>`).join('');
+  $('#myrules').innerHTML=STATE.rules.map((r,i)=>`<tr><td class="w">${esc(r)}</td><td style="text-align:right"><button class="btn r sm" onclick="delRule(${i})">删除</button></td></tr>`).join('')||'<tr><td class="mut">暂无自定义规则</td></tr>';
+  $('#r-bulk').value=STATE.rules.join('\n');
+  renderRS();
+  try{ACTIVE_RULES=(await core('/rules')).rules||[]}catch(e){ACTIVE_RULES=[]}renderActiveRules()}
+function renderActiveRules(){const f=$('#r-filter').value.toLowerCase();
+  $('#rules').innerHTML=ACTIVE_RULES.map((r,i)=>[i,r]).filter(([i,r])=>!f||JSON.stringify(r).toLowerCase().includes(f)).slice(0,500)
+    .map(([i,r])=>`<tr><td class="mut">${i+1}</td><td>${esc(r.type)}</td><td class="w">${esc(r.payload)}</td><td>${esc(r.proxy)}</td></tr>`).join('')}
+async function saveRules(rules){try{toast('正在应用…');await api('/api/rules','PUT',{rules});toast('规则已生效');loadRules()}catch(e){toast(e.message)}}
+function addRule(){const t=$('#r-type').value,v=$('#r-val').value.trim(),g=$('#r-target').value;if(!v)return toast('请填写内容');
+  let r=`${t},${v},${g}`;if(['IP-CIDR','GEOIP'].includes(t))r+=',no-resolve';$('#r-val').value='';saveRules(STATE.rules.concat([r]))}
+function delRule(i){const r=STATE.rules.slice();r.splice(i,1);saveRules(r)}
+function saveBulk(){saveRules($('#r-bulk').value.split('\n'))}
+async function ruleTest(){const t=$('#rt-target').value.trim();if(!t)return toast('请输入域名或 IP');const b=$('#rt-btn');b.disabled=true;
+  $('#rt-result').innerHTML='<span class="mut">测试中…</span>';
+  try{const r=await api('/api/ruletest','POST',{target:t});const live=r.method==='live';
+    let h=`<div class="tw"><table><tbody><tr><th>目标</th><td>${esc(r.host)}</td></tr>
+      <tr><th>方式</th><td class="w">${live?'<span class="ok">实时</span>（经 mixed 端口发起真实连接，读取核心匹配结果）':'<span class="warn">静态推断</span>（实时检测失败：'+esc(r.live_error||'-')+'）'}</td></tr>
+      <tr><th>命中规则</th><td class="w"><b>${esc(r.rule)}</b> ${esc(r.payload||'')}</td></tr>
+      <tr><th>节点链路</th><td class="w">${esc((r.chain||[]).join(' → ')||'-')}</td></tr>${r.note?`<tr><th>说明</th><td class="w mut">${esc(r.note)}</td></tr>`:''}</tbody></table></div>`;
+    if(!live&&r.uncertain&&r.uncertain.length)h+=`<div class="mut small" style="margin-top:6px">以下规则（GEOSITE/GEOIP/RULE-SET 等）无法静态判断，排在命中规则之前，实际可能先命中：<br>${r.uncertain.map(esc).join('<br>')}</div>`;
+    $('#rt-result').innerHTML=h}catch(e){$('#rt-result').innerHTML=`<span class="bad">${esc(e.message)}</span>`}b.disabled=false}
+
+// 广告拦截
+let AB=null,_abt=0;
+async function loadAB(){try{AB=await api('/api/adblock')}catch(e){return toast(e.message)}renderAB();clearTimeout(_abt);if(AB.updating)_abt=setTimeout(loadAB,2500)}
+function abLists(){return AB.lists.map(({name,url,enabled})=>({name,url,enabled}))}
+function renderAB(){const a=AB;$('#ab-on').checked=a.enabled;$('#ab-on').onchange=e=>abSave({enabled:e.target.checked},e.target.checked?'广告拦截已开启':'广告拦截已关闭');
+  $('#ab-dns').checked=a.dns;$('#ab-dns').onchange=e=>abSave({dns:e.target.checked},'DNS 层拦截已'+(e.target.checked?'开启':'关闭'));
+  $('#ab-int').value=String(a.interval);
+  const total=Object.entries(a.loaded).filter(([k])=>k!=='ad-allow').reduce((s,[,v])=>s+(v||0),0);
+  $('#ab-total').textContent=a.enabled?total.toLocaleString('zh-CN',{hour12:false}):'未开启';$('#ab-today').textContent=a.stats.today.toLocaleString('zh-CN',{hour12:false});
+  $('#ab-nlist').textContent=a.lists.filter(l=>l.enabled).length+' / '+a.lists.length;
+  $('#ab-last').textContent=ago(Math.max(0,...a.lists.map(l=>l.updated||0)));
+  $('#ab-msg').innerHTML=a.updating?'<span class="warn">● 正在更新…</span>':esc(a.msg||'');$('#ab-upd').disabled=a.updating;
+  $('#ab-lists').innerHTML=a.lists.map((l,i)=>{const ld=a.loaded['ad-'+l.id];
+    return `<tr><td><label class="sw sm"><input type="checkbox" ${l.enabled?'checked':''} onchange="abToggle(${i},this.checked)"><span></span></label></td>
+    <td class="w" style="min-width:150px"><b style="font-weight:600">${esc(l.name)}</b><div class="mut" style="font-size:11px;max-width:300px">${esc(l.url)}</div></td>
+    <td>${l.count!=null?Number(l.count).toLocaleString('zh-CN',{hour12:false}):'-'}${l.allow?`<div class="mut" style="font-size:11px">例外 ${l.allow}</div>`:''}${a.enabled&&l.enabled&&ld==null&&l.count?'<div class="warn" style="font-size:11px">未加载</div>':''}</td>
+    <td>${(l.hits||0).toLocaleString('zh-CN',{hour12:false})}</td>
+    <td class="w" style="font-size:12px;min-width:90px">${l.error?`<span class="bad" title="${esc(l.error)}">失败：${esc(l.error.slice(0,40))}</span>`:ago(l.updated)}</td>
+    <td style="text-align:right;white-space:nowrap"><button class="btn g sm" onclick="abUpdate('${l.id}')">更新</button> <button class="btn r sm" onclick="abDel(${i})">删除</button></td></tr>`}).join('')
+    +(a.black.length?`<tr><td></td><td><b style="font-weight:600">自定义黑名单</b></td><td>${(a.loaded['ad-custom']??a.black.length).toLocaleString('zh-CN',{hour12:false})}</td><td>${(a.custom_hits||0).toLocaleString('zh-CN',{hour12:false})}</td><td></td><td></td></tr>`:'')
+    ||'<tr><td colspan="6" class="mut">还没有列表，点上方预设一键添加</td></tr>';
+  $('#ab-presets').innerHTML=a.presets.map((p,i)=>`<button class="btn g sm" onclick="abPreset(${i})" ${a.lists.some(l=>l.url===p.url)?'disabled':''}>${esc(p.name)}</button>`).join('');
+  if(document.activeElement!==$('#ab-black'))$('#ab-black').value=a.black.join('\n');
+  if(document.activeElement!==$('#ab-white'))$('#ab-white').value=a.white.join('\n');
+  const top=a.stats.top||[],mx=top.length?top[0][1]:1;
+  $('#ab-top').innerHTML=top.map(([d,n])=>`<tr><td class="w">${esc(d)}</td><td><div class="bar" style="width:${Math.max(2,n/mx*100)}%"></div></td><td>${n}</td></tr>`).join('')||'<tr><td class="mut" colspan="3">今天还没有拦截记录</td></tr>'}
+async function abSave(patch,msg){try{toast('正在应用…');const j=await api('/api/adblock','PUT',patch);toast(msg&&!/下载/.test(j.message)?msg:j.message);}catch(e){toast(e.message)}loadAB()}
+function abPreset(i){const p=AB.presets[i];abSave({lists:abLists().concat([{name:p.name,url:p.url,enabled:true}]),enabled:true},'已添加 '+p.name)}
+function abAdd(){const url=$('#ab-url').value.trim(),name=$('#ab-name').value.trim();if(!/^https?:\/\//.test(url))return toast('请填写列表地址');
+  $('#ab-url').value='';$('#ab-name').value='';abSave({lists:abLists().concat([{name,url,enabled:true}])})}
+function abDel(i){if(!confirm('删除列表 '+AB.lists[i].name+'？'))return;const l=abLists();l.splice(i,1);abSave({lists:l},'已删除')}
+function abToggle(i,v){const l=abLists();l[i].enabled=v;abSave({lists:l},v?'已启用':'已停用')}
+async function abUpdate(id){try{const j=await api('/api/adblock/update','POST',id?{ids:[id]}:{});toast(j.message)}catch(e){toast(e.message)}setTimeout(loadAB,800)}
+function abSaveBW(){abSave({black:lines($('#ab-black').value),white:lines($('#ab-white').value)},'自定义规则已生效')}
+async function abCheck(){const d=$('#ab-check').value.trim();if(!d)return toast('请输入域名');
+  try{const r=await api('/api/adblock/check','POST',{domain:d});
+    const st=r.blocked?'<span class="bad">● 会被拦截</span>':r.blocked_by.length&&r.allowed_by.length?'<span class="ok">● 放行（白名单优先）</span>':r.blocked_by.length&&!r.enabled?'<span class="warn">● 命中列表，但广告拦截未开启</span>':'<span class="ok">● 不拦截</span>';
+    $('#ab-check-r').innerHTML=`<div class="kv"><span>域名</span><b>${esc(r.host)}</b><span>结果</span><span>${st}</span>
+      <span>命中拦截</span><span>${r.blocked_by.map(x=>esc(x.name)+' <span class="tag">'+esc(x.rule)+'</span>').join('<br>')||'-'}</span>
+      <span>命中放行</span><span>${r.allowed_by.map(x=>esc(x.name)+' <span class="tag">'+esc(x.rule)+'</span>').join('<br>')||'-'}</span></div>`}
+  catch(e){$('#ab-check-r').innerHTML=`<span class="bad">${esc(e.message)}</span>`}}
+
+// 连接
+const prevConn={};
+function renderConns(list){const f=$('#c-filter').value.toLowerCase();const now=Date.now();
+  list.sort((a,b)=>new Date(b.start)-new Date(a.start));
+  $('#conns').innerHTML=list.filter(c=>!f||(JSON.stringify(c)+dname(c.metadata?.sourceIP)).toLowerCase().includes(f)).slice(0,300).map(c=>{const m=c.metadata||{};
+    const p=prevConn[c.id];const ds=p?(c.download-p.d):0,us=p?(c.upload-p.u):0;prevConn[c.id]={d:c.download,u:c.upload};
+    const host=(m.host||m.sniffHost||m.destinationIP)+':'+m.destinationPort;const sec=Math.floor((now-new Date(c.start))/1000);
+    return `<tr><td class="w" style="max-width:260px">${esc(host)}</td><td>${devCell(m.sourceIP)}</td><td>${esc(m.network)}</td><td>${esc(c.rule)}${c.rulePayload?' <span class="mut">'+esc(c.rulePayload.length>40?c.rulePayload.slice(0,40)+'…':c.rulePayload)+'</span>':''}</td>
+    <td class="w">${esc((c.chains||[]).slice().reverse().join(' → '))}</td><td>${fmt(ds)}/s</td><td>${fmt(us)}/s</td><td>${fmt(c.download)}</td>
+    <td>${sec<60?sec+'s':Math.floor(sec/60)+'m'}</td><td><button class="btn g sm" onclick="closeConn('${c.id}')">断开</button></td></tr>`}).join('')||'<tr><td class="mut" colspan="10">暂无连接</td></tr>'}
+async function closeConn(id){try{await core('/connections/'+id,'DELETE')}catch(e){toast(e.message)}}
+async function closeAll(){if(!confirm('断开全部连接？'))return;try{await core('/connections','DELETE');toast('已断开')}catch(e){toast(e.message)}}
+
+// 统计
+let STATS=null,ST_P='today';
+async function loadStats(){try{STATS=await api('/api/stats');await loadDevs()}catch(e){return toast(e.message)}
+  const t=STATS.today||{},m=STATS.month||{};
+  $('#st-today').textContent=fmt(t.up)+' / '+fmt(t.down);$('#st-today-sum').textContent=fmt((t.up||0)+(t.down||0));
+  $('#st-month').textContent=fmt(m.up)+' / '+fmt(m.down);$('#st-month-sum').textContent=fmt((m.up||0)+(m.down||0));
+  document.querySelectorAll('#st-period button').forEach(b=>{b.classList.toggle('on',b.dataset.p===ST_P);b.onclick=()=>{ST_P=b.dataset.p;loadStats()}});
+  const p=STATS[ST_P]||{},arp=STATS.arp||{};
+  $('#st-dev').innerHTML=(p.dev||[]).map(([n,u,d])=>`<tr><td class="w">${devCell(n)}${!dname(n)&&arp[n]?'<div class="mut" style="font-size:11px">'+esc(arp[n])+'</div>':''}</td><td>${fmt(u)}</td><td>${fmt(d)}</td><td>${fmt(u+d)} <button class="icon" style="font-size:12px;padding:0 6px;margin-left:4px" title="设置备注" onclick="editDev('${esc(n)}')">✎</button></td></tr>`).join('')||'<tr><td class="mut">暂无数据</td></tr>';
+  $('#st-node').innerHTML=(p.node||[]).map(([n,u,d])=>`<tr><td class="w">${esc(n)}</td><td>${fmt(u)}</td><td>${fmt(d)}</td><td>${fmt(u+d)}</td></tr>`).join('')||'<tr><td class="mut">暂无数据</td></tr>';
+  drawDays()}
+function drawDays(){const c=$('#daychart');if(!c||c.offsetParent===null||!STATS)return;const r=devicePixelRatio,w=c.width=c.clientWidth*r,h=c.height=180*r,x=c.getContext('2d');
+  const days=(STATS.days||[]).slice(-30);x.clearRect(0,0,w,h);x.font=(11*r)+'px -apple-system,sans-serif';x.fillStyle=cssv('--sub');
+  if(!days.length){x.fillText('暂无数据',8,20*r);return}
+  const max=Math.max(1,...days.map(d=>d.up+d.down)),top=18*r,bot=18*r,ch=h-top-bot,bw=w/30;
+  x.fillText(fmt(max),4,12*r);x.strokeStyle=cssv('--line');x.beginPath();x.moveTo(0,h-bot);x.lineTo(w,h-bot);x.stroke();
+  days.forEach((d,i)=>{const px=i*bw+bw*.18,bwi=bw*.64,hd=d.down/max*ch,hu=d.up/max*ch;
+    x.fillStyle=cssv('--pri');x.fillRect(px,h-bot-hd,bwi,hd);x.fillStyle=cssv('--ok');x.fillRect(px,h-bot-hd-hu,bwi,hu);
+    if(days.length<=10||i%Math.ceil(days.length/10)===0||i===days.length-1){x.fillStyle=cssv('--sub');x.fillText(d.date.slice(5),px,h-4*r)}})}
+
+// 日志：实时（SSE）+ 文件
+let ES=null,LOGS=[],LOG_SRC='live';
+const LVC={debug:'mut',info:'ok',warning:'warn',error:'bad'};
+function openLogs(){document.querySelectorAll('#log-src button').forEach(b=>{b.classList.toggle('on',b.dataset.s===LOG_SRC);b.onclick=()=>{LOG_SRC=b.dataset.s;openLogs()}});
+  const live=LOG_SRC==='live';$('#livelog').classList.toggle('hide',!live);$('#filelog').classList.toggle('hide',live);
+  ['#log-level','#log-kw','#log-pause'].forEach(k=>$(k).closest('label')?$(k).closest('label').classList.toggle('hide',!live):$(k).classList.toggle('hide',!live));
+  if(live)startLive();else{stopLive();loadLogs()}}
+function startLive(){stopLive();if(TAB!=='日志'||LOG_SRC!=='live')return;
+  ES=new EventSource(`/api/logstream?level=${$('#log-level').value}&token=${encodeURIComponent(TOKEN)}`);
+  $('#log-st').textContent='连接中…';
+  ES.onopen=()=>{$('#log-st').innerHTML='<span class="ok">● 实时</span>'};
+  ES.onerror=()=>{$('#log-st').innerHTML='<span class="warn">● 重连中</span>'};
+  ES.onmessage=e=>{let j;try{j=JSON.parse(e.data)}catch{j={type:'info',payload:e.data}}
+    LOGS.push({t:new Date().toLocaleTimeString('zh-CN',{hour12:false}),l:j.type||'info',p:j.payload||''});if(LOGS.length>2000)LOGS.splice(0,LOGS.length-2000);
+    if(!$('#log-pause').checked)renderLive()}}
+function stopLive(){if(ES){ES.close();ES=null}const s=$('#log-st');if(s)s.textContent=''}
+function clearLive(){LOGS=[];renderLive()}
+let _lr=0;function renderLive(){if(_lr)return;_lr=requestAnimationFrame(()=>{_lr=0;const el=$('#livelog');const kw=$('#log-kw').value.toLowerCase();
+  const stick=el.scrollTop+el.clientHeight>=el.scrollHeight-30;
+  el.innerHTML=LOGS.filter(x=>!kw||x.p.toLowerCase().includes(kw)).slice(-800).map(x=>`<div><span class="mut">${x.t}</span> <span class="lv ${LVC[x.l]||''}">${esc(x.l)}</span>${esc(x.p)}</div>`).join('')||'<span class="mut">等待日志…</span>';
+  if(stick)el.scrollTop=el.scrollHeight})}
+async function loadLogs(){try{const j=await api('/api/logs');const el=$('#logs');el.textContent=j.log||'(空)';el.scrollTop=el.scrollHeight}catch(e){toast(e.message)}}
+
+// 设置
+function seg(sel,on,fn){document.querySelectorAll(sel+' button').forEach(b=>{b.classList.toggle('on',(b.dataset.v==='1')===!!on);b.onclick=()=>fn(b.dataset.v==='1')})}
+function segv(sel,cur,fn){document.querySelectorAll(sel+' button').forEach(b=>{b.classList.toggle('on',b.dataset.v===String(cur));b.onclick=()=>fn(b.dataset.v)})}
+function sw(sel,on,fn){const e=$(sel);e.checked=!!on;e.onchange=async()=>{const v=e.checked;try{await fn(v)}catch(err){e.checked=!v}}}
+const PM_DESC={tproxy:'TProxy：nftables 把局域网 TCP/UDP 透明转发到 mihomo 7893 端口，DNS 劫持到 1053。兼容性最好。',
+  tun:'TUN：mihomo 创建虚拟网卡并接管路由（auto-route），旁路由转发的流量进入 TUN；nftables 只保留 DNS 重定向。需要 tun 内核模块。',
+  off:'关闭：不做透明代理，客户端可手动设置 HTTP/SOCKS 代理 本机IP:7890。'};
+let TUNF={};
+async function renderSettings(){await loadState().catch(()=>{});fillSettings();
+  segv('#pm',STATE.proxy_mode,v=>setPM(v));$('#pm-desc').textContent=PM_DESC[STATE.proxy_mode]||'';
+  TUNF=Object.assign({},STATE.tun);renderTunForm();
+  sw('#v6',STATE.ipv6,v=>saveSettings({ipv6:v},'IPv6 已'+(v?'开启':'关闭')));
+  sw('#wd',STATE.watchdog,v=>saveSettings({watchdog:v},'看门狗已'+(v?'开启':'关闭')));
+  sw('#https',STATE.https,async v=>{if(!confirm(`面板将以 ${v?'HTTPS':'HTTP'} 重启，确定？`))throw 0;
+    try{const j=await api('/api/https','PUT',{enable:v});toast(j.message+'，3 秒后跳转');setTimeout(()=>location.href=`${j.scheme}://${location.host}/`,3000)}catch(e){toast(e.message);throw e}});
+  fillDNS();fillSchedule();loadLogInfo();
+  segv('#log-limit',STATE.log_limit,v=>saveSettings({log_limit:+v},'日志上限已设为 '+v+' MB').then(renderSettings).catch(()=>{}));
+  await loadDevs();$('#dev-names').value=Object.entries(STATE.devices||{}).map(([k,v])=>k+' = '+v).join('\n')}
+function renderTunForm(){const t=TUNF;segv('#tun-stack',t.stack,v=>{TUNF.stack=v;renderTunForm()});$('#tun-dev').value=t.device||'Meta';
+  $('#tun-ar').checked=!!t.auto_redirect;$('#tun-ar').onchange=e=>TUNF.auto_redirect=e.target.checked;
+  $('#tun-sr').checked=!!t.strict_route;$('#tun-sr').onchange=e=>TUNF.strict_route=e.target.checked;
+  const on=STATE.proxy_mode==='tun';$('#tun-panel').classList.toggle('dim',!on);$('#tun-tag').textContent=on?'当前生效':'选择 TUN 后生效'}
+async function setPM(mode,force){if(mode===STATE.proxy_mode&&!force)return;
+  if(!confirm(`切换代理方式为「${PM_TXT[mode]==='已关闭'?'关闭':PM_TXT[mode]}」？\n切换时局域网代理会短暂中断。`))return;
+  TUNF.device=$('#tun-dev').value.trim()||'Meta';
+  try{toast('正在切换…');const j=await api('/api/proxymode','PUT',{mode,tun:TUNF});toast(j.message)}catch(e){toast(e.message)}renderSettings()}
+function applyTun(){setPM('tun',true)}
+let DNSF={};
+function fillDNS(){const d=STATE.dns||{};DNSF={mode:d.mode,cache:d.cache};
+  $('#dns-policy').checked=d.policy!==false;
+  $('#dns-direct').value=(d.direct||[]).join('\n');$('#dns-proxy').value=(d.proxy||[]).join('\n');$('#dns-default').value=(d.default||[]).join('\n');
+  $('#dns-ff').value=(d.fake_filter||[]).join('\n');dnsSegs()}
+function dnsSegs(){segv('#dns-mode',DNSF.mode,v=>{DNSF.mode=v;dnsSegs()});segv('#dns-cache',DNSF.cache,v=>{DNSF.cache=v;dnsSegs()});
+  $('#ff-box').classList.toggle('hide',DNSF.mode!=='fake-ip')}
+async function saveDNS(){const body={direct:lines($('#dns-direct').value),proxy:lines($('#dns-proxy').value),default:lines($('#dns-default').value),
+    fake_filter:lines($('#dns-ff').value),mode:DNSF.mode,cache:DNSF.cache,policy:$('#dns-policy').checked};
+  try{toast('正在校验并应用…');const j=await api('/api/dns','PUT',body);toast(j.message);await loadState();fillDNS()}catch(e){toast(e.message)}}
+async function resetDNS(){if(!confirm('恢复默认 DNS 设置？'))return;try{const j=await api('/api/dns','PUT',{reset:true});toast(j.message);await loadState();fillDNS()}catch(e){toast(e.message)}}
+async function dnsQuery(){const n=$('#dq-name').value.trim();if(!n)return toast('请输入域名');const b=$('#dq-btn');b.disabled=true;$('#dq-r').innerHTML='<span class="mut">查询中…</span>';
+  try{const r=await api('/api/dnsquery','POST',{name:n,type:$('#dq-type').value});const TY={1:'A',5:'CNAME',28:'AAAA',15:'MX',16:'TXT',2:'NS',65:'HTTPS',33:'SRV'};
+    const RC={0:'NOERROR',2:'SERVFAIL',3:'NXDOMAIN（不存在或被拦截）',5:'REFUSED'};
+    $('#dq-r').innerHTML=`<div class="row small mb"><span class="${r.status===0?'ok':'bad'}">● ${esc(RC[r.status]||('Status '+r.status))}</span><span class="mut">${r.ms} ms · ${esc(r.policy)}</span></div>`+
+      (r.answer.length?`<div class="tw"><table><thead><tr><th>名称</th><th>类型</th><th>TTL</th><th>结果</th></tr></thead><tbody>${r.answer.map(a=>`<tr><td>${esc(a.name)}</td><td>${TY[a.type]||a.type}</td><td>${a.TTL}</td><td class="w">${esc(a.data)}</td></tr>`).join('')}</tbody></table></div>`:'<span class="mut small">无记录</span>')}
+  catch(e){$('#dq-r').innerHTML=`<span class="bad">${esc(e.message)}</span>`}b.disabled=false}
+function fillSchedule(){const s=STATE.schedule||{};$('#sc-sub').value=s.sub_update||'';$('#sc-restart').value=s.core_restart||'';$('#sc-geo').value=s.geo_update||'';$('#sc-lat').value=String(s.latency||0);
+  $('#sc-events').innerHTML=(STATE.sched_events||[]).slice(0,6).map(e=>`<div class="ev"><span class="mut">${new Date(e.t*1000).toLocaleString('zh-CN',{hour12:false})}</span> ${esc(e.msg)}</div>`).join('')}
+async function saveSchedule(){try{const j=await api('/api/schedule','PUT',{sub_update:$('#sc-sub').value,core_restart:$('#sc-restart').value,geo_update:$('#sc-geo').value,latency:+$('#sc-lat').value});toast(j.message);await loadState();fillSchedule()}catch(e){toast(e.message)}}
+async function runTask(k){if(k==='core_restart'&&!confirm('立即重启核心？'))return;try{toast('执行中…');const j=await api('/api/schedule/run','POST',{task:k});toast(j.message)}catch(e){toast(e.message)}await loadState();fillSchedule()}
+async function loadLogInfo(){try{const j=await api('/api/logs/info');$('#log-sizes').innerHTML=j.files.map(f=>`<div class="row" style="padding:3px 0"><span class="sp mut" style="font-family:ui-monospace,Menlo,monospace;font-size:12px">${esc(f.path)}</span><b>${f.size<0?'不存在':fmt(f.size)}</b></div>`).join('')}catch(e){}}
+async function cleanLogs(){try{const j=await api('/api/logs/clean','POST');toast(j.message);loadLogInfo()}catch(e){toast(e.message)}}
+async function saveDevNames(){const d={};for(const l of lines($('#dev-names').value)){const i=l.search(/[=\s]/);if(i<0)continue;const k=l.slice(0,i).trim(),v=l.slice(i).replace(/^[\s=]+/,'').trim();if(k&&v)d[k]=v}
+  try{const j=await api('/api/devices','PUT',{devices:d});toast(j.message);await loadDevs();$('#dev-names').value=Object.entries(STATE.devices||{}).map(([k,v])=>k+' = '+v).join('\n')}catch(e){toast(e.message)}}
+async function svc(a){if(a==='stop'&&!confirm('停止 mihomo 核心？\n停止后经旁路由的设备将无法上网（看门狗不会自动拉起，需手动启动）。'))return;
+  if(a==='restart'&&!confirm('重启 mihomo 核心？现有连接会断开。'))return;
+  try{toast('执行中…');const j=await api('/api/service','POST',{action:a});toast(j.message||'完成');setTimeout(loadState,1500)}catch(e){toast(e.message)}}
+async function flushFake(){try{await core('/cache/fakeip/flush','POST');toast('已清空')}catch(e){toast(e.message)}}
+async function chpw(){try{const j=await api('/api/password','PUT',{password:$('#newpw').value});TOKEN=j.token;localStorage.setItem('mp_token',TOKEN);$('#newpw').value='';toast('密码已修改')}catch(e){toast(e.message)}}
+function saveTg(){saveSettings({tg_token:$('#tg-token').value.trim(),tg_chat:$('#tg-chat').value.trim()},'Telegram 设置已保存').catch(()=>{})}
+async function tgTest(){try{toast('发送中…');const j=await api('/api/tg/test','POST',{tg_token:$('#tg-token').value.trim(),tg_chat:$('#tg-chat').value.trim()});toast(j.message)}catch(e){toast(e.message)}}
+
+// 网络诊断
+async function runDiag(){const b=$('#diag-btn');b.disabled=true;b.textContent='诊断中…';$('#diag').innerHTML='<span class="mut small">正在检查，约需 10 秒…</span>';
+  try{const r=await api('/api/diag');const bad=r.filter(x=>x.ok!==true).length;
+    $('#diag').innerHTML=`<div class="small ${bad?'warn':'ok'}" style="margin:4px 0">${bad?bad+' 项需要注意':'全部正常'}</div>`+r.map(x=>{const c=x.ok===true?'ok':x.ok==='warn'?'warn':'bad';
+      return `<div class="diag"><span class="ic ${c}">${c==='ok'?'✓':c==='warn'?'!':'✕'}</span><div class="sp"><div class="row"><b class="sp" style="font-weight:600">${esc(x.name)}</b><span class="mut small w" style="text-align:right">${esc(x.detail)}</span></div>${x.fix?`<div class="small ${c}" style="margin-top:2px">${esc(x.fix)}</div>`:''}</div></div>`}).join('')}
+  catch(e){$('#diag').innerHTML=`<span class="bad">${esc(e.message)}</span>`}b.disabled=false;b.textContent='一键诊断'}
+
+// 流量曲线 & 设备排行
+const HIST={up:[],down:[]};
+function pushHist(u,d){HIST.up.push(u);HIST.down.push(d);if(HIST.up.length>120){HIST.up.shift();HIST.down.shift()}if(TAB==='概览')drawChart()}
+function drawChart(){const c=$('#chart');if(!c||c.offsetParent===null)return;const r=devicePixelRatio,w=c.width=c.clientWidth*r,h=c.height=170*r,x=c.getContext('2d');
+  x.clearRect(0,0,w,h);const max=Math.max(1024,...HIST.up,...HIST.down)*1.15;x.font=(11*r)+'px -apple-system,sans-serif';
+  x.strokeStyle=cssv('--line');x.lineWidth=1;for(let i=1;i<=3;i++){const y=Math.round(h-i*(h-8*r)/3)+.5;x.beginPath();x.moveTo(0,y);x.lineTo(w,y);x.stroke()}
+  x.fillStyle=cssv('--sub');x.fillText(fmt(max)+'/s',6*r,14*r);
+  [[HIST.down,cssv('--pri')],[HIST.up,cssv('--ok')]].forEach(([a,col])=>{if(a.length<2)return;const pts=a.map((v,i)=>[w-(a.length-1-i)*(w/119),h-3*r-(v/max)*(h-22*r)]);
+    const g=x.createLinearGradient(0,0,0,h);g.addColorStop(0,col+'55');g.addColorStop(1,col+'00');x.beginPath();x.moveTo(pts[0][0],h);pts.forEach(p=>x.lineTo(p[0],p[1]));x.lineTo(pts[pts.length-1][0],h);x.closePath();x.fillStyle=g;x.fill();
+    x.strokeStyle=col;x.lineWidth=2*r;x.lineJoin='round';x.beginPath();pts.forEach((p,i)=>i?x.lineTo(p[0],p[1]):x.moveTo(p[0],p[1]));x.stroke()})}
+function renderDevices(list){const m={};list.forEach(c=>{const ip=c.metadata?.sourceIP||'';const e=m[ip]||(m[ip]={n:0,d:0,u:0,h:{}});e.n++;e.d+=c.download;e.u+=c.upload;
+  const host=c.metadata?.host||c.metadata?.destinationIP;e.h[host]=(e.h[host]||0)+c.download});
+  $('#devices').innerHTML=Object.entries(m).sort((a,b)=>b[1].d-a[1].d).slice(0,10).map(([ip,e])=>{const top=Object.entries(e.h).sort((a,b)=>b[1]-a[1])[0]?.[0]||'';
+    return `<tr><td>${devCell(ip)}</td><td>${e.n}</td><td>${fmt(e.d)}</td><td>${fmt(e.u)}</td><td class="w" style="max-width:200px;min-width:120px">${esc(top)}</td></tr>`}).join('')||'<tr><td class="mut" colspan="5">暂无连接</td></tr>'}
+
+// 规则集
+const RS_BASE='https://github.com/MetaCubeX/meta-rules-dat/raw/meta/geo/geosite/';
+function presetRS(name,site,target){saveRS(STATE.rulesets.filter(r=>r.name!==name).concat([{name,url:RS_BASE+site+'.mrs',behavior:'domain',format:'mrs',target}]))}
+function addRS(){const name=$('#rs-name').value.trim(),url=$('#rs-url').value.trim();if(!name||!url)return toast('请填写名称和链接');
+  saveRS(STATE.rulesets.filter(r=>r.name!==name).concat([{name,url,behavior:$('#rs-beh').value,format:$('#rs-fmt').value,target:$('#rs-target').value}]))}
+async function saveRS(rs){try{toast('正在应用…');await api('/api/settings','PUT',{rulesets:rs});toast('规则集已生效');loadRules()}catch(e){toast(e.message)}}
+function delRS(i){const r=STATE.rulesets.slice();r.splice(i,1);saveRS(r)}
+async function renderRS(){$('#rs-target').innerHTML=$('#r-target').innerHTML;let prov={};try{prov=(await core('/providers/rules')).providers||{}}catch(e){}
+  $('#rulesets').innerHTML=STATE.rulesets.map((r,i)=>{const p=prov[r.name]||{};return `<tr><td>${esc(r.name)}<div class="mut w" style="font-size:11px;max-width:360px">${esc(r.url)}</div></td><td>${esc(r.behavior)}/${esc(r.format)}</td><td>${esc(r.target)}</td>
+    <td>${p.ruleCount??'-'}</td><td><button class="btn g sm" onclick="updRS('${encodeURIComponent(r.name)}')">更新</button></td><td><button class="btn r sm" onclick="delRS(${i})">删除</button></td></tr>`}).join('')||'<tr><td class="mut">暂无规则集</td></tr>'}
+async function updRS(n){try{await core('/providers/rules/'+n,'PUT');toast('已更新');renderRS()}catch(e){toast(e.message)}}
+
+// 设置扩展
+function fillSettings(){$('#bypass').value=(STATE.bypass||[]).join('\n');$('#tests').value=(STATE.tests||[]).map(t=>t.name+'|'+t.url).join('\n');
+  $('#sub-int').value=String(STATE.sub_interval||86400);$('#region').checked=STATE.region_groups!==false;
+  $('#tg-token').value=STATE.tg_token||'';$('#tg-chat').value=STATE.tg_chat||''}
+async function saveSettings(o,msg){try{toast('保存中…');const j=await api('/api/settings','PUT',o);toast(msg||j.message);await loadState();fillSettings()}catch(e){toast(e.message);throw e}}
+function saveBypass(){saveSettings({bypass:$('#bypass').value.split('\n').map(s=>s.trim()).filter(Boolean)},'绕过设备已生效').catch(()=>{})}
+function saveTests(){const t=$('#tests').value.split('\n').map(l=>l.split('|')).filter(a=>a.length>=2&&a[1].trim().startsWith('http')).map(a=>({name:a[0].trim(),url:a.slice(1).join('|').trim()}));
+  if(!t.length)return toast('格式：名称|网址');saveSettings({tests:t},'已保存').then(testSites).catch(()=>{})}
+function saveGroupOpts(){saveSettings({sub_interval:+$('#sub-int').value,region_groups:$('#region').checked},'已应用').catch(()=>{})}
+async function backup(){try{const j=await api('/api/backup');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(j,null,2)],{type:'application/json'}));
+  a.download='mihomo-panel-backup-'+new Date().toISOString().slice(0,10)+'.json';a.click()}catch(e){toast(e.message)}}
+async function restore(){const f=$('#restore-file').files[0];if(!f)return toast('先选择备份文件');try{const j=JSON.parse(await f.text());const r=await api('/api/restore','POST',j);toast(r.message);loadState().then(fillSettings)}catch(e){toast('恢复失败：'+e.message)}}
+let _rz=0;addEventListener('resize',()=>{clearTimeout(_rz);_rz=setTimeout(()=>{drawChart();if(TAB==='统计')drawDays()},120)});
+async function start(){
+  try{await loadState()}catch(e){if(e.message==='未登录')return;}
+  $('#login').classList.add('hide');$('#app').classList.remove('hide');nav();go(TAB);
+  timers.forEach(clearInterval);timers=[setInterval(tick,1000),setInterval(testSites,60000),setInterval(loadState,15000),setInterval(loadDevs,30000),
+    setInterval(()=>{if(TAB==='统计')loadStats();if(TAB==='概览')loadAdStat();if(TAB==='广告拦截'&&!AB?.updating)loadAB()},30000)];
+  loadDevs();tick();testSites()}
+TOKEN?start():showLogin();
+</script>
+</body>
+</html>
