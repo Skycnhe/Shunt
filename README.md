@@ -45,53 +45,40 @@ Alpine Linux 上运行的 **mihomo 旁路由透明代理 + 一体化 Web 面板*
 - 📱 手机自适应布局，深色 / 浅色主题切换
 
 ## 安装
+
+在 Alpine Linux 上用 root 执行一条命令即可，脚本会自动补齐软件源（main + community）和全部依赖（python3、nftables、iptables、iproute2、curl 等），下载面板文件、mihomo 核心和 GEO 数据，并设置开机自启。
+
+**国外网络：**
+
 ```sh
-apk add git
-git clone https://github.com/Skycnhe/mihomo-panel.git
-cd mihomo-panel
-sh install.sh
-# 国内下载慢可以： GH_PROXY=https://ghfast.top/ sh install.sh
+wget -qO- https://raw.githubusercontent.com/Skycnhe/-mihomo-panel/main/install.sh | sh
 ```
+
+**国内网络**（apk 换中科大镜像，GitHub 下载走 ghfast.top 加速）：
+
+```sh
+wget -qO- https://ghfast.top/https://raw.githubusercontent.com/Skycnhe/-mihomo-panel/main/install.sh | sh -s -- --cn
+```
+
+需要额外参数时加在最后，例如 `| sh -s -- --cn --https --selftest`。可选环境变量：`GH_PROXY`（换加速代理）、`APK_MIRROR`（换 apk 镜像，如 `mirrors.aliyun.com`）。
+
+也可以下载仓库后本地安装：
+
+```sh
+sh install.sh            # 国外
+sh install.sh --cn       # 国内
+```
+
 安装完成会打印面板地址和初始密码，默认 `http://旁路由IP:8080`。
 
-可选参数（可组合）：
+可选参数：
+
 ```sh
+sh install.sh --cn           # 国内网络：apk 国内镜像 + GitHub 加速
 sh install.sh --https        # 生成自签名证书，面板改用 https://（也可之后在“设置 → 面板安全”开关）
 sh install.sh --selftest     # 安装后用真实 mihomo 核心校验多种配置场景
 sh install.sh --update-core  # 重新下载最新 mihomo 核心
 ```
-
-### 自检
-```sh
-sh /opt/mihomo-panel/selftest.sh
-```
-会生成 16 种场景（含 TUN 三种协议栈、广告拦截规则 / DNS 层拦截、自定义 DNS、旧版数据迁移），先检查生成结果（TUN 与代理方式一致、白名单优先等），再逐个 `mihomo -t` 校验。
-
-### TUN 模式说明
-- 设置 → 代理方式 选 **TUN**：面板生成 `tun.enable: true`（auto-route、auto-detect-interface、`dns-hijack: [any:53, tcp://any:53]`），先 `mihomo -t` 校验再热重载，随后确认 TUN 网卡确实创建成功；失败会把核心日志里的原因显示出来。
-- 选 TUN 时 `tproxy.sh` 会撤掉 TProxy 的 nftables 规则，只保留「发往本机 53 端口的 DNS → 1053」重定向，让把 DNS 指向旁路由的设备继续可用；切回 TProxy 时反之。
-- **auto-redirect** 依赖 nftables（或 iptables）；内核不支持时面板会自动关闭它并重试一次。`install.sh` 会安装 iptables、加载 `tun` 模块并写入 `/etc/modules`、持久化 `net.ipv4.ip_forward=1`。
-- 绕过设备：TUN 模式下 IP / 网段会生成 `SRC-IP-CIDR,…,DIRECT` 规则（流量仍经过 TUN 但直连）；**MAC 绕过只在 TProxy 模式有效**。
-- 协议栈：`mixed`（默认，TCP 走 system、UDP 走 gVisor）、`system`（性能最好）、`gvisor`（兼容性最好）。容器 / LXC 里通常没有 `/dev/net/tun`，请用 TProxy。
-- nftables 表名改为 `inet mihomo_panel`，避免与 mihomo auto-redirect 自己的表冲突；旧版的 `inet mihomo` 表只有确认是面板创建的才会被删除。
-
-### 广告拦截说明
-- 打开「广告拦截」页的总开关，点预设 **AdGuard DNS filter** / **anti-AD** 或填入任意列表地址。后端先经代理、失败再直连下载，解析并转换为 mihomo `behavior: domain / format: text` 的本地规则文件（`/etc/mihomo/adblock/`），去重并去掉被上级域名覆盖的条目，无效行（正则、`$client=` 等修饰符、URL 规则）直接丢弃。
-- 转换规则：`||a.com^` → `+.a.com`（含子域）；hosts（`0.0.0.0 a.com`）与纯域名 → `a.com`（仅该域名，与 AdGuard Home 一致）；自定义黑 / 白名单里的纯域名按「含子域」处理。
-- 生成的规则排在所有规则之前：`AND,((RULE-SET,ad-xxx),(NOT,((RULE-SET,ad-allow)))),REJECT`。白名单（自定义白名单 + 各列表中的 `@@` 例外）优先，被放行的域名**继续走正常分流**而不是强制直连。
-- **DNS 层拦截**（可选）：通过 `nameserver-policy` 把命中列表的域名指向 `rcode://name_error`（白名单先走直连 DNS），客户端收到 NXDOMAIN 不再发起连接——因此这部分不计入「今日拦截」。已用真实核心验证顺序生效。
-- 统计来自核心 info 日志中 `match …RuleSet,ad-xxx… using REJECT` 的连接，保留 14 天；「检测域名」直接查本地规则文件，并说明命中了哪个列表 / 被哪条白名单放行。
-- 列表按设置的间隔自动更新；只有规则文件变化时仅刷新对应 rule-provider，不重载配置、不断开连接。
-- 两个预设列表约 27 万条域名，实测核心内存增加约 50 MB、`mihomo -t` 约 1.2 秒，内存较小的设备建议只开一个列表。
-
-### DNS 说明
-- 设置 → DNS：直连 DNS（默认 doh.pub、alidns）用于国内域名与节点域名解析；代理 DNS（默认 `https://1.1.1.1/dns-query#🚀 节点选择`、`https://dns.google/dns-query#🚀 节点选择`，`#策略组` 表示查询经该组的节点发出）；默认 DNS 必须是 IP。
-- 开启「按域名分流」时生成 `nameserver-policy`：`geosite:cn` → 直连 DNS，`geosite:geolocation-!cn` → 代理 DNS（按顺序匹配）。
-- 增强模式 fake-ip / redir-host、Fake-IP 过滤列表、缓存算法 ARC / LRU 均可改；保存前做格式与策略组校验，再 `mihomo -t`，失败自动撤销；保存后清空 DNS / Fake-IP 缓存。
-- 「DNS 查询」经核心 `/dns/query` 解析，显示状态码、耗时与全部记录，可用来确认分流与广告拦截是否生效。
-
-### IPv6 说明
-在“设置”里开启 IPv6 透明代理后，客户端还需要把本机当作 **IPv6 网关**（主路由的 RA 指向旁路由，或干脆关闭主路由 IPv6 只用 IPv4）。否则 IPv6 流量不会经过旁路由。
 
 ## 客户端设置
 把需要代理的设备（或主路由 DHCP 下发）的 **网关** 和 **DNS** 都设为旁路由的 IP。

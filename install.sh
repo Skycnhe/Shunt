@@ -1,6 +1,10 @@
 #!/bin/sh
 # mihomo 旁路由面板一键安装 (Alpine Linux)
-# 用法: sh install.sh [--update-core] [--https] [--selftest]
+# 用法: sh install.sh [--cn] [--update-core] [--https] [--selftest]
+# 一键安装（无需先下载仓库）:
+#   国外: wget -qO- https://raw.githubusercontent.com/Skycnhe/-mihomo-panel/main/install.sh | sh
+#   国内: wget -qO- https://ghfast.top/https://raw.githubusercontent.com/Skycnhe/-mihomo-panel/main/install.sh | sh -s -- --cn
+#   --cn           国内网络：apk 换国内镜像，GitHub 下载走加速代理（默认 https://ghfast.top/，可用 GH_PROXY 覆盖）
 #   --update-core  重新下载最新 mihomo 核心
 #   --https        生成自签名证书并让面板使用 https://（也可之后在“设置”里开关）
 #   --selftest     安装后用真实核心校验多种配置场景（selftest.sh）
@@ -8,9 +12,11 @@ set -e
 [ "$(id -u)" = 0 ] || { echo "请用 root 运行"; exit 1; }
 SRC="$(cd "$(dirname "$0")" && pwd)"
 GH="${GH_PROXY:-}"   # 国内可设置 GH_PROXY=https://ghfast.top/ 加速
-UPDATE_CORE=""; HTTPS=""; SELFTEST=""
+REPO="${PANEL_REPO:-Skycnhe/-mihomo-panel}"; BRANCH="${PANEL_BRANCH:-main}"
+CN=""; UPDATE_CORE=""; HTTPS=""; SELFTEST=""
 for a in "$@"; do
   case "$a" in
+    --cn) CN=1 ;;
     --update-core) UPDATE_CORE=1 ;;
     --https) HTTPS=1 ;;
     --selftest) SELFTEST=1 ;;
@@ -18,9 +24,40 @@ for a in "$@"; do
   esac
 done
 
+[ -f /etc/alpine-release ] || { echo "本脚本仅支持 Alpine Linux"; exit 1; }
+if [ -n "$CN" ]; then
+  GH="${GH:-https://ghfast.top/}"
+  MIRROR="${APK_MIRROR:-mirrors.ustc.edu.cn}"
+  echo ">> 国内模式：apk 镜像 $MIRROR，GitHub 加速 $GH"
+  sed -i -E "s#https?://[^/]+/alpine#https://$MIRROR/alpine#g" /etc/apk/repositories
+fi
+
+echo ">> 补齐软件源（main + community）"
+REL=$(cut -d. -f1,2 /etc/alpine-release)
+BASE=$(sed -n -E 's#^(https?://[^ ]*/alpine)/.*#\1#p' /etc/apk/repositories | head -n1)
+BASE="${BASE:-https://dl-cdn.alpinelinux.org/alpine}"
+sed -i -E "s@^#[[:space:]]*(.*/v$REL/community)@\1@" /etc/apk/repositories
+for r in main community; do
+  grep -Eq "^[^#].*/(v$REL|edge|latest-stable)/$r/?[[:space:]]*$" /etc/apk/repositories || echo "$BASE/v$REL/$r" >> /etc/apk/repositories
+done
+
 echo ">> 安装依赖"
-apk add --no-cache curl ca-certificates python3 nftables iptables ip6tables iproute2 gzip tzdata kmod >/dev/null
-[ -n "$HTTPS" ] && apk add --no-cache openssl >/dev/null
+apk update >/dev/null || { echo "!! apk update 失败，请检查网络/软件源（国内请加 --cn）"; exit 1; }
+PKGS="curl wget ca-certificates python3 nftables iptables ip6tables iproute2 gzip tar tzdata kmod coreutils"
+[ -n "$HTTPS" ] && PKGS="$PKGS openssl"
+for p in $PKGS; do apk add --no-cache "$p" >/dev/null 2>&1 || echo "!! 依赖 $p 安装失败"; done
+for c in curl python3 nft ip gunzip; do command -v $c >/dev/null || { echo "!! 缺少 $c，安装中止"; exit 1; }; done
+update-ca-certificates >/dev/null 2>&1 || true
+
+# 通过 wget | sh 运行时本地没有项目文件：从 GitHub 拉取
+if [ ! -f "$SRC/server.py" ]; then
+  SRC=$(mktemp -d); mkdir -p "$SRC/init.d"
+  RAW="${GH}https://raw.githubusercontent.com/$REPO/$BRANCH"
+  echo ">> 下载面板文件 ($REPO@$BRANCH)"
+  for f in server.py index.html tproxy.sh selftest.sh init.d/mihomo init.d/mihomo-panel; do
+    curl -fsSL --retry 3 -o "$SRC/$f" "$RAW/$f" || { echo "!! 下载 $f 失败（国内请加 --cn 或设置 GH_PROXY）"; exit 1; }
+  done
+fi
 
 case "$(uname -m)" in
   x86_64) ARCH=amd64-compatible ;;
@@ -31,7 +68,8 @@ esac
 
 if [ ! -x /usr/local/bin/mihomo ] || [ -n "$UPDATE_CORE" ]; then
   echo ">> 获取 mihomo 最新版本"
-  VER=$(curl -fsSL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)
+  VER=$(curl -fsSL --retry 3 "${GH}https://github.com/MetaCubeX/mihomo/releases/latest/download/version.txt" | tr -d ' \r\n')
+  [ -n "$VER" ] || VER=$(curl -fsSL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)
   [ -n "$VER" ] || { echo "获取版本失败，可设置 GH_PROXY 后重试"; exit 1; }
   echo ">> 下载 mihomo $VER ($ARCH)"
   curl -fL "${GH}https://github.com/MetaCubeX/mihomo/releases/download/$VER/mihomo-linux-$ARCH-$VER.gz" | gunzip > /usr/local/bin/mihomo.new
