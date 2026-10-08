@@ -83,7 +83,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 6
-PANEL_VERSION = "6.5"
+PANEL_VERSION = "6.6"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -3482,6 +3482,8 @@ def check_nodes():
 # /proxies 与 /providers/proxies 两处，前端轮询时就会「一会有一会没有」。面板把每个节点最近一次的
 # 测速结果（任意测速地址中时间最新的一条）缓存到文件，核心暂时没有记录时用缓存补上。
 DELAY_FILE = os.path.join(PANEL_DIR, "delays.json")
+BG_FILE = os.path.join(PANEL_DIR, "bg.img")  # 外观：自定义背景图（所有设备共用）
+BG_MAX = 8 * 2**20
 DELAYS = {"data": None, "saved": 0, "dirty": False}
 RETEST = {"pending": False, "last": 0}
 
@@ -3549,6 +3551,38 @@ def retest_soon(wait=6):
         finally:
             RETEST["pending"] = False
     threading.Thread(target=run, daemon=True).start()
+
+
+def bg_save(data_url):
+    """data:image/...;base64,xxx → 保存背景图；只接受 JPEG / PNG / WebP / GIF"""
+    m = re.match(r"data:image/[\w.+-]+;base64,(.+)$", str(data_url or ""), re.S)
+    if not m:
+        return False, "图片格式不正确"
+    try:
+        raw = base64.b64decode(m.group(1), validate=False)
+    except Exception:
+        return False, "图片数据无法解析"
+    if len(raw) > BG_MAX:
+        return False, "图片不能超过 8MB"
+    if bg_type(raw[:16]) is None:
+        return False, "只支持 JPG / PNG / WebP / GIF"
+    tmp = BG_FILE + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(raw)
+    os.replace(tmp, BG_FILE)
+    return True, "背景图已保存"
+
+
+def bg_type(head):
+    if head[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if head[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image/webp"
+    if head[:4] == b"GIF8":
+        return "image/gif"
+    return None
 
 
 def proxies_merged():
@@ -5330,6 +5364,19 @@ class H(BaseHTTPRequestHandler):
             return self.send_static("index.html" if p == "/" else p.lstrip("/"))
         if m == "GET" and p == "/manifest.webmanifest":
             return self.send(200, json.dumps(MANIFEST, ensure_ascii=False).encode(), "application/manifest+json")
+        if m == "GET" and p == "/bg":  # 背景图：CSS url() 无法带登录头，只读、不含敏感信息
+            try:
+                with open(BG_FILE, "rb") as f:
+                    raw = f.read()
+            except OSError:
+                return self.send(404, {"message": "未设置背景图"})
+            self.send_response(200)
+            self.send_header("Content-Type", bg_type(raw[:16]) or "application/octet-stream")
+            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")  # 前端用 ?v=修改时间 刷新
+            self.end_headers()
+            self.wfile.write(raw)
+            return
         if p == "/api/login" and m == "POST":
             ip = self.client_address[0]
             left = login_blocked(ip)
@@ -5762,6 +5809,22 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/speedtest" and m == "GET":
             via = q1(parse_qs(q), "via", default="proxy")
             return self.send(200, speed_test(via == "proxy"))
+        if p == "/api/bg" and m == "GET":
+            try:
+                return self.send(200, {"exists": True, "v": int(os.path.getmtime(BG_FILE)), "size": os.path.getsize(BG_FILE)})
+            except OSError:
+                return self.send(200, {"exists": False})
+        if p == "/api/bg" and m == "POST":
+            ok, msg = bg_save(b.get("data"))
+            if not ok:
+                return self.send(400, {"message": msg})
+            return self.send(200, {"message": msg, "v": int(os.path.getmtime(BG_FILE))})
+        if p == "/api/bg" and m == "DELETE":
+            try:
+                os.remove(BG_FILE)
+            except OSError:
+                pass
+            return self.send(200, {"message": "已移除背景图"})
         if p == "/api/px" and m == "GET":
             px = proxies_merged()
             if px is None:
