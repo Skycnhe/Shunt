@@ -1,7 +1,10 @@
-# mihomo-panel
+<p align="center"><img src="icon.svg" width="96" alt="Shunt"></p>
+
+# Shunt 分流
+
+> 项目仓库与服务名仍为 `mihomo-panel`，升级不受影响。
 
 Alpine Linux 上运行的 **mihomo 旁路由透明代理 + 一体化 Web 面板**。后端是零依赖的 Python3，前端是单个 HTML 文件。
-这个只是自娱自乐项目，如果要定制自己下载源码修改。
 
 ## v6 新增
 - 🚀 **节点选择自适应**：只包含「<地区>自动优选」（url-test，顺序 日本 / 新加坡 / 香港 / 美国 / 其他）、「⚖️ <地区>负载均衡」（每个有节点的地区都生成，顺序 香港 / 日本 / 新加坡 / 美国 / 其他）、「🖐️ 手动选择」（全部节点）、「⚡ 全局自动选择」「🏠 直连」。没有节点的地区不生成；完全没有节点时只剩 🏠 直连。自定义策略组不再加入节点选择，只作为分流组候选
@@ -153,7 +156,7 @@ sh install.sh --update-core  # 重新下载最新 mihomo 核心
 ```sh
 rc-service mihomo restart        # 重启核心
 rc-service mihomo-panel restart  # 重启面板
-sh install.sh --update-core      # 升级 mihomo 核心
+sh install.sh --update-core      # 升级 mihomo 核心（也可在面板「设置 → 内核更新」一键升级 / 回滚，支持稳定版和 Alpha）
 /opt/mihomo-panel/tproxy.sh stop # 临时关闭透明代理（apply 按当前代理方式恢复，status 查看状态）
 sh /opt/mihomo-panel/selftest.sh # 用真实核心校验配置
 ```

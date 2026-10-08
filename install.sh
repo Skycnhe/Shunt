@@ -1,5 +1,5 @@
 #!/bin/sh
-# mihomo 旁路由面板一键安装 (Alpine Linux)
+# Shunt 分流 —— mihomo 旁路由面板一键安装 (Alpine Linux)
 # 用法: sh install.sh [--cn] [--update-core] [--https] [--selftest]
 # 一键安装（无需先下载仓库）:
 #   国外: wget -qO- https://raw.githubusercontent.com/Skycnhe/mihomo-panel/Hk001/install.sh | sh
@@ -135,7 +135,7 @@ rc-service mihomo-panel restart
 IP=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.*src \([0-9.]*\).*/\1/p')
 SCHEME=http; grep -q '"https": *true' /etc/mihomo-panel/data.json && [ -f /etc/mihomo-panel/cert.pem ] && SCHEME=https
 echo
-echo "================ 安装完成 ================"
+echo "========= Shunt 分流 · 安装完成 ========="
 echo " 面板地址: ${SCHEME}://${IP:-本机IP}:8080"
 [ "$SCHEME" = https ] && echo " （自签名证书，浏览器提示不安全时选择继续访问）"
 [ -n "$NEWPW" ] && echo " 初始密码: $PW   (登录后可在“设置”里修改)"

@@ -1539,7 +1539,7 @@ def tg_send(text, d=None):
     d = d or load()
     if not d.get("tg_token") or not d.get("tg_chat"):
         return False, "未配置 Telegram"
-    body = json.dumps({"chat_id": d["tg_chat"], "text": f"[mihomo-panel@{socket.gethostname()}]\n{text}"}).encode()
+    body = json.dumps({"chat_id": d["tg_chat"], "text": f"[Shunt@{socket.gethostname()}]\n{text}"}).encode()
     url = f"https://api.telegram.org/bot{d['tg_token']}/sendMessage"
     err = ""
     for use_proxy in (True, False):  # 先走代理，核心挂了再直连
@@ -4010,7 +4010,7 @@ if __name__ == "__main__":
         ctx.load_cert_chain(CERT, KEY)
         srv.socket = ctx.wrap_socket(srv.socket, server_side=True, do_handshake_on_connect=False)
         scheme = "https"
-    print(f"mihomo-panel listening on {scheme}://0.0.0.0:{PORT}", flush=True)
+    print(f"Shunt (mihomo-panel) listening on {scheme}://0.0.0.0:{PORT}", flush=True)
     try:
         srv.serve_forever()
     finally:
