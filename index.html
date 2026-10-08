@@ -509,6 +509,14 @@ pre{background:var(--pre);padding:12px;border-radius:14px;max-height:65vh;overfl
       <div class="row"><input id="gh-proxy" placeholder="GitHub 加速（可空），如 https://ghfast.top/" class="sp"><button class="btn g" onclick="checkUpdate()" id="upd-chk">检查更新</button></div>
       <div id="upd-r" class="small mt"></div>
       <div class="row mt"><span class="sp"></span><button class="btn g" onclick="rollbackPanel()">回滚上一版本</button><button class="btn" id="upd-btn" onclick="doUpdate()">立即更新</button></div></div>
+    <div class="card"><div class="row"><h3 class="sp" style="margin:0">内核更新</h3><span class="tag" id="cv"></span></div>
+      <div class="mut small" style="margin:4px 0 8px">从 MetaCubeX/mihomo 下载对应 CPU 架构的核心，使用上方的 GitHub 加速地址。新核心先校验能否运行、能否读取当前配置，通过后才替换并重启；30 秒内没响应会自动换回旧核心。重启期间网络会中断几秒。</div>
+      <div class="row"><select id="core-ch"><option value="stable">稳定版</option><option value="alpha">预览版 Alpha</option></select><span class="sp"></span>
+        <button class="btn g" onclick="coreCheck()" id="core-chk">检查更新</button></div>
+      <div id="core-r" class="small mt"></div>
+      <div id="core-prog" class="hide mt"><div style="height:6px;border-radius:3px;background:rgba(127,127,127,.2);overflow:hidden"><div id="core-bar" style="height:6px;width:0;background:var(--pri);transition:width .3s"></div></div>
+        <div id="core-log" class="mut small mt" style="white-space:pre-line;max-height:120px;overflow:auto"></div></div>
+      <div class="row mt"><span class="sp"></span><button class="btn g" onclick="coreRollback()" id="core-rb">回滚内核</button><button class="btn" id="core-btn" onclick="coreUpdate()">更新内核</button></div></div>
     <div class="card"><div class="row"><h3 class="sp" style="margin:0">配置快照</h3><button class="btn g sm" onclick="loadHistory()">刷新</button></div>
       <div class="mut small" style="margin:4px 0 6px">每次修改设置前自动保存上一版本（最近 10 份，不含密码），改错了可以一键回到之前的配置</div>
       <div id="hist" class="small"></div></div>
@@ -922,7 +930,8 @@ async function renderSettings(){await loadState().catch(()=>{});fillSettings();
     try{const j=await api('/api/https','PUT',{enable:v});toast(j.message+'，3 秒后跳转');setTimeout(()=>location.href=`${j.scheme}://${location.host}/`,3000)}catch(e){toast(e.message);throw e}});
   fillSchedule();loadLogInfo();loadHistory();
   sw('#sniff',STATE.sniffer!==false,v=>saveSettings({sniffer:v},'域名嗅探已'+(v?'开启':'关闭')));
-  $('#pv').textContent='当前 v'+(STATE.panel_version||'-');if(document.activeElement!==$('#gh-proxy'))$('#gh-proxy').value=STATE.gh_proxy||'';
+  $('#pv').textContent='当前 v'+(STATE.panel_version||'-');$('#cv').textContent='当前 '+(STATE.version||'-');
+  if(!CORE_POLL)api('/api/coreupdate/status').then(j=>{if(j.busy)corePoll()}).catch(()=>{});if(document.activeElement!==$('#gh-proxy'))$('#gh-proxy').value=STATE.gh_proxy||'';
   segv('#log-limit',STATE.log_limit,v=>saveSettings({log_limit:+v},'日志上限已设为 '+v+' MB').then(renderSettings).catch(()=>{}));
   await loadDevs();$('#dev-names').value=Object.entries(STATE.devices||{}).map(([k,v])=>k+' = '+v).join('\n')}
 function renderTunForm(){const t=TUNF;segv('#tun-stack',t.stack,v=>{TUNF.stack=v;renderTunForm()});$('#tun-dev').value=t.device||'Meta';
@@ -1052,6 +1061,27 @@ async function doUpdate(){if(!confirm('从 GitHub 下载并更新面板文件？
   $('#upd-r').innerHTML='<span class="mut">正在下载并校验…</span>';
   try{await saveGhProxy();const j=await api('/api/selfupdate','POST',{});$('#upd-r').innerHTML=`<span class="ok">● ${esc(j.message)}</span>`;
     if(j.changed&&j.changed.length)setTimeout(()=>location.reload(),5000)}catch(e){$('#upd-r').innerHTML=`<span class="bad">${esc(e.message)}</span>`}b.disabled=false}
+// 内核更新
+let CORE_POLL=null;
+function coreCh(){return $('#core-ch').value}
+async function coreCheck(){const b=$('#core-chk');b.disabled=true;$('#core-r').innerHTML='<span class="mut">正在检查…</span>';
+  try{await saveGhProxy();const j=await api('/api/coreupdate?channel='+coreCh());coreShow(j)}
+  catch(e){$('#core-r').innerHTML=`<span class="bad">${esc(e.message)}</span>`}b.disabled=false}
+function coreShow(j){$('#cv').textContent='当前 '+(j.current||'-');
+  $('#core-r').innerHTML=(j.latest?`<span class="ok">● 已是最新</span> ${esc(j.current)}`:`<span class="warn">● 有更新</span> ${esc(j.current)} → ${esc(j.remote)}`)+
+    ` · 架构 ${esc(j.arch)}`+(j.backup?` · 可回滚到 ${esc(j.backup)}`:'');$('#core-btn').textContent=j.latest?'重新安装':'更新内核';$('#core-btn').dataset.force=j.latest?'1':''}
+async function coreUpdate(){const force=!!$('#core-btn').dataset.force;
+  if(!confirm(`${force?'重新下载并安装':'下载并更新'} mihomo ${coreCh()==='alpha'?'预览版':'稳定版'}内核？\n更新后核心会重启，网络中断几秒。`))return;
+  try{await saveGhProxy();await api('/api/coreupdate','POST',{channel:coreCh(),force});corePoll()}catch(e){toast(e.message)}}
+async function coreRollback(){if(!confirm('回滚到上一个内核版本？核心会重启。'))return;
+  try{await api('/api/coreupdate','POST',{action:'rollback'});corePoll()}catch(e){toast(e.message)}}
+function corePoll(){$('#core-prog').classList.remove('hide');['#core-btn','#core-rb','#core-chk'].forEach(x=>$(x).disabled=true);clearInterval(CORE_POLL);
+  const tick=async()=>{let j;try{j=await api('/api/coreupdate/status')}catch(e){return}  // 核心重启时请求可能短暂失败
+    $('#core-bar').style.width=(j.pct||0)+'%';$('#core-log').textContent=(j.log||[]).join('\n');
+    if(!j.busy){clearInterval(CORE_POLL);CORE_POLL=null;['#core-btn','#core-rb','#core-chk'].forEach(x=>$(x).disabled=false);
+      $('#core-r').innerHTML=`<span class="${j.ok?'ok':'bad'}">● ${esc(j.message||'')}</span>`;toast(j.ok?'内核操作完成':'内核操作失败');
+      if(j.ok){await loadState();api('/api/coreupdate?channel='+coreCh()).then(coreShow).catch(()=>{})}}};
+  tick();CORE_POLL=setInterval(tick,1500)}
 async function rollbackPanel(){if(!confirm('回滚到上次更新前的面板版本？'))return;try{const j=await api('/api/selfupdate','POST',{action:'rollback'});toast(j.message);setTimeout(()=>location.reload(),5000)}catch(e){toast(e.message)}}
 
 // 网络诊断

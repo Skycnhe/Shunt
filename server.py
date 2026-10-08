@@ -83,7 +83,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 6
-PANEL_VERSION = "6.0"
+PANEL_VERSION = "6.1"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -1277,6 +1277,204 @@ def self_update(apply=False, gh=""):
         UPD_STATE["busy"] = False
 
 
+# ---------------------------------------------------------------- 内核（mihomo）更新
+CORE_REPO = os.environ.get("CORE_REPO", "https://github.com/MetaCubeX/mihomo/releases")
+CORE_CHANNELS = {"stable": "latest/download", "alpha": "download/Prerelease-Alpha"}
+CORE_UPD = {"busy": False, "stage": "", "pct": 0, "ok": None, "message": "", "log": deque(maxlen=30), "t": 0}
+
+
+def core_arch():
+    m = os.uname().machine
+    if m == "x86_64":
+        try:  # 支持 AVX2 等 x86-64-v3 指令集的 CPU 用 v3 版本更快，否则用兼容版
+            flags = open("/proc/cpuinfo").read()
+            if all(f in flags for f in (" avx2", " bmi2", " fma", " movbe")):
+                return "amd64-v3"
+        except OSError:
+            pass
+        return "amd64-compatible"
+    return {"aarch64": "arm64", "arm64": "arm64", "armv7l": "armv7", "armv8l": "armv7", "armv6l": "armv6",
+            "i686": "386", "i386": "386", "riscv64": "riscv64", "loongarch64": "loong64-abi2"}.get(m, "")
+
+
+def bin_version(path):
+    """执行 mihomo -v，返回版本号（如 v1.19.32 / alpha-9f053c4）；不能运行时返回空串"""
+    if not os.path.isfile(path):
+        return ""
+    code, out = sh(f"'{path}' -v", timeout=15)
+    m = re.search(r"Mihomo\s+Meta\s+(\S+)", out) if code == 0 else None
+    return m.group(1) if m else ""
+
+
+def open_url(url, gh, timeout=20):
+    """GitHub 下载：先走加速地址，再经 mihomo 代理，最后直连"""
+    tries = [(gh.rstrip("/") + "/" + url, False)] if gh else []
+    tries += [(url, True), (url, False)]
+    err = ""
+    for u, use_proxy in tries:
+        try:
+            req = urllib.request.Request(u, headers={"User-Agent": UA})
+            return proxy_opener(use_proxy and core_alive()).open(req, timeout=timeout)
+        except Exception as e:
+            err = f"{u.split('/')[2]}{'(代理)' if use_proxy else ''}: {str(e)[:120]}"
+    raise IOError(err)
+
+
+def core_remote_version(channel, gh):
+    url = f"{CORE_REPO}/{CORE_CHANNELS[channel]}/version.txt"
+    with open_url(url, gh) as r:
+        v = r.read(200).decode(errors="ignore").strip()
+    if not re.match(r"^[\w.\-]+$", v):
+        raise IOError("获取到的版本号无效：" + v[:40])
+    return v
+
+
+def core_check(channel, gh):
+    arch = core_arch()
+    info = {"current": bin_version(MIHOMO_BIN) or "未安装", "arch": arch or os.uname().machine, "channel": channel,
+            "backup": bin_version(MIHOMO_BIN + ".bak"), "remote": ""}
+    try:
+        info["remote"] = core_remote_version(channel, gh)
+    except Exception as e:
+        info["message"] = "获取最新版本失败：" + str(e)
+        return False, info
+    info["latest"] = info["remote"] == info["current"]
+    info["message"] = "已是最新" if info["latest"] else f"可更新到 {info['remote']}"
+    return True, info
+
+
+def _cu(stage, pct=None, msg=None):
+    CORE_UPD["stage"] = stage
+    if pct is not None:
+        CORE_UPD["pct"] = pct
+    CORE_UPD["log"].appendleft(f"{time.strftime('%H:%M:%S')} {msg or stage}")
+
+
+def _core_swap_and_restart(src, label):
+    """把 src 换成正式核心并重启；30 秒内控制接口没起来就自动换回原来的核心"""
+    bak = MIHOMO_BIN + ".bak"
+    had_old = os.path.isfile(MIHOMO_BIN)
+    if had_old and src != bak:
+        shutil.copy2(MIHOMO_BIN, bak)
+    if src == bak:  # 回滚：当前核心与备份互换，方便再“回滚”回来
+        tmp = MIHOMO_BIN + ".swap"
+        shutil.copy2(MIHOMO_BIN, tmp)
+        os.replace(bak, MIHOMO_BIN)
+        os.replace(tmp, bak)
+    else:
+        os.replace(src, MIHOMO_BIN)
+    _cu("重启核心", 90, f"已替换为 {label}，正在重启核心")
+    sh(SVC + " restart", timeout=90)
+    for _ in range(30):
+        time.sleep(1)
+        if core_alive():
+            return True, ""
+    if had_old and src != bak:  # 新核心起不来 → 自动恢复
+        _cu("自动回滚", 95, "新核心 30 秒内未响应，正在恢复原核心")
+        shutil.copy2(bak, MIHOMO_BIN)
+        sh(SVC + " restart", timeout=90)
+        return False, "新核心启动失败，已自动恢复为原核心。日志：" + sh(f"tail -n 5 '{MIHOMO_LOG}'")[1][-300:]
+    return False, "核心重启后 30 秒内未响应，请查看日志"
+
+
+def core_update_job(channel, gh, force=False):
+    tmp = MIHOMO_BIN + ".new"
+    try:
+        arch = core_arch()
+        if not arch:
+            raise ValueError(f"不支持的 CPU 架构：{os.uname().machine}")
+        _cu("获取版本", 2, "正在获取最新版本号")
+        ver = core_remote_version(channel, gh)
+        cur = bin_version(MIHOMO_BIN)
+        if ver == cur and not force:
+            CORE_UPD.update(ok=True, message=f"已是最新版本 {cur}，无需更新")
+            return
+        free = shutil.disk_usage(os.path.dirname(MIHOMO_BIN)).free
+        if free < 80 * 2**20:
+            raise ValueError(f"{os.path.dirname(MIHOMO_BIN)} 剩余空间不足（{free // 2**20} MB，至少需要 80 MB）")
+        url = f"{CORE_REPO}/download/{'Prerelease-Alpha' if channel == 'alpha' else ver}/mihomo-linux-{arch}-{ver}.gz"
+        _cu("下载", 5, f"下载 mihomo-linux-{arch}-{ver}.gz")
+        import gzip
+        with open_url(url, gh, timeout=30) as r:
+            total = int(r.headers.get("Content-Length") or 0)
+
+            class Counter:
+                def __init__(self):
+                    self.n = 0
+
+                def read(self, k=-1):
+                    b = r.read(k)
+                    self.n += len(b)
+                    if total:
+                        CORE_UPD["pct"] = 5 + int(70 * self.n / total)
+                    return b
+            with gzip.GzipFile(fileobj=Counter()) as gz, open(tmp, "wb") as f:
+                size = 0
+                while True:
+                    chunk = gz.read(1 << 16)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > 200 * 2**20:
+                        raise ValueError("解压后的文件异常过大，已中止")
+                    f.write(chunk)
+        os.chmod(tmp, 0o755)
+        _cu("校验", 78, "校验新核心能否运行")
+        nv = bin_version(tmp)
+        if not nv:
+            raise ValueError("新核心无法运行（架构不匹配或文件损坏），未做任何替换")
+        _cu("校验", 84, f"新核心 {nv}，正在用它检查当前配置")
+        code, out = sh(f"'{tmp}' -t -d '{CONF_DIR}' -f '{os.path.join(CONF_DIR, 'config.yaml')}'", timeout=90)
+        if code != 0:
+            raise ValueError("新核心不兼容当前配置，未做任何替换：" + out[-300:])
+        ok, err = _core_swap_and_restart(tmp, nv)
+        if not ok:
+            raise ValueError(err)
+        CORE_UPD.update(ok=True, message=f"内核已从 {cur or '无'} 更新到 {nv}，旧版本已备份，可一键回滚")
+        tg = load()
+        if tg.get("tg_token") and tg.get("tg_chat"):
+            notify(f"⬆️ mihomo 内核已更新：{cur or '无'} → {nv}")
+    except Exception as e:
+        CORE_UPD.update(ok=False, message=str(e))
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        CORE_UPD["pct"] = 100
+        _cu("完成" if CORE_UPD["ok"] else "失败", 100, CORE_UPD["message"])
+        CORE_UPD["busy"] = False
+
+
+def core_rollback_job():
+    try:
+        old = bin_version(MIHOMO_BIN + ".bak")
+        if not old:
+            raise ValueError("没有可回滚的内核备份")
+        cur = bin_version(MIHOMO_BIN)
+        ok, err = _core_swap_and_restart(MIHOMO_BIN + ".bak", old)
+        if not ok:
+            raise ValueError(err)
+        CORE_UPD.update(ok=True, message=f"已回滚：{cur} → {old}（{cur} 保留为备份）")
+    except Exception as e:
+        CORE_UPD.update(ok=False, message=str(e))
+    finally:
+        CORE_UPD["pct"] = 100
+        _cu("完成" if CORE_UPD["ok"] else "失败", 100, CORE_UPD["message"])
+        CORE_UPD["busy"] = False
+
+
+def core_job_start(fn, *args):
+    if CORE_UPD["busy"] or UPD_STATE["busy"]:
+        return False, "正在更新中，请稍候"
+    CORE_UPD.update(busy=True, stage="开始", pct=0, ok=None, message="", t=int(time.time()))
+    CORE_UPD["log"].clear()
+    threading.Thread(target=fn, args=args, daemon=True).start()
+    return True, "已开始"
+
+
+def core_upd_status():
+    return {k: (list(v) if isinstance(v, deque) else v) for k, v in CORE_UPD.items()}
+
+
 def self_rollback():
     bak = os.path.join(BASE, ".backup")
     if not os.path.isfile(os.path.join(bak, "server.py")):
@@ -1381,6 +1579,8 @@ def core_alive():
 
 
 def watchdog_tick():
+    if CORE_UPD["busy"]:  # 内核更新过程中核心会重启，不算故障
+        return
     d = load()
     WD["last_check"] = int(time.time())
     if not d.get("watchdog", True):
@@ -3460,6 +3660,24 @@ class H(BaseHTTPRequestHandler):
             if "download" in parse_qs(q):
                 return self.send(200, txt.encode(), "application/x-yaml")
             return self.send(200, {"text": txt, "path": os.path.join(CONF_DIR, "config.yaml"), "size": len(txt.encode())})
+        if p == "/api/coreupdate" and m == "GET":
+            ch = q1(parse_qs(q), "channel", default="stable")
+            if ch not in CORE_CHANNELS:
+                return self.send(400, {"message": "未知的更新通道"})
+            ok, info = core_check(ch, load().get("gh_proxy") or "")
+            info["busy"] = CORE_UPD["busy"]
+            return self.send(200 if ok else 502, info)
+        if p == "/api/coreupdate/status" and m == "GET":
+            return self.send(200, core_upd_status())
+        if p == "/api/coreupdate" and m == "POST":
+            if b.get("action") == "rollback":
+                ok, msg = core_job_start(core_rollback_job)
+            else:
+                ch = b.get("channel") or "stable"
+                if ch not in CORE_CHANNELS:
+                    return self.send(400, {"message": "未知的更新通道"})
+                ok, msg = core_job_start(core_update_job, ch, load().get("gh_proxy") or "", bool(b.get("force")))
+            return self.send(200 if ok else 409, {"message": msg})
         if p == "/api/selfupdate" and m == "GET":
             ok, info = self_update(False, load().get("gh_proxy") or "")
             return self.send(200 if ok else 502, info)
