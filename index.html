@@ -623,7 +623,12 @@ const isGroup=n=>!!(PROXIES[n]&&PROXIES[n].all);
 const BIG=12;
 async function loadProxies(){document.querySelectorAll('#nsort button').forEach(b=>{b.classList.toggle('on',b.dataset.v===NSORT);b.onclick=()=>{NSORT=b.dataset.v;localStorage.setItem('mp_nsort',NSORT);renderGroups()}});
   try{PROXIES=await loadPX();renderGroups()}catch(e){$('#groups').innerHTML=`<div class="card bad">${esc(e.message)}</div>`;$('#policies').innerHTML=''}}
-function lastDelay(n){const p=PROXIES[n];if(!p)return undefined;const h=(p.history&&p.history.length)?p.history:(p.extra?.[HCURL]?.history||[]);return h.length?h[h.length-1].delay:undefined}
+function rawDelay(n){const p=PROXIES[n];if(!p)return undefined;const h=(p.history&&p.history.length)?p.history:(p.extra?.[HCURL]?.history||[]);return h.length?h[h.length-1].delay:undefined}
+// 负载均衡组没有单一的“当前节点”，组延迟取成员中最快的可用节点；成员都没测过时再用组自身的记录
+function lastDelay(n,_d){const p=PROXIES[n];if(!p)return undefined;
+  if(p.type==='LoadBalance'&&(_d||0)<4){let best,tested=false;for(const m of (p.all||[])){const d=lastDelay(m,(_d||0)+1);if(d===undefined)continue;tested=true;if(d>0&&(best===undefined||d<best))best=d}
+    if(tested)return best===undefined?0:best}
+  return rawDelay(n)}
 function groupOrder(){const order=(PROXIES.GLOBAL&&PROXIES.GLOBAL.all)||Object.keys(PROXIES);
   return order.filter(n=>isGroup(n)).concat(['GLOBAL']).filter((v,i,a)=>a.indexOf(v)===i&&PROXIES[v])}
 function nowChain(g){const out=[];let n=PROXIES[g]?.now,k=0;while(n&&k++<5){out.push(n);n=isGroup(n)?PROXIES[n].now:''}return out}
@@ -648,7 +653,7 @@ function renderGroups(){
     return `<div class="card gcard ${gOpen(g)?'open':''}" id="gc${i}"><div class="ghead" onclick="toggleG(${i})">
       <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></span>${ico}
       <div class="gt"><div class="gname">${esc(g)} ${gTag(g)} ${pin}</div><div class="gsub">${sub}${sub&&cnt?' · ':''}${cnt}</div><div class="dots">${dots}</div></div>
-      ${dl!==undefined&&!lb?`<span class="gdl ${dcls(dl)}">${dtxt(dl)}</span>`:''}
+      ${dl!==undefined?`<span class="gdl ${dcls(dl)}"${lb?' title="成员中最快的可用节点"':''}>${lb&&dl>0?'最快 ':''}${dtxt(dl)}</span>`:''}
       <button class="btn g sm" onclick="event.stopPropagation();testGroup(${i},this)">测速</button></div>
       <div class="gbody"><div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(min(100%,178px),1fr));gap:10px">${all.map((n,j)=>{const d=lastDelay(n),sg=isGroup(n);
         const s2=sg?`<div class="sub2">${esc(GT[PROXIES[n].type]||'')}${PROXIES[n].now?' → '+esc(PROXIES[n].now):''}</div>`:'';
