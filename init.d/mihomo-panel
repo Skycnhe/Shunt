@@ -1,6 +1,6 @@
 #!/sbin/openrc-run
 name="mihomo-panel"
-description="mihomo web panel"
+description="Shunt - mihomo side-router panel"
 command="/usr/bin/python3"
 command_args="/opt/mihomo-panel/server.py"
 command_background=true
