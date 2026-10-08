@@ -817,7 +817,7 @@ async function editDev(ip){const mac=DEVS[ip]?.mac;const cur=(STATE.devices||{})
 let PROXIES={},NSORT=localStorage.getItem('mp_nsort')||'default',GL=[],GALL=[],HIDEDEAD=localStorage.getItem('mp_hidedead')==='1';
 const isDead=n=>!isGroup(n)&&(()=>{const d=lastDelay(n);return d!==undefined&&d<=0})();
 function toggleDead(){HIDEDEAD=!HIDEDEAD;localStorage.setItem('mp_hidedead',HIDEDEAD?'1':'0');renderGroups();if(TAB==='概览')loadQS()}
-let GOPEN=(()=>{try{return JSON.parse(localStorage.getItem('mp_gopen')||'{}')}catch{return {}}})();
+let GOPEN=(()=>{try{const o=JSON.parse(localStorage.getItem('mp_gopen')||'{}');return o&&typeof o==='object'&&!Array.isArray(o)?o:{}}catch{return {}}})();
 const HCURL='https://www.gstatic.com/generate_204';
 const GT={Selector:'手动选择',URLTest:'自动测速',Fallback:'故障转移',LoadBalance:'负载均衡',Relay:'链式代理'};
 const GTC={Selector:'k-sel',URLTest:'k-auto',Fallback:'k-fb',LoadBalance:'k-lb'};
