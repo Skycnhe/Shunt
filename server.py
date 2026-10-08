@@ -2410,12 +2410,17 @@ def run_task(name):
         code, raw = core("POST", "/configs/geo", {}, timeout=180)
         return code < 300, "GEO 数据库已更新" if code < 300 else raw.decode(errors="ignore")[:200]
     if name == "latency":
+        # GLOBAL 只含 config 里的节点和策略组，订阅节点要经「🖐️ 手动选择」（含全部节点）测速
         code, raw = core("GET", f"/group/GLOBAL/delay?url={quote(HC)}&timeout=5000", timeout=120)
-        try:
-            n = sum(1 for v in json.loads(raw).values() if isinstance(v, int) and v > 0) if code == 200 else 0
-        except Exception:
-            n = 0
-        return code == 200, f"节点测速完成，{n} 项可达"
+        n = 0
+        if core_json("/proxies/" + quote(G_MANUAL)):
+            c2, r2 = core("GET", f"/group/{quote(G_MANUAL)}/delay?url={quote(HC)}&timeout=5000", timeout=120)
+            try:
+                n = sum(1 for v in json.loads(r2).values() if isinstance(v, int) and v > 0) if c2 == 200 else 0
+            except Exception:
+                n = 0
+            code = 200 if (code == 200 or c2 in (200, 504)) else code
+        return code == 200, f"节点测速完成，{n} 个节点可达"
     if name == "adblock":
         return adblock_update()
     return False, "未知任务"
@@ -3385,7 +3390,8 @@ class H(BaseHTTPRequestHandler):
         b = self.body() if m in ("POST", "PUT", "PATCH", "DELETE") else {}
         # 透传到 mihomo external-controller
         if p.startswith("/api/core/"):
-            code, raw = core(m, p[len("/api/core"):] + ("?" + q if q else ""), b if b else None)
+            slow = p.endswith("/delay") or p.endswith("/healthcheck")  # 测速可能超过默认 10 秒
+            code, raw = core(m, p[len("/api/core"):] + ("?" + q if q else ""), b if b else None, timeout=60 if slow else 10)
             return self.send(code, raw or b"{}")
         if p == "/api/state" and m == "GET":
             d = load()

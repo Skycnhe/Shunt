@@ -560,15 +560,21 @@ function renderHdr(l){$('#h-up').textContent=fmt(l.up)+'/s';$('#h-down').textCon
   if(l.running!==undefined&&l.running!==STATE.running){STATE.running=l.running;renderCore(l.running)}}
 function renderOverview(){renderMode();renderWD();renderPMStat();loadDevs();loadAdStat();loadQS()}
 // 概览：🚀 节点选择 快速切换
-const SEL='🚀 节点选择';
-async function loadQS(){let px;try{px=(await core('/proxies')).proxies||{}}catch(e){$('#qs-card').classList.add('hide');return}
+const SEL='🚀 节点选择',G_MANUAL='\u{1F590}\uFE0F 手动选择';
+// /proxies 只返回 config 里的节点和策略组；订阅（proxy-providers）节点及其延迟在 /providers/proxies 里，需合并
+async function loadPX(){const [a,b]=await Promise.all([core('/proxies'),core('/providers/proxies').catch(()=>({}))]);
+  const px=Object.assign({},a.proxies||{});
+  for(const pv of Object.values(b.providers||{}))for(const n of (pv.proxies||[]))if(n&&n.name&&!px[n.name])px[n.name]=n;
+  return px}
+async function loadQS(){let px;try{px=await loadPX()}catch(e){$('#qs-card').classList.add('hide');return}
   const g=px[SEL];$('#qs-card').classList.toggle('hide',!g);if(!g)return;PROXIES=px;
   const ch=nowChain(SEL);$('#qs-now').textContent=ch.length?'当前 → '+ch.join(' → '):'';
   $('#qs').innerHTML=g.all.map((n,j)=>{const d=lastDelay(n),p=px[n]||{},sub=p.now?'→ '+p.now:(p.type==='LoadBalance'?'负载均衡':'');
     return `<div class="node ${n===g.now?'sel':''}" onclick="qsPick(${j})" title="${esc(n)}"><div class="n">${esc(n)}</div><div class="d"><span class="mut" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(sub)}</span><span class="${dcls(d)}">${dtxt(d)}</span></div></div>`}).join('')}
 async function qsPick(j){const n=PROXIES[SEL].all[j];try{await core('/proxies/'+encodeURIComponent(SEL),'PUT',{name:n});toast(SEL+' → '+n);loadQS()}catch(e){toast(e.message)}}
-async function qsTest(b){b.disabled=true;b.textContent='测速中…';try{await core(`/group/${encodeURIComponent(SEL)}/delay?url=${encodeURIComponent(HCURL)}&timeout=5000`)}catch(e){}
-  for(const n of (PROXIES[SEL]?.all||[]))if(PROXIES[n]?.all)try{await core(`/group/${encodeURIComponent(n)}/delay?url=${encodeURIComponent(HCURL)}&timeout=5000`)}catch(e){}
+async function qsTest(b){b.disabled=true;b.textContent='测速中…';
+  const gs=[SEL].concat((PROXIES[SEL]?.all||[]).filter(n=>PROXIES[n]?.all));
+  await Promise.all(gs.map(g=>core(`/group/${encodeURIComponent(g)}/delay?url=${encodeURIComponent(HCURL)}&timeout=5000`).catch(()=>{})));
   b.disabled=false;b.textContent='测速';loadQS()}
 function renderPMStat(){$('#s-pm').textContent=PM_TXT[STATE.proxy_mode]||'-';
   $('#s-pm2').textContent=STATE.proxy_mode==='tun'?`${STATE.tun.stack} · ${STATE.tun.device}`:STATE.proxy_mode==='tproxy'?('nftables'+(STATE.ipv6?' · IPv4+IPv6':' · IPv4')):'仅 7890 端口可用'}
@@ -616,8 +622,8 @@ const LBS={'consistent-hashing':'一致性哈希','round-robin':'轮询','sticky
 const isGroup=n=>!!(PROXIES[n]&&PROXIES[n].all);
 const BIG=12;
 async function loadProxies(){document.querySelectorAll('#nsort button').forEach(b=>{b.classList.toggle('on',b.dataset.v===NSORT);b.onclick=()=>{NSORT=b.dataset.v;localStorage.setItem('mp_nsort',NSORT);renderGroups()}});
-  try{const j=await core('/proxies');PROXIES=j.proxies||{};renderGroups()}catch(e){$('#groups').innerHTML=`<div class="card bad">${esc(e.message)}</div>`;$('#policies').innerHTML=''}}
-function lastDelay(n){const p=PROXIES[n];if(!p||!p.history||!p.history.length)return undefined;return p.history[p.history.length-1].delay}
+  try{PROXIES=await loadPX();renderGroups()}catch(e){$('#groups').innerHTML=`<div class="card bad">${esc(e.message)}</div>`;$('#policies').innerHTML=''}}
+function lastDelay(n){const p=PROXIES[n];if(!p)return undefined;const h=(p.history&&p.history.length)?p.history:(p.extra?.[HCURL]?.history||[]);return h.length?h[h.length-1].delay:undefined}
 function groupOrder(){const order=(PROXIES.GLOBAL&&PROXIES.GLOBAL.all)||Object.keys(PROXIES);
   return order.filter(n=>isGroup(n)).concat(['GLOBAL']).filter((v,i,a)=>a.indexOf(v)===i&&PROXIES[v])}
 function nowChain(g){const out=[];let n=PROXIES[g]?.now,k=0;while(n&&k++<5){out.push(n);n=isGroup(n)?PROXIES[n].now:''}return out}
@@ -664,7 +670,9 @@ async function unfix(i){try{await core('/proxies/'+encodeURIComponent(GL[i]),'DE
 async function testGroup(i,btn){btn.disabled=true;btn.textContent='测速中…';
   try{await core(`/group/${encodeURIComponent(GL[i])}/delay?url=${encodeURIComponent(HCURL)}&timeout=5000`)}catch(e){}
   btn.disabled=false;btn.textContent='测速';loadProxies()}
-async function testAll(btn){btn.disabled=true;btn.textContent='测速中…';try{await core(`/group/GLOBAL/delay?url=${encodeURIComponent(HCURL)}&timeout=5000`)}catch(e){}
+async function testAll(btn){btn.disabled=true;btn.textContent='测速中…';
+  const gs=['GLOBAL'].concat(PROXIES[G_MANUAL]?[G_MANUAL]:[]);
+  await Promise.all(gs.map(g=>core(`/group/${encodeURIComponent(g)}/delay?url=${encodeURIComponent(HCURL)}&timeout=5000`).catch(()=>{})));
   btn.disabled=false;btn.textContent='全部测速';loadProxies()}
 
 // 策略组管理
@@ -757,7 +765,7 @@ async function addSub(){const name=$('#sub-name').value.trim(),url=$('#sub-url')
     toast(EDIT_SUB?'订阅已更新':'订阅已添加');resetSubForm();setTimeout(loadSubs,1500)}catch(e){toast(e.message)}}
 async function updSub(n,btn){btn.disabled=true;btn.textContent='更新中…';try{const j=await api('/api/subs/update','POST',{name:decodeURIComponent(n)});toast(j.message)}catch(e){toast(e.message)}btn.disabled=false;btn.textContent='更新';loadSubs()}
 async function delSub(n){if(!confirm('删除订阅 '+decodeURIComponent(n)+'？'))return;try{await api('/api/subs','DELETE',{name:decodeURIComponent(n)});toast('已删除');loadSubs()}catch(e){toast(e.message)}}
-async function renderNodes(){let px={};try{px=(await core('/proxies')).proxies||{}}catch(e){}
+async function renderNodes(){let px={};try{px=await loadPX()}catch(e){}
   $('#mynodes').innerHTML=(STATE.nodes||[]).map(n=>{const h=px[n.name]?.history||[];const d=h.length?h[h.length-1].delay:undefined;
     return `<tr><td class="w">${esc(n.name)}</td><td>${esc(n.type)}</td><td class="w">${esc(n.server)}:${esc(n.port)}</td><td class="${dcls(d)}">${dtxt(d)}</td>
     <td style="text-align:right"><button class="btn g sm" onclick="testNode('${encodeURIComponent(n.name)}',this)">测速</button> <button class="btn r sm" onclick="delNode('${encodeURIComponent(n.name)}')">删除</button></td></tr>`}).join('')||'<tr><td class="mut">暂无手动节点</td></tr>'}
