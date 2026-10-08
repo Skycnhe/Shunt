@@ -562,6 +562,9 @@ function renderOverview(){renderMode();renderWD();renderPMStat();loadDevs();load
 // 概览：🚀 节点选择 快速切换
 const SEL='🚀 节点选择',G_MANUAL='\u{1F590}\uFE0F 手动选择';
 // /proxies 只返回 config 里的节点和策略组；订阅（proxy-providers）节点及其延迟在 /providers/proxies 里，需合并
+async function testGroupKeep(g){const fx=PROXIES[g]?.fixed;
+  try{await core(`/group/${encodeURIComponent(g)}/delay?url=${encodeURIComponent(HCURL)}&timeout=5000`)}catch(e){}
+  if(fx)try{await core('/proxies/'+encodeURIComponent(g),'PUT',{name:fx})}catch(e){}}
 async function loadPX(){const [a,b]=await Promise.all([core('/proxies'),core('/providers/proxies').catch(()=>({}))]);
   const px=Object.assign({},a.proxies||{});
   for(const pv of Object.values(b.providers||{}))for(const n of (pv.proxies||[]))if(n&&n.name&&!px[n.name])px[n.name]=n;
@@ -574,7 +577,7 @@ async function loadQS(){let px;try{px=await loadPX()}catch(e){$('#qs-card').clas
 async function qsPick(j){const n=PROXIES[SEL].all[j];try{await core('/proxies/'+encodeURIComponent(SEL),'PUT',{name:n});toast(SEL+' → '+n);loadQS()}catch(e){toast(e.message)}}
 async function qsTest(b){b.disabled=true;b.textContent='测速中…';
   const gs=[SEL].concat((PROXIES[SEL]?.all||[]).filter(n=>PROXIES[n]?.all));
-  await Promise.all(gs.map(g=>core(`/group/${encodeURIComponent(g)}/delay?url=${encodeURIComponent(HCURL)}&timeout=5000`).catch(()=>{})));
+  await Promise.all(gs.map(testGroupKeep));
   b.disabled=false;b.textContent='测速';loadQS()}
 function renderPMStat(){$('#s-pm').textContent=PM_TXT[STATE.proxy_mode]||'-';
   $('#s-pm2').textContent=STATE.proxy_mode==='tun'?`${STATE.tun.stack} · ${STATE.tun.device}`:STATE.proxy_mode==='tproxy'?('nftables'+(STATE.ipv6?' · IPv4+IPv6':' · IPv4')):'仅 7890 端口可用'}
@@ -673,7 +676,7 @@ async function pickName(i,n){const g=GL[i],p=PROXIES[g];if(!p)return;
 function pick(i,j){pickName(i,GALL[i][j])}
 async function unfix(i){try{await core('/proxies/'+encodeURIComponent(GL[i]),'DELETE');toast('已取消固定，恢复自动选择');loadProxies()}catch(e){toast(e.message)}}
 async function testGroup(i,btn){btn.disabled=true;btn.textContent='测速中…';
-  try{await core(`/group/${encodeURIComponent(GL[i])}/delay?url=${encodeURIComponent(HCURL)}&timeout=5000`)}catch(e){}
+  await testGroupKeep(GL[i]);
   btn.disabled=false;btn.textContent='测速';loadProxies()}
 async function testAll(btn){btn.disabled=true;btn.textContent='测速中…';
   const gs=['GLOBAL'].concat(PROXIES[G_MANUAL]?[G_MANUAL]:[]);

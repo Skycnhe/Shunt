@@ -17,6 +17,7 @@ PORT = int(os.environ.get("PANEL_PORT", "8080"))
 MIHOMO_BIN = os.environ.get("MIHOMO_BIN", "/usr/local/bin/mihomo")
 TPROXY_SH = os.environ.get("PANEL_TPROXY", os.path.join(BASE, "tproxy.sh"))
 CTRL_HOST, CTRL_PORT = "127.0.0.1", 9090
+MAX_BODY = 32 * 2**20  # 请求体上限 32MB（备份恢复可能较大）
 CTRL = f"http://{CTRL_HOST}:{CTRL_PORT}"
 MIXED = 7890
 WD_INTERVAL = int(os.environ.get("PANEL_WD_INTERVAL", "30"))  # 看门狗检查间隔（秒）
@@ -1424,12 +1425,14 @@ def load_notified():
 
 def check_nodes():
     """节点选择里所有节点都超时 → 通知（只在状态变化时发）"""
-    if load().get("mode") == "direct":
-        return
-    pg = core_json("/proxies/" + quote(G_AUTO))
+    d = load()
+    if d.get("mode") == "direct" or not (d.get("tg_token") and d.get("tg_chat")):
+        return  # 没配置 Telegram 时不必每 10 分钟测一遍全部节点
+    # 用「🖐️ 手动选择」（select，含全部节点）测速：对 url-test 组调用 /group/…/delay 会被 mihomo 清除用户的📌固定选择
+    pg = core_json("/proxies/" + quote(G_MANUAL))
     if not pg:
         return
-    code, raw = core("GET", f"/group/{quote(G_AUTO)}/delay?url={quote(HC)}&timeout=5000", timeout=30)
+    code, raw = core("GET", f"/group/{quote(G_MANUAL)}/delay?url={quote(HC)}&timeout=5000", timeout=30)
     try:
         res = json.loads(raw) if code == 200 else {}
     except Exception:
@@ -3057,9 +3060,14 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def body(self):
-        n = int(self.headers.get("Content-Length") or 0)
-        if not n:
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = 0
+        if n <= 0:
             return {}
+        if n > MAX_BODY:  # 防止未登录请求（如 /api/login）用超大 body 耗尽路由器内存
+            raise ValueError("请求体过大")
         raw = self.rfile.read(n)
         try:
             return json.loads(raw)
@@ -3087,7 +3095,12 @@ class H(BaseHTTPRequestHandler):
             if left:
                 return self.send(429, {"message": f"失败次数过多，请 {left // 60 + 1} 分钟后再试"})
             d = load()
-            if hmac.compare_digest(str(self.body().get("password") or ""), d["password"]):
+            try:
+                bd = self.body()
+                pw = str(bd.get("password") or "") if isinstance(bd, dict) else ""
+            except ValueError as e:
+                return self.send(413, {"message": str(e)})
+            if hmac.compare_digest(pw, d["password"]):
                 FAILS.pop(ip, None)
                 return self.send(200, {"token": token(d)})
             login_failed(ip)
