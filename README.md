@@ -152,6 +152,10 @@ sh install.sh --update-core  # 重新下载最新 mihomo 核心
 | `/opt/mihomo-panel/` | 面板程序 |
 | `/var/log/mihomo.log` | 核心日志 |
 
+## 系统优化（v6.2）
+面板「设置 → 系统优化」可一键开启：BBR + fq、网络缓冲区（按内存计算，照顾 Hysteria2 / TUIC）、TCP 连接优化、连接跟踪表、mihomo 文件句柄上限、多核网络分流 RPS、CPU 性能模式、chrony 时间同步。
+参数写入 `/etc/sysctl.d/98-shunt-optimize.conf` 与 `/etc/local.d/shunt-optimize.start`，关闭或「全部恢复」会还原为原值；同页可做直连 / 经代理下载测速对比效果。
+
 ## 常用命令
 ```sh
 rc-service mihomo restart        # 重启核心
