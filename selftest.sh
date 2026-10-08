@@ -2,14 +2,19 @@
 # 用真实 mihomo 核心校验面板生成的配置（多种场景）。
 # 用法: sh selftest.sh            （设备上默认使用 /usr/local/bin/mihomo 与 /etc/mihomo 下的 GEO 数据）
 #       MIHOMO_BIN=/tmp/mihomo GEO_DIR=/tmp/geo sh selftest.sh
+# 装有 sing-box（SB_BIN，默认 /usr/local/bin/sing-box）时，同样的场景再生成 sing-box 配置并用 sing-box check 校验；
+# 规则集文件取自 SB_RULES（默认 /etc/sing-box/rules），缺少的会下载一次
 SRC="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$SRC/server.py" ] || SRC=/opt/mihomo-panel
 MIHOMO_BIN="${MIHOMO_BIN:-/usr/local/bin/mihomo}"
 GEO_DIR="${GEO_DIR:-/etc/mihomo}"
 WORK="$(mktemp -d /tmp/mihomo-selftest.XXXXXX)"
-trap 'rm -rf "$WORK"' EXIT
-[ -x "$MIHOMO_BIN" ] || { echo "找不到 mihomo 核心：$MIHOMO_BIN"; exit 1; }
-echo ">> mihomo: $("$MIHOMO_BIN" -v | head -n1)"
+[ -n "$KEEP" ] || trap 'rm -rf "$WORK"' EXIT
+SB_BIN="${SB_BIN:-/usr/local/bin/sing-box}"
+SB_RULES="${SB_RULES:-/etc/sing-box/rules}"
+[ -x "$MIHOMO_BIN" ] || [ -x "$SB_BIN" ] || { echo "找不到 mihomo（$MIHOMO_BIN）或 sing-box（$SB_BIN）"; exit 1; }
+[ -x "$MIHOMO_BIN" ] && echo ">> mihomo: $("$MIHOMO_BIN" -v | head -n1)" || echo ">> 未安装 mihomo，跳过 mihomo 校验"
+[ -x "$SB_BIN" ] && echo ">> sing-box: $("$SB_BIN" version | head -n1)" || echo ">> 未安装 sing-box，跳过 sing-box 校验"
 
 cat > "$WORK/links.txt" <<'EOF'
 vless://b831381d-6324-4d53-ad4f-8cda48b30811@hk1.example.com:443?encryption=none&security=reality&sni=www.microsoft.com&fp=chrome&pbk=SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc&sid=6ba85179e30d4fc2&type=tcp&flow=xtls-rprx-vision#香港 Reality
@@ -269,6 +274,16 @@ for name, extra in scen.items():
     json.dump(d, open(os.path.join(work, name, "data.json"), "w"), ensure_ascii=False)
     if prov is not None:
         json.dump(prov, open(os.path.join(work, name, "provider_nodes.json"), "w"), ensure_ascii=False)
+    # sing-box：订阅由面板下载解析，这里放入模拟的订阅缓存（多种协议 + 不支持的协议）
+    if extra.get("subs"):
+        os.makedirs(os.path.join(work, name, "sb_subs"))
+        for s_ in extra["subs"]:
+            if prov is not None:
+                ns = [ssn(n, 22000 + i)["proxy"] for i, n in enumerate(prov.get(s_["name"], []))]
+            else:
+                ns = [dict(n["proxy"]) for n in nodes] + [dict(m["proxy"]) for m in multi[:6]] + \
+                     [{"name": "WG 不支持", "type": "wireguard", "server": "1.1.1.1", "port": 1}]
+            json.dump({"name": s_["name"], "updated": 1, "nodes": ns}, open(os.path.join(work, name, "sb_subs", server.safe(s_["name"]) + ".json"), "w"), ensure_ascii=False)
     if name in EXPECT:
         json.dump(EXPECT[name], open(os.path.join(work, name, "expect.json"), "w"), ensure_ascii=False)
     if extra.get("adblock"):  # 生成本地规则文件（离线，不下载）
@@ -283,7 +298,7 @@ EOF
 [ $? = 0 ] || { echo "生成场景失败"; exit 1; }
 
 PASS=0; FAIL=0
-for d in "$WORK"/*/; do
+[ -x "$MIHOMO_BIN" ] && for d in "$WORK"/*/; do
   d=${d%/}; n=$(basename "$d")
   for f in geoip.dat geosite.dat geoip.metadb; do [ -f "$GEO_DIR/$f" ] && ln -sf "$GEO_DIR/$f" "$d/$f"; done
   PANEL_OFFLINE=1 MIHOMO_DIR="$d" PANEL_DATA="$d/data.json" python3 "$SRC/server.py" --gen >/dev/null || { echo "✗ $n: server.py --gen 失败"; FAIL=$((FAIL+1)); continue; }
@@ -366,5 +381,59 @@ PY
     echo "✗ $n"; echo "$OUT" | grep -iE 'error|fatal|fail' | tail -n 5; FAIL=$((FAIL+1))
   fi
 done
+
+# ---------------------------------------------------------------- sing-box
+if [ -x "$SB_BIN" ]; then
+  mkdir -p "$SB_RULES" 2>/dev/null || SB_RULES="$WORK/_sbrules"
+  for d in "$WORK"/*/; do
+    d=${d%/}; n=$(basename "$d")
+    case "$n" in _*) continue;; esac
+    if ! OUT=$(PANEL_OFFLINE=1 SB_DIR="$d/sb" SB_RULES="$SB_RULES" MIHOMO_DIR="$d" PANEL_DATA="$d/data.json" python3 - "$SRC" "$d" 2>&1 <<'PY'
+import json, os, sys
+src, d = sys.argv[1], sys.argv[2]
+sys.path.insert(0, src)
+import server
+server.core_alive = lambda: False
+data = server.load()
+server.AB_DIR = os.path.join(d, "adblock")
+conf, warn, need = server.build_singbox(data)
+bad = server.sb_sync_assets(data, need=need)
+assert not bad, "规则集下载失败：%s" % bad
+conf, warn, need = server.build_singbox(data)
+os.makedirs(server.SB_DIR, exist_ok=True)
+json.dump(conf, open(os.path.join(server.SB_DIR, "config.json"), "w"), ensure_ascii=False, indent=1)
+tags = {o["tag"] for o in conf["outbounds"]}
+for o in conf["outbounds"]:
+    assert o["type"] not in ("loadbalance",), o
+    if o.get("outbounds") is not None:
+        assert o["outbounds"], "%s 没有成员" % o["tag"]
+        for m_ in o["outbounds"]:
+            assert m_ in tags, "%s 的成员 %s 不存在" % (o["tag"], m_)
+assert not any(t.startswith("⚖️ ") and t.endswith("负载均衡") for t in tags), "地区负载均衡组应并入自动优选"
+def walk(rs):
+    for r in rs:
+        if r.get("type") == "logical":
+            walk(r["rules"])
+        for k in r.get("rule_set") or []:
+            assert k in {x["tag"] for x in conf["route"]["rule_set"]}, "规则集未定义：" + k
+        if r.get("outbound"):
+            assert r["outbound"] in tags, "规则引用了不存在的出站：%s" % r
+walk(conf["route"]["rules"]); walk(conf["dns"]["rules"])
+assert conf["route"]["final"] in tags
+mode = data.get("proxy_mode") or ("tproxy" if data.get("tproxy", True) else "off")
+assert any(i["type"] == "tun" for i in conf["inbounds"]) == (mode == "tun"), "TUN 入站与代理方式不一致"
+dm = server.dns_cfg(data)["mode"]
+assert any(s["type"] == "fakeip" for s in conf["dns"]["servers"]) == (dm == "fake-ip"), "Fake-IP 与 DNS 模式不一致"
+assert conf["experimental"]["clash_api"]["external_controller"]
+print("warn:", len(warn), "|", "；".join(warn)[:160])
+PY
+); then echo "✗ [sing-box] $n: 生成失败"; echo "$OUT" | tail -n 3; FAIL=$((FAIL+1)); continue; fi
+    if CK=$(timeout 120 "$SB_BIN" check -c "$d/sb/config.json" -D "$d/sb" 2>&1); then
+      echo "✓ [sing-box] $n  $(echo "$OUT" | grep '^warn:' | cut -c1-60)"; PASS=$((PASS+1))
+    else
+      echo "✗ [sing-box] $n"; echo "$CK" | tail -n 3; FAIL=$((FAIL+1))
+    fi
+  done
+fi
 echo ">> 通过 $PASS，失败 $FAIL"
 [ "$FAIL" = 0 ]

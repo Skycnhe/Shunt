@@ -76,7 +76,7 @@ if [ ! -x /usr/local/bin/mihomo ] || [ -n "$UPDATE_CORE" ]; then
   chmod +x /usr/local/bin/mihomo.new && mv /usr/local/bin/mihomo.new /usr/local/bin/mihomo
 fi
 
-mkdir -p /etc/mihomo/providers /etc/mihomo-panel /opt/mihomo-panel
+mkdir -p /etc/mihomo/providers /etc/mihomo-panel /opt/mihomo-panel /etc/sing-box
 for f in geoip.dat geosite.dat geoip.metadb; do
   [ -s /etc/mihomo/$f ] || { echo ">> 下载 $f"; curl -fL -o /etc/mihomo/$f "${GH}https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/$f"; }
 done

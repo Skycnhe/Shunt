@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """mihomo-panel: 零依赖的 mihomo 旁路由管理后端 (Alpine Linux)"""
 import json, os, sys, signal, time, hashlib, hmac, secrets, subprocess, threading, re, socket, ssl, base64, copy, ipaddress, shutil
-import urllib.request, urllib.error, http.client, gzip
+import urllib.request, urllib.error, http.client, gzip, io
 from collections import deque
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, urlsplit, parse_qs, unquote, quote
@@ -67,7 +67,7 @@ DEFAULT = {"password": "admin", "pw_hash": "", "pw_default": False, "secret": ""
            "nodes": [], "ipv6": False, "https": False, "watchdog": True, "tg_token": "", "tg_chat": "",
            "proxy_mode": "", "tun": TUN_DEFAULT, "log_limit": 5, "adblock": AB_DEFAULT, "dns": DNS_DEFAULT,
            "devices": {}, "schedule": SCHED_DEFAULT, "groups_cfg": GROUPS_DEFAULT, "custom_groups": [], "sniffer": True,
-           "gh_proxy": "", "schema": 0, "sysopt": [], "sysopt_orig": {}, "sysopt_mods": []}
+           "gh_proxy": "", "core": "mihomo", "schema": 0, "sysopt": [], "sysopt_orig": {}, "sysopt_mods": []}
 TESTS = [
     {"name": "Google", "url": "https://www.google.com/generate_204"},
     {"name": "YouTube", "url": "https://www.youtube.com/generate_204"},
@@ -83,7 +83,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 6
-PANEL_VERSION = "6.3"
+PANEL_VERSION = "6.4"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -262,7 +262,7 @@ def update(fn):
 
 HISTORY_FILE = os.path.join(PANEL_DIR, "history.json")
 HISTORY_MAX = 10
-HISTORY_SKIP = {"password", "pw_hash", "pw_default", "secret", "devices", "https", "schema", "sysopt", "sysopt_orig", "sysopt_mods"}
+HISTORY_SKIP = {"core", "password", "pw_hash", "pw_default", "secret", "devices", "https", "schema", "sysopt", "sysopt_orig", "sysopt_mods"}
 KEY_LABEL = {"subs": "订阅", "nodes": "节点", "rules": "自定义规则", "rulesets": "规则集", "dns": "DNS", "adblock": "广告拦截",
              "custom_groups": "自定义策略组", "groups_cfg": "地区分组", "region_groups": "地区分组", "proxy_mode": "代理方式",
              "tun": "TUN", "ipv6": "IPv6", "bypass": "绕过设备", "mode": "代理模式", "sniffer": "域名嗅探", "schedule": "定时任务",
@@ -538,6 +538,10 @@ def provider_nodes(fresh=False):
     if not fresh and PROV["data"] is not None and now - PROV["t"] < 60:
         return PROV["data"]
     data = None
+    if active_core() == "singbox":  # sing-box 的订阅由面板下载解析，节点名直接取缓存
+        data = sb_provider_nodes(load())
+        PROV.update(t=now, data=data)
+        return data
     j = None if os.environ.get("PANEL_OFFLINE") else core_json("/providers/proxies", timeout=3)
     if j is not None:
         data = {}
@@ -1150,9 +1154,15 @@ def reload_core(prev=None):
     """写配置 → mihomo -t 校验 → 热重载；校验失败时回滚 data.json"""
     with LOCK:
         d = load()
-        final = os.path.join(CONF_DIR, "config.yaml")
-        tmp = write_config(d, final + ".new")
-        ok, err = check_config(tmp)
+        sb = active_core(d) == "singbox"
+        if sb:
+            final = SB_CONF
+            tmp = write_sb_config(d, final + ".new")
+            ok, err = check_sb_config(tmp)
+        else:
+            final = os.path.join(CONF_DIR, "config.yaml")
+            tmp = write_config(d, final + ".new")
+            ok, err = check_config(tmp)
         if not ok:
             os.remove(tmp)
             if prev is not None:
@@ -1160,6 +1170,8 @@ def reload_core(prev=None):
             return False, "配置校验失败，已撤销本次修改：" + err
         os.replace(tmp, final)
     WD["manual_stop"] = False
+    if sb:
+        return sb_hot_reload()
     code, body = core("PUT", "/configs?force=true", {"path": final}, timeout=30)
     if code == 502:  # 核心没在跑，尝试启动
         sh(SVC + " restart")
@@ -1176,6 +1188,14 @@ def refresh_regions():
     if not core_alive():  # 核心没在运行（可能是手动停止）时不重载，免得把它拉起来
         return False, "核心未运行"
     provider_nodes(fresh=True)
+    if active_core() == "singbox":
+        cur = read_json(SB_CONF, None)
+        new = build_singbox(load())[0]
+        sig = lambda c: [(o["tag"], tuple(o.get("outbounds") or [])) for o in (c or {}).get("outbounds") or [] if o.get("outbounds")]
+        if cur and sig(cur) == sig(new):
+            return True, "地区分组无变化"
+        ok, msg = reload_core()
+        return ok, "地区分组已按最新订阅节点更新" if ok else msg
     cur = read_json(os.path.join(CONF_DIR, "config.yaml"), None)
     if not cur:
         return False, "当前配置不存在"
@@ -1199,6 +1219,1383 @@ def refresh_after_sub(name, wait=90):
         except Exception as e:
             print("refresh regions error", e, flush=True)
     threading.Thread(target=run, daemon=True).start()
+
+
+# ---------------------------------------------------------------- sing-box 内核
+# 面板数据（订阅、节点、规则、DNS、设备）两个内核共用；切换内核时按各自格式生成独立的配置文件：
+#   mihomo   → /etc/mihomo/config.yaml
+#   sing-box → /etc/sing-box/config.json
+# sing-box 没有负载均衡 / 故障转移组：自定义的这两类组降级为 urltest（自动测速），地区「⚖️ 负载均衡」组与
+# 「自动优选」完全相同，不再重复生成，引用它的地方自动改指向同地区的「自动优选」。
+SB_BIN = os.environ.get("SB_BIN", "/usr/local/bin/sing-box")
+SB_DIR = os.environ.get("SB_DIR", "/etc/sing-box")
+SB_CONF = os.path.join(SB_DIR, "config.json")
+SB_RULE_DIR = os.environ.get("SB_RULES", os.path.join(SB_DIR, "rules"))
+SB_SUB_DIR = os.path.join(PANEL_DIR, "sb_subs")
+CORE_FILE = os.path.join(PANEL_DIR, "core")  # init.d/mihomo 读取它决定启动哪个内核
+CORE_PID = os.environ.get("PANEL_CORE_PID", "/run/mihomo.pid")
+CORES = {"mihomo": "mihomo", "singbox": "sing-box"}
+SB_GEO = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo"
+SB_REPO = os.environ.get("SB_REPO", "https://github.com/SagerNet/sing-box/releases")
+SB_API = os.environ.get("SB_API", "https://api.github.com/repos/SagerNet/sing-box/releases")
+SB_UA = ("clash.meta", "v2rayN/6.45")
+SB_STATE = {"warn": [], "subs": {}}
+SB_LOCK = threading.Lock()
+
+
+def active_core(d=None):
+    c = (d or load()).get("core") or "mihomo"
+    return c if c in CORES else "mihomo"
+
+
+def core_bin(kind=None):
+    return SB_BIN if (kind or active_core()) == "singbox" else MIHOMO_BIN
+
+
+def core_conf_path(kind=None):
+    return SB_CONF if (kind or active_core()) == "singbox" else os.path.join(CONF_DIR, "config.yaml")
+
+
+def write_core_file(kind):
+    try:
+        wfile(CORE_FILE, kind + "\n")
+    except Exception:
+        pass
+
+
+# ---- 极简 YAML 读取（只为解析 Clash 订阅里的 proxies 列表；面板保持零依赖）
+def _y_strip_comment(s):
+    q = None
+    for i, ch in enumerate(s):
+        if q:
+            if ch == q and (q == "'" or s[i - 1] != "\\"):
+                q = None
+        elif ch in "'\"":
+            q = ch
+        elif ch == "#" and (i == 0 or s[i - 1] in " \t"):
+            return s[:i].rstrip()
+    return s.rstrip()
+
+
+def _y_scalar(s):
+    s = s.strip()
+    if not s:
+        return None
+    if s[0] == '"' and s.endswith('"') and len(s) > 1:
+        try:
+            return json.loads(s)
+        except Exception:
+            return s[1:-1]
+    if s[0] == "'" and s.endswith("'") and len(s) > 1:
+        return s[1:-1].replace("''", "'")
+    low = s.lower()
+    if low in ("true", "yes", "on"):
+        return True
+    if low in ("false", "no", "off"):
+        return False
+    if low in ("null", "~"):
+        return None
+    if re.fullmatch(r"[-+]?\d+", s) and not (len(s.lstrip("+-")) > 1 and s.lstrip("+-")[0] == "0"):
+        return int(s)
+    if re.fullmatch(r"[-+]?\d+\.\d+", s):
+        return float(s)
+    return s
+
+
+def _y_flow(s, i=0):
+    """解析 {..} / [..] 流式集合，返回 (值, 结束位置)"""
+    def ws(i):
+        while i < len(s) and s[i] in " \t\r\n":
+            i += 1
+        return i
+
+    def scalar(i, stops):
+        i = ws(i)
+        if i < len(s) and s[i] in "'\"":
+            q = s[i]
+            j = i + 1
+            while j < len(s):
+                if s[j] == q:
+                    if q == "'" and j + 1 < len(s) and s[j + 1] == "'":
+                        j += 2
+                        continue
+                    if q == '"' and s[j - 1] == "\\":
+                        j += 1
+                        continue
+                    break
+                j += 1
+            return _y_scalar(s[i:j + 1]), j + 1
+        j = i
+        while j < len(s) and s[j] not in stops:
+            if s[j] == ":" and "}" in stops and (j + 1 >= len(s) or s[j + 1] in " ,}"):
+                break
+            j += 1
+        return _y_scalar(s[i:j]), j
+
+    def value(i, stops):
+        i = ws(i)
+        if i < len(s) and s[i] in "{[":
+            return _y_flow(s, i)
+        return scalar(i, stops)
+
+    i = ws(i)
+    if s[i] == "{":
+        out, i = {}, i + 1
+        while True:
+            i = ws(i)
+            if i >= len(s):
+                raise ValueError("YAML 花括号未闭合")
+            if s[i] == "}":
+                return out, i + 1
+            k, i = scalar(i, ",}")
+            i = ws(i)
+            v = None
+            if i < len(s) and s[i] == ":":
+                v, i = value(i + 1, ",}")
+            out[str(k)] = v
+            i = ws(i)
+            if i < len(s) and s[i] == ",":
+                i += 1
+    if s[i] == "[":
+        out, i = [], i + 1
+        while True:
+            i = ws(i)
+            if i >= len(s):
+                raise ValueError("YAML 方括号未闭合")
+            if s[i] == "]":
+                return out, i + 1
+            v, i = value(i, ",]")
+            out.append(v)
+            i = ws(i)
+            if i < len(s) and s[i] == ",":
+                i += 1
+    return scalar(i, "")
+
+
+def yaml_lite(text):
+    """块状 / 流式映射与列表、引号字符串、注释；不支持锚点等高级语法"""
+    raw = []
+    for line in text.replace("\t", "  ").splitlines():
+        if line.strip() in ("---", "...") or not line.strip() or line.lstrip().startswith("#"):
+            continue
+        raw.append(line)
+    lines, buf = [], ""
+    for line in raw:  # 跨行的流式集合合并成一行
+        buf = buf + " " + line.strip() if buf else line
+        c = _y_strip_comment(buf)
+        depth = sum(1 for ch in c if ch in "{[") - sum(1 for ch in c if ch in "}]")
+        if depth <= 0:
+            lines.append((len(c) - len(c.lstrip(" ")), c.strip()))
+            buf = ""
+    if buf:
+        c = _y_strip_comment(buf)
+        lines.append((len(c) - len(c.lstrip(" ")), c.strip()))
+
+    def split_kv(t):
+        if t[:1] in "'\"":
+            q = t[0]
+            j = t.find(q, 1)
+            while q == '"' and j > 0 and t[j - 1] == "\\":
+                j = t.find(q, j + 1)
+            if j > 0 and t[j + 1:j + 2] == ":":
+                return _y_scalar(t[:j + 1]), t[j + 2:].strip()
+            return None
+        m = re.match(r"^([^:{}\[\],]+?)\s*:(?:\s+(.*)|$)", t)
+        return (m.group(1).strip(), (m.group(2) or "").strip()) if m else None
+
+    def inline(v):
+        if v.startswith(("{", "[")):
+            return _y_flow(v)[0]
+        if v in ("|", ">", "|-", ">-"):
+            return ""
+        return _y_scalar(v)
+
+    def block(i, ind):
+        if i >= len(lines):
+            return None, i
+        if lines[i][1].startswith("- ") or lines[i][1] == "-":
+            out = []
+            while i < len(lines) and lines[i][0] == ind and (lines[i][1].startswith("- ") or lines[i][1] == "-"):
+                rest = lines[i][1][1:].strip()
+                if not rest:
+                    if i + 1 < len(lines) and lines[i + 1][0] > ind:
+                        v, i = block(i + 1, lines[i + 1][0])
+                    else:
+                        v, i = None, i + 1
+                    out.append(v)
+                    continue
+                kv = None if rest.startswith(("{", "[")) else split_kv(rest)
+                if kv is None:
+                    out.append(inline(rest))
+                    i += 1
+                    continue
+                sub = ind + len(lines[i][1]) - len(rest)
+                lines[i] = (sub, rest)  # 「- key: v」等价于下一级映射的第一行
+                v, i = block(i, sub)
+                out.append(v)
+            return out, i
+        out = {}
+        while i < len(lines) and lines[i][0] == ind and not lines[i][1].startswith("- "):
+            kv = split_kv(lines[i][1])
+            if kv is None:
+                i += 1
+                continue
+            k, v = kv
+            i += 1
+            if v and v not in ("|", ">", "|-", ">-"):
+                out[str(k)] = inline(v)
+            elif i < len(lines) and (lines[i][0] > ind or (lines[i][0] == ind and lines[i][1].startswith("- "))):
+                if v in ("|", ">", "|-", ">-"):
+                    parts = []
+                    while i < len(lines) and lines[i][0] > ind:
+                        parts.append(lines[i][1])
+                        i += 1
+                    out[str(k)] = ("\n" if v.startswith("|") else " ").join(parts)
+                else:
+                    out[str(k)], i = block(i, lines[i][0])
+            else:
+                out[str(k)] = None
+        return out, i
+
+    if not lines:
+        return None
+    return block(0, lines[0][0])[0]
+
+
+# ---- 订阅：sing-box 不能自己拉取订阅，由面板下载、解析成节点后写进配置
+def sub_cache_path(name):
+    return os.path.join(SB_SUB_DIR, safe(name) + ".json")
+
+
+def parse_sub_text(text):
+    """订阅内容 → mihomo 风格节点列表。支持 Clash YAML、sing-box JSON、Base64 / 明文分享链接"""
+    t = text.strip().lstrip("\ufeff")
+    if t.startswith("{"):
+        try:
+            j = json.loads(t)
+            if isinstance(j.get("outbounds"), list):
+                return [{"_sb": o, "name": o.get("tag"), "type": o.get("type")} for o in j["outbounds"]
+                        if o.get("type") not in ("selector", "urltest", "direct", "block", "dns") and o.get("tag") and o.get("server")], []
+        except ValueError:
+            pass
+    if re.search(r"(?m)^proxies\s*:", t):
+        y = yaml_lite(t)
+        ps = (y or {}).get("proxies") if isinstance(y, dict) else None
+        if isinstance(ps, list):
+            return [p for p in ps if isinstance(p, dict) and p.get("name") and p.get("type")], []
+    body = t
+    if "://" not in t:
+        try:
+            body = b64d(re.sub(r"\s+", "", t))
+        except Exception:
+            body = ""
+    out, errs = [], []
+    for i, line in enumerate([x.strip() for x in body.splitlines() if "://" in x], 1):
+        try:
+            p = parse_link(line)
+            p["name"] = (p.get("name") or f"{p['type']}-{p['server']}:{p['port']}").strip()
+            out.append(p)
+        except Exception as e:
+            errs.append(f"第 {i} 条：{e}")
+    return out, errs
+
+
+def sb_fetch_sub(s, gh=""):
+    """下载并解析一个订阅，写入缓存；返回 (节点数, 消息)"""
+    last = ""
+    for ua in SB_UA:
+        try:
+            req = urllib.request.Request(s["url"], headers={"User-Agent": ua})
+            data = None
+            for use_proxy in ((True, False) if core_alive() else (False,)):
+                try:
+                    with proxy_opener(use_proxy).open(req, timeout=30) as r:
+                        data = r.read(20 << 20)
+                        info = r.headers.get("subscription-userinfo") or ""
+                    break
+                except Exception as e:
+                    last = str(e)[:150]
+            if data is None:
+                continue
+            nodes, errs = parse_sub_text(data.decode("utf-8", "ignore"))
+            if not nodes:
+                last = "没有解析出节点" + ("：" + errs[0] if errs else "")
+                continue
+            flt, exc = s.get("filter") or "", s.get("exclude", DEFAULT_EXCLUDE) or ""
+            rf, re_ = rx(flt) if flt else None, rx(exc) if exc else None
+            nodes = [p for p in nodes if (not rf or rf.search(p["name"])) and not (re_ and re_.search(p["name"]))]
+            ui = {}
+            for part in info.split(";"):
+                k, _, v = part.strip().partition("=")
+                if k in ("upload", "download", "total", "expire") and v.strip().isdigit():
+                    ui[k.capitalize()] = int(v)
+            write_json(sub_cache_path(s["name"]), {"name": s["name"], "updated": int(time.time()), "nodes": nodes,
+                                                   "info": ui, "skipped": len(errs), "ua": ua})
+            return len(nodes), f"{len(nodes)} 个节点" + (f"（{len(errs)} 条无法识别已跳过）" if errs else "")
+        except Exception as e:
+            last = str(e)[:150]
+    raise IOError(last or "下载失败")
+
+
+def sb_sub_cache(name):
+    return read_json(sub_cache_path(name), {}) or {}
+
+
+def sb_provider_nodes(d):
+    """{订阅名: [节点名]}，名称已按全局去重（与生成的 sing-box 配置一致）"""
+    return {k: [n for n, _ in v] for k, v in sb_sub_outbounds(d).items()}
+
+
+def sb_sub_outbounds(d):
+    taken = {n["proxy"]["name"] for n in d.get("nodes", [])} | reserved_names(d)
+    out = {}
+    for s in d["subs"]:
+        lst = []
+        for p in sb_sub_cache(s["name"]).get("nodes") or []:
+            base = str(p.get("name") or "").strip() or "node"
+            name, k = base, 2
+            while name in taken:
+                name, k = f"{base} ({k})", k + 1
+            taken.add(name)
+            lst.append((name, p))
+        out[s["name"]] = lst
+    return out
+
+
+def sb_update_subs(names=None, d=None):
+    d = d or load()
+    gh = d.get("gh_proxy") or ""
+    ok, bad = [], []
+    for s in d["subs"]:
+        if names and s["name"] not in names:
+            continue
+        try:
+            n, msg = sb_fetch_sub(s, gh)
+            ok.append(f"{s['name']}：{msg}")
+        except Exception as e:
+            bad.append(f"{s['name']}：{e}")
+    PROV.update(t=0, data=None)
+    return ok, bad
+
+
+# ---- 节点：mihomo 字段 → sing-box outbound
+def _sb_tls(p, sni_key="servername", force=False):
+    if not (p.get("tls") or force):
+        return None
+    t = {"enabled": True}
+    sni = p.get(sni_key) or p.get("sni") or p.get("servername")
+    if sni:
+        t["server_name"] = str(sni)
+    if p.get("skip-cert-verify"):
+        t["insecure"] = True
+    if p.get("alpn"):
+        t["alpn"] = [str(a) for a in (p["alpn"] if isinstance(p["alpn"], list) else str(p["alpn"]).split(","))]
+    if p.get("disable-sni"):
+        t["disable_sni"] = True
+    fp = p.get("client-fingerprint")
+    ro = p.get("reality-opts")
+    if ro:
+        t["reality"] = {"enabled": True, "public_key": str(ro.get("public-key") or ""), "short_id": str(ro.get("short-id") or "")}
+        fp = fp or "chrome"
+    if fp and fp not in ("none",):
+        t["utls"] = {"enabled": True, "fingerprint": "chrome" if fp == "random" else str(fp)}
+    return t
+
+
+def _sb_transport(p):
+    net = (p.get("network") or "tcp").lower()
+    if net == "ws":
+        o = p.get("ws-opts") or {}
+        path = str(o.get("path") or "/")
+        hdr = {k: (v[0] if isinstance(v, list) else str(v)) for k, v in (o.get("headers") or {}).items()}
+        if o.get("v2ray-http-upgrade"):
+            t = {"type": "httpupgrade", "path": path}
+            if hdr.get("Host"):
+                t["host"] = hdr.pop("Host")
+            if hdr:
+                t["headers"] = hdr
+            return t
+        t = {"type": "ws", "path": path}
+        m = re.search(r"[?&]ed=(\d+)", path)
+        if m:
+            t["path"] = re.sub(r"[?&]ed=\d+", "", path) or "/"
+            t["max_early_data"], t["early_data_header_name"] = int(m.group(1)), "Sec-WebSocket-Protocol"
+        elif o.get("max-early-data"):
+            t["max_early_data"] = int(o["max-early-data"])
+            t["early_data_header_name"] = o.get("early-data-header-name") or "Sec-WebSocket-Protocol"
+        if hdr:
+            t["headers"] = hdr
+        return t
+    if net == "grpc":
+        return {"type": "grpc", "service_name": str((p.get("grpc-opts") or {}).get("grpc-service-name") or "")}
+    if net == "h2":
+        o = p.get("h2-opts") or {}
+        t = {"type": "http", "path": str(o.get("path") or "/")}
+        if o.get("host"):
+            t["host"] = [str(h) for h in (o["host"] if isinstance(o["host"], list) else [o["host"]])]
+        return t
+    if net == "http":
+        o = p.get("http-opts") or {}
+        path = o.get("path") or ["/"]
+        t = {"type": "http", "path": str(path[0] if isinstance(path, list) else path), "method": str(o.get("method") or "GET")}
+        hosts = (o.get("headers") or {}).get("Host")
+        if hosts:
+            t["host"] = [str(h) for h in (hosts if isinstance(hosts, list) else [hosts])]
+        return t
+    if net in ("tcp", ""):
+        return None
+    raise ValueError(f"sing-box 不支持传输方式 {net}")
+
+
+def _mbps(v):
+    m = re.match(r"\s*(\d+)", str(v or ""))
+    return int(m.group(1)) if m else 0
+
+
+def sb_outbound(p, tag):
+    """返回 sing-box outbound；不支持的协议抛 ValueError"""
+    if p.get("_sb"):
+        o = dict(p["_sb"])
+        o["tag"] = tag
+        return o
+    t = str(p.get("type") or "").lower()
+    o = {"tag": tag, "server": str(p.get("server") or ""), "server_port": int(p.get("port") or 0)}
+    if not o["server"] or not o["server_port"]:
+        raise ValueError("缺少服务器或端口")
+    if t == "ss":
+        o.update(type="shadowsocks", method=str(p.get("cipher") or ""), password=str(p.get("password") or ""))
+        pl, po = p.get("plugin"), p.get("plugin-opts") or {}
+        if pl == "obfs":
+            o["plugin"], o["plugin_opts"] = "obfs-local", f"obfs={po.get('mode', 'http')};obfs-host={po.get('host', 'bing.com')}"
+        elif pl == "v2ray-plugin":
+            opts = [f"mode={po.get('mode', 'websocket')}"] + ([f"host={po['host']}"] if po.get("host") else []) + \
+                   ([f"path={po['path']}"] if po.get("path") else []) + (["tls"] if po.get("tls") else [])
+            o["plugin"], o["plugin_opts"] = "v2ray-plugin", ";".join(opts)
+        elif pl:
+            raise ValueError(f"sing-box 不支持 ss 插件 {pl}")
+        if p.get("udp-over-tcp"):
+            o["udp_over_tcp"] = True
+    elif t == "vmess":
+        o.update(type="vmess", uuid=str(p.get("uuid") or ""), security=str(p.get("cipher") or "auto"), alter_id=int(p.get("alterId") or 0))
+    elif t == "vless":
+        o.update(type="vless", uuid=str(p.get("uuid") or ""), packet_encoding="xudp")
+        if p.get("flow"):
+            o["flow"] = str(p["flow"])
+    elif t == "trojan":
+        o.update(type="trojan", password=str(p.get("password") or ""))
+        o["tls"] = _sb_tls(p, "sni", force=True)
+    elif t == "hysteria2":
+        o.update(type="hysteria2", password=str(p.get("password") or ""))
+        if p.get("ports"):
+            o["server_ports"] = [x.strip().replace("-", ":") if "-" in x else f"{x.strip()}:{x.strip()}"
+                                 for x in str(p["ports"]).replace("/", ",").split(",") if x.strip()]
+        if p.get("obfs"):
+            o["obfs"] = {"type": str(p["obfs"]), "password": str(p.get("obfs-password") or "")}
+        for k, sk in (("up", "up_mbps"), ("down", "down_mbps")):
+            if _mbps(p.get(k)):
+                o[sk] = _mbps(p.get(k))
+        o["tls"] = _sb_tls(p, "sni", force=True)
+    elif t == "tuic":
+        o.update(type="tuic", uuid=str(p.get("uuid") or ""), password=str(p.get("password") or ""),
+                 congestion_control=str(p.get("congestion-controller") or "bbr"),
+                 udp_relay_mode=str(p.get("udp-relay-mode") or "native"))
+        if p.get("reduce-rtt"):
+            o["zero_rtt_handshake"] = True
+        o["tls"] = _sb_tls(dict(p, alpn=p.get("alpn") or ["h3"]), "sni", force=True)
+    elif t == "hysteria":
+        o.update(type="hysteria", up_mbps=_mbps(p.get("up")) or 10, down_mbps=_mbps(p.get("down")) or 50)
+        if p.get("auth-str") or p.get("auth_str"):
+            o["auth_str"] = str(p.get("auth-str") or p.get("auth_str"))
+        if p.get("obfs"):
+            o["obfs"] = str(p["obfs"])
+        o["tls"] = _sb_tls(p, "sni", force=True)
+    elif t == "anytls":
+        o.update(type="anytls", password=str(p.get("password") or ""))
+        o["tls"] = _sb_tls(p, "sni", force=True)
+    elif t in ("http", "socks5"):
+        o["type"] = "http" if t == "http" else "socks"
+        if t == "socks5":
+            o["version"] = "5"
+        if p.get("username"):
+            o["username"], o["password"] = str(p["username"]), str(p.get("password") or "")
+    elif t == "ssh":
+        o.update(type="ssh", user=str(p.get("username") or "root"))
+        if p.get("password"):
+            o["password"] = str(p["password"])
+        if p.get("private-key"):
+            o["private_key"] = str(p["private-key"])
+    else:
+        raise ValueError(f"sing-box 不支持 {t or '未知'} 协议")
+    if t in ("vmess", "vless", "http", "socks5"):
+        tls = _sb_tls(p, "servername")
+        if tls:
+            o["tls"] = tls
+    if t in ("vmess", "vless", "trojan"):
+        tr = _sb_transport(p)
+        if tr:
+            o["transport"] = tr
+    if o.get("tls") is None:
+        o.pop("tls", None)
+    if p.get("udp") is False and t in ("ss",):
+        o["network"] = "tcp"
+    return o
+
+
+# ---- 规则：mihomo 规则字符串 → sing-box 路由规则
+def _mh_domain(x):
+    """mihomo 域名通配（+.a.com / *.a.com / a.*.com）→ (字段, 值)"""
+    x = x.strip().lower()
+    if x.startswith("+."):
+        return "domain_suffix", x[2:]
+    if x.startswith("."):
+        return "domain_suffix", x[1:]
+    if "*" in x:
+        return "domain_regex", "^" + re.escape(x).replace(r"\*", r"[^.]+") + "$"
+    return "domain", x
+
+
+def _rs_tag(kind, name):
+    return f"{kind}-{name}".lower() if kind in ("geosite", "geoip") else name
+
+
+def _split_top(s):
+    """「(A,b),(C,d)」按最外层逗号拆分"""
+    out, depth, cur = [], 0, ""
+    for ch in s:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0:
+            out.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    if cur:
+        out.append(cur)
+    return out
+
+
+class SBRules:
+    """收集翻译过程中用到的规则集、入站，以及无法翻译的条目"""
+
+    def __init__(self, cfg, inbounds, alias, rule_sets):
+        self.cfg, self.inbounds, self.alias, self.rule_sets = cfg, inbounds, alias, rule_sets
+        self.warn = []
+
+    def use_geo(self, kind, name):
+        tag = _rs_tag(kind, name)
+        if tag not in self.rule_sets:
+            self.rule_sets[tag] = {"kind": "geo", "url": f"{SB_GEO}/{kind}/{name.lower()}.srs", "path": f"{kind}-{name.lower()}.srs"}
+        return tag
+
+    def cond(self, typ, val):
+        """单个匹配条件 → sing-box 规则字段（dict）；不支持时返回 None"""
+        typ, val = typ.strip().upper(), val.strip()
+        if typ == "DOMAIN":
+            return {"domain": [val.lower()]}
+        if typ == "DOMAIN-SUFFIX":
+            return {"domain_suffix": [val.lower().lstrip(".")]}
+        if typ == "DOMAIN-KEYWORD":
+            return {"domain_keyword": [val.lower()]}
+        if typ == "DOMAIN-REGEX":
+            return {"domain_regex": [val]}
+        if typ == "DOMAIN-WILDCARD":
+            k, v = _mh_domain(val)
+            return {k: [v]}
+        if typ in ("IP-CIDR", "IP-CIDR6"):
+            return {"ip_cidr": [val]}
+        if typ in ("SRC-IP-CIDR",):
+            return {"source_ip_cidr": [val]}
+        if typ in ("DST-PORT", "SRC-PORT", "IN-PORT"):
+            key = {"DST-PORT": "port", "SRC-PORT": "source_port", "IN-PORT": "port"}[typ]
+            ports, ranges = [], []
+            for x in val.replace("/", ",").split(","):
+                x = x.strip()
+                if re.fullmatch(r"\d+", x):
+                    ports.append(int(x))
+                elif re.fullmatch(r"\d+-\d+", x):
+                    ranges.append(x.replace("-", ":"))
+            c = {}
+            if ports:
+                c[key] = ports
+            if ranges:
+                c[key + "_range"] = ranges
+            if typ == "IN-PORT":
+                return None
+            return c or None
+        if typ == "NETWORK":
+            return {"network": [val.lower()]}
+        if typ == "GEOSITE":
+            return {"rule_set": [self.use_geo("geosite", val)]}
+        if typ == "GEOIP":
+            if val.lower() in ("private", "lan"):
+                return {"ip_is_private": True}
+            return {"rule_set": [self.use_geo("geoip", val)]}
+        if typ == "RULE-SET":
+            return {"rule_set": [val]} if val in self.rule_sets else None
+        if typ == "IN-TYPE":
+            want = {"TPROXY": "tproxy-in", "TUN": "tun-in", "MIXED": "mixed-in", "HTTP": "mixed-in", "SOCKS5": "mixed-in"}
+            tags = sorted({want[x] for x in val.upper().split("/") if want.get(x) in self.inbounds})
+            return {"inbound": tags} if tags else False
+        if typ in ("PROCESS-NAME", "PROCESS-PATH"):
+            return {"process_name" if typ == "PROCESS-NAME" else "process_path": [val]}
+        return None
+
+    def logical(self, typ, inner):
+        subs = []
+        for part in _split_top(inner):
+            part = part.strip()
+            if part.startswith("(") and part.endswith(")"):
+                part = part[1:-1]
+            r = self.match(part)
+            if r is None or r is False:
+                return r
+            subs.append(r)
+        if not subs:
+            return None
+        if typ == "NOT":
+            r = dict(subs[0]) if len(subs) == 1 else {"type": "logical", "mode": "and", "rules": subs}
+            r["invert"] = not r.get("invert", False)
+            return r
+        return {"type": "logical", "mode": typ.lower(), "rules": subs}
+
+    def match(self, body):
+        """不含策略的匹配部分 → 规则 dict / None（不支持）/ False（永不命中）"""
+        m = re.match(r"^(AND|OR|NOT)\s*,\s*\((.*)\)$", body.strip(), re.I)
+        if m:
+            return self.logical(m.group(1).upper(), m.group(2))
+        typ, _, val = body.partition(",")
+        return self.cond(typ, val.split(",")[0]) if val else None
+
+    def action(self, pol):
+        pol = self.alias.get(pol.strip(), pol.strip())
+        if pol in ("REJECT",):
+            return {"action": "reject"}
+        if pol == "REJECT-DROP":
+            return {"action": "reject", "method": "drop"}
+        if pol in ("DIRECT", "COMPATIBLE"):
+            return {"action": "route", "outbound": "DIRECT"}
+        if pol == "PASS":
+            return None
+        return {"action": "route", "outbound": pol}
+
+    def rule(self, line):
+        """完整规则「类型,值,策略[,no-resolve]」→ (规则 dict 或 None, 是否需要先解析域名)"""
+        parts = line.split(",")
+        i = rule_policy_index(parts)
+        if line.upper().startswith(("AND,", "OR,", "NOT,")):
+            k = line.rfind(")")
+            body, pol = line[:k + 1], line[k + 1:].strip(",").split(",")[0]
+        else:
+            body, pol = ",".join(parts[:i]), parts[i]
+        typ = body.split(",")[0].strip().upper()
+        if typ == "MATCH":
+            return None, False
+        act = self.action(pol)
+        r = self.match(body)
+        if act is None or r is False:
+            return None, False
+        if r is None:
+            self.warn.append(f"规则「{line[:80]}」sing-box 不支持，已跳过")
+            return None, False
+        r = dict(r, **act)
+        needs = typ in ("GEOIP", "IP-CIDR", "IP-CIDR6") and "no-resolve" not in [x.strip().lower() for x in parts[i + 1:]] \
+            and not r.get("ip_is_private")
+        return r, needs
+
+
+# ---- DNS
+def _sb_dns_server(addr, tag, boot, warn):
+    """mihomo DNS 地址（含 #策略组）→ sing-box DNS server"""
+    addr = addr.strip()
+    pol = dns_policy_of(addr)
+    base = addr.split("#", 1)[0]
+    s = {"tag": tag}
+    if base.startswith("system"):
+        s["type"] = "local"
+    elif base.startswith("dhcp://"):
+        s["type"] = "dhcp"
+        ifc = base[7:]
+        if ifc and ifc != "system":
+            s["interface"] = ifc
+    else:
+        m = re.match(r"^(https|tls|quic|h3|udp|tcp)://(.+)$", base)
+        scheme, rest = (m.group(1), m.group(2)) if m else ("udp", base)
+        u = urlsplit("x://" + rest)
+        host = u.hostname or rest
+        s["type"] = scheme
+        s["server"] = host
+        if u.port:
+            s["server_port"] = u.port
+        if scheme in ("https", "h3") and u.path and u.path != "/dns-query":
+            s["path"] = u.path
+        if not is_ip_addr(host) and boot:
+            s["domain_resolver"] = boot
+    if pol:
+        s["detour"] = pol
+    return s
+
+
+def sb_dns(d, cfg, policies, rs, alias, v6):
+    dc = dns_cfg(d)
+    warn = rs.warn
+    fixd = lambda x: (x.split("#", 1)[0] + "#" + alias[dns_policy_of(x)]) if dns_policy_of(x) in alias else x
+    fx = lambda xs: [fix_dns_policy(fixd(x), policies) for x in xs]
+    servers, tags = [], {}
+
+    def server(addr, boot="dns-boot"):
+        if addr in tags:
+            return tags[addr]
+        if addr.startswith("rcode://"):
+            return addr
+        tag = f"dns-{len(tags) + 1}"
+        servers.append(_sb_dns_server(addr, tag, boot, warn))
+        tags[addr] = tag
+        return tag
+
+    boot_list = list(dc["default"] or DNS_DEFAULT["default"])
+    servers.append(_sb_dns_server(boot_list[0], "dns-boot", None, warn))
+    direct = fx(dc["direct"] or DNS_DEFAULT["direct"])
+    proxy = fx(dc["proxy"])
+    t_direct = server(direct[0])
+    t_proxy = server(proxy[0]) if proxy else None
+    t_node = server(dc["pserver"][0].split("#", 1)[0]) if dc["pserver"] else server(direct[0].split("#", 1)[0])
+    final = t_proxy or t_direct
+    rules = []
+    ab = d.get("adblock") or {}
+    ab_sets = [k for k in rs.rule_sets if k.startswith("ad-")]
+    if ab.get("enabled") and ab.get("dns") and ab_sets:
+        if "ad-allow" in ab_sets:
+            rules.append({"rule_set": ["ad-allow"], "action": "route", "server": t_direct})
+        bl = [k for k in ab_sets if k != "ad-allow"]
+        if bl:
+            rules.append({"rule_set": bl, "action": "predefined", "rcode": "NXDOMAIN"})
+
+    def policy_cond(match):
+        kind, names = policy_parts(match)
+        if kind == "geosite":
+            return {"rule_set": [rs.use_geo("geosite", n) for n in names]}
+        if kind == "rule-set":
+            have = [n for n in names if n in rs.rule_sets]
+            return {"rule_set": have} if have else None
+        c = {}
+        for n in names:
+            k, v = _mh_domain(n)
+            c.setdefault(k, []).append(v)
+        return c
+
+    def target(servers_):
+        s0 = servers_[0]
+        if s0.startswith("rcode://"):
+            rc = {"success": "NOERROR", "format_error": "FORMERR", "server_failure": "SERVFAIL", "name_error": "NXDOMAIN",
+                  "not_implemented": "NOTIMP", "refused": "REFUSED"}.get(s0[8:], "NXDOMAIN")
+            return {"action": "predefined", "rcode": rc}
+        return {"action": "route", "server": server(s0)}
+
+    for pe in dc["policies"]:
+        c = policy_cond(pe["match"])
+        if c:
+            rules.append(dict(c, **target(fx(pe["servers"]))))
+        else:
+            warn.append(f"DNS 策略「{pe['match']}」引用的规则集 sing-box 中不存在，已跳过")
+    exact = {}
+    for h in dc["hosts"]:
+        ips = [v for v in h["value"] if is_ip_addr(v)]
+        if h["domain"].startswith(("+.", "*.")) or not ips:
+            warn.append(f"hosts「{h['domain']}」sing-box 只支持精确域名 → IP，已跳过")
+            continue
+        exact[h["domain"]] = ips
+    if exact:
+        servers.append({"type": "hosts", "tag": "dns-hosts", "predefined": exact})
+        rules.append({"domain": sorted(exact), "action": "route", "server": "dns-hosts"})
+    cn_cond = {"rule_set": [rs.use_geo("geosite", "cn"), rs.use_geo("geosite", "private")]}
+    if dc["mode"] == "fake-ip":
+        servers.append({"type": "fakeip", "tag": "dns-fake", "inet4_range": "198.18.0.0/15",
+                        **({"inet6_range": "fc00::/18"} if v6 else {})})
+        conds = {}
+        for x in dc["fake_filter"]:
+            if x.lower().startswith("geosite:"):
+                conds.setdefault("rule_set", []).append(rs.use_geo("geosite", x[8:]))
+            elif x.lower().startswith("rule-set:"):
+                if x[9:] in rs.rule_sets:
+                    conds.setdefault("rule_set", []).append(x[9:])
+            else:
+                k, v = _mh_domain(x)
+                conds.setdefault(k, []).append(v)
+        if conds:  # Fake-IP 过滤名单：按国内 / 国外分流到真实 DNS
+            parts = [{k: v} for k, v in conds.items() if k == "rule_set"]
+            dom = {k: v for k, v in conds.items() if k != "rule_set"}
+            if dom:
+                parts.insert(0, dom)
+            fc = parts[0] if len(parts) == 1 else {"type": "logical", "mode": "or", "rules": parts}
+            if dc["policy"] and t_proxy:
+                rules.append({"type": "logical", "mode": "and", "rules": [fc, cn_cond], "action": "route", "server": t_direct})
+            rules.append(dict(fc, action="route", server=final))
+        rules.append({"query_type": ["A", "AAAA"], "action": "route", "server": "dns-fake"})
+    if dc["policy"] and t_proxy:
+        rules.append(dict(cn_cond, action="route", server=t_direct))
+    out = {"servers": servers, "rules": rules, "final": final, "strategy": "prefer_ipv4" if v6 else "ipv4_only",
+           "cache_capacity": 4096}
+    return out, t_node, t_direct, t_proxy
+
+
+# ---- 生成 sing-box 配置
+def build_singbox(d):
+    """把 build_config 生成的 mihomo 结构翻译成 sing-box 配置；返回 (配置, 警告列表, 需要的规则集文件)"""
+    sub_out = sb_sub_outbounds(d)
+    PROV.update(t=time.time(), data={k: [n for n, _ in v] for k, v in sub_out.items()})
+    cfg = build_config(d)
+    v6 = bool(d.get("ipv6"))
+    gc = gcfg(d)
+    warn = []
+    # 节点
+    outbounds, node_names, prov_names = [], [], {}
+    for p in cfg["proxies"]:
+        try:
+            outbounds.append(sb_outbound(p, p["name"]))
+            node_names.append(p["name"])
+        except ValueError as e:
+            warn.append(f"节点「{p['name']}」：{e}，已跳过")
+    skipped = 0
+    for sname, lst in sub_out.items():
+        prov_names[sname] = []
+        for name, p in lst:
+            try:
+                outbounds.append(sb_outbound(p, name))
+                prov_names[sname].append(name)
+            except (ValueError, TypeError):
+                skipped += 1
+    if skipped:
+        warn.append(f"订阅中有 {skipped} 个节点的协议 sing-box 不支持（如 ssr、snell、wireguard），已跳过")
+    for s in d["subs"]:
+        if not sb_sub_cache(s["name"]).get("updated"):
+            warn.append(f"订阅「{s['name']}」还没有下载过节点")
+    # 策略组：地区负载均衡与自动优选相同 → 去掉并重定向引用；其余 load-balance / fallback 改为 urltest
+    alias = {}
+    region_lb = set()
+    for r, _ in REGIONS + [(G_OTHER, None)]:
+        alias[lb_name(r)] = auto_name(r)
+        region_lb.add(lb_name(r))
+    groups = [g for g in cfg["proxy-groups"] if g["name"] not in region_lb]
+    gnames = {g["name"] for g in groups}
+    alias = {k: v for k, v in alias.items() if v in gnames}
+    lb_custom = [g["name"] for g in groups if g["type"] in ("load-balance", "fallback")]
+    if lb_custom:
+        warn.append("sing-box 没有负载均衡 / 故障转移组，已按自动测速运行：" + "、".join(lb_custom[:6]) + ("…" if len(lb_custom) > 6 else ""))
+    all_sub = [n for v in prov_names.values() for n in v]
+    known = set(node_names) | set(all_sub) | gnames
+    for g in groups:
+        members = []
+        for m in g.get("proxies") or []:
+            m = alias.get(m, m)
+            if m in ("REJECT", "REJECT-DROP", "PASS"):
+                continue
+            if m == "COMPATIBLE":
+                m = "DIRECT"
+            if (m in known or m == "DIRECT") and m != g["name"] and m not in members:
+                members.append(m)
+        if g.get("use"):
+            pool = [n for u in g["use"] for n in prov_names.get(u, [])]
+            f, ex = g.get("filter"), g.get("exclude-filter")
+            rf, rex = (rx(f) if f else None), (rx(ex) if ex else None)
+            members += [n for n in pool if (not rf or rf.search(n)) and not (rex and rex.search(n)) and n not in members]
+        if not members:
+            members = ["DIRECT"]
+        if g["type"] == "select":
+            o = {"type": "selector", "tag": g["name"], "outbounds": members, "interrupt_exist_connections": False}
+        else:
+            o = {"type": "urltest", "tag": g["name"], "outbounds": members, "url": g.get("url") or gc["url"],
+                 "interval": f"{max(int(g.get('interval') or gc['interval']), 30)}s",
+                 "tolerance": int(g.get("tolerance") if g.get("tolerance") is not None else gc["tolerance"]),
+                 "interrupt_exist_connections": False}
+            if g["type"] == "url-test" and not g.get("lazy", True):
+                o["idle_timeout"] = "720h"
+        outbounds.append(o)
+    group_out = [o for o in outbounds if o["type"] in ("selector", "urltest")]
+    outbounds = group_out + [o for o in outbounds if o["type"] not in ("selector", "urltest")] + [{"type": "direct", "tag": "DIRECT"}]
+    policies = {o["tag"] for o in outbounds} | BUILTIN_POLICIES
+    # 入站
+    lis = "::" if v6 else "0.0.0.0"
+    inbounds = [{"type": "mixed", "tag": "mixed-in", "listen": lis, "listen_port": MIXED},
+                {"type": "direct", "tag": "dns-in", "listen": lis, "listen_port": 1053}]
+    if d.get("proxy_mode") == "tproxy":  # 透明代理（tproxy.sh 把流量转到 7893）
+        inbounds.insert(1, {"type": "tproxy", "tag": "tproxy-in", "listen": lis, "listen_port": 7893})
+    tc = d.get("tun") or TUN_DEFAULT
+    if d.get("proxy_mode") == "tun":
+        tun = {"type": "tun", "tag": "tun-in", "interface_name": safe_dev(tc.get("device")), "address": ["172.19.0.1/30"] + (["fdfe:dcba:9876::1/126"] if v6 else []),
+               "auto_route": True, "auto_redirect": bool(tc.get("auto_redirect", True)), "strict_route": bool(tc.get("strict_route", False)),
+               "stack": tc.get("stack") if tc.get("stack") in TUN_STACKS else "mixed"}
+        inbounds.append(tun)
+    in_tags = {i["tag"] for i in inbounds}
+    # 规则集
+    rule_sets = {}
+    for name, prov in cfg["rule-providers"].items():
+        if prov.get("type") == "inline":
+            payload = prov.get("payload") or []
+            r = {}
+            for x in payload:
+                if prov.get("behavior") == "ipcidr":
+                    r.setdefault("ip_cidr", []).append(x)
+                else:
+                    k, v = _mh_domain(x)
+                    r.setdefault(k, []).append(v)
+            rule_sets[name] = {"kind": "inline", "rules": [r] if r else []}
+        elif name.startswith("ad-"):
+            rule_sets[name] = {"kind": "adblock", "src": os.path.join(AB_DIR, os.path.basename(prov["path"])), "path": name + ".json"}
+        else:
+            url = prov.get("url") or ""
+            if re.search(r"\.srs(?:\?|$)", url):
+                rule_sets[name] = {"kind": "srs", "url": url, "path": f"rs-{safe(name)}.srs"}
+            elif prov.get("format") == "mrs" and "meta-rules-dat" in url and "/meta/" in url:
+                rule_sets[name] = {"kind": "srs", "url": re.sub(r"\.mrs(\?|$)", r".srs\1", url.replace("/meta/", "/sing/")),
+                                   "path": f"rs-{safe(name)}.srs"}
+            elif prov.get("format") == "mrs":
+                warn.append(f"规则集「{name}」是 mihomo 专用的 .mrs 格式，sing-box 无法使用，已跳过（可改用 .srs 地址）")
+            else:
+                rule_sets[name] = {"kind": "convert", "url": url, "behavior": prov.get("behavior", "domain"),
+                                   "format": prov.get("format", "yaml"), "path": f"rs-{safe(name)}.json"}
+    tr = SBRules(cfg, in_tags, alias, rule_sets)
+    tr.warn = warn
+    # 路由规则
+    route_rules = []
+    if d.get("sniffer", True) or dns_cfg(d)["mode"] == "fake-ip":
+        route_rules.append({"action": "sniff"})
+    route_rules += [{"inbound": ["dns-in"], "action": "hijack-dns"}, {"protocol": ["dns"], "action": "hijack-dns"},
+                    {"clash_mode": "Direct", "action": "route", "outbound": "DIRECT"},
+                    {"clash_mode": "Global", "action": "route", "outbound": G_SEL if G_SEL in policies else "DIRECT"}]
+    resolved = False
+    final = "DIRECT"
+    for line in cfg["rules"]:
+        if line.upper().startswith("MATCH,"):
+            final = tr.action(line.split(",", 1)[1]).get("outbound", "DIRECT") if tr.action(line.split(",", 1)[1]) else "DIRECT"
+            continue
+        r, needs = tr.rule(line)
+        if r is None:
+            continue
+        if r.get("action") == "route" and r.get("outbound") not in policies:
+            r["outbound"] = G_SEL if G_SEL in policies else "DIRECT"
+        if needs and not resolved:  # 与 mihomo 一致：没有 no-resolve 的 IP 规则先解析域名再匹配
+            route_rules.append({"action": "resolve"})
+            resolved = True
+        route_rules.append(r)
+    dns, t_node, t_direct, t_proxy = sb_dns(d, cfg, policies, tr, alias, v6)
+    if resolved and t_proxy:
+        for r in route_rules:
+            if r.get("action") == "resolve":
+                r["server"] = t_proxy if dns_cfg(d)["mode"] == "fake-ip" else dns["final"]
+    elif resolved:
+        for r in route_rules:
+            if r.get("action") == "resolve":
+                r["server"] = t_direct
+    # 规则集定义：只保留本地已有文件的（缺失的规则及引用跳过，避免启动失败）
+    defs, missing = [], set()
+    for tag, rsd in rule_sets.items():
+        if rsd["kind"] == "inline":
+            defs.append({"type": "inline", "tag": tag, "rules": rsd["rules"] or [{"domain": ["invalid.invalid"]}]})
+            continue
+        path = os.path.join(SB_RULE_DIR, rsd["path"])
+        if os.path.isfile(path) and os.path.getsize(path) > 0:
+            defs.append({"type": "local", "tag": tag, "format": "binary" if path.endswith(".srs") else "source", "path": path})
+        else:
+            missing.add(tag)
+    if missing:
+        warn.append("以下规则集文件尚未下载，相关规则暂时跳过：" + "、".join(sorted(missing)[:8]) + ("…" if len(missing) > 8 else ""))
+
+    def prune_rules(lst):
+        out = []
+        for r in lst:
+            r = dict(r)
+            if r.get("type") == "logical":
+                subs = prune_rules(r["rules"])
+                if len(subs) != len(r["rules"]):
+                    continue
+                r["rules"] = subs
+            elif "rule_set" in r:
+                keep = [x for x in r["rule_set"] if x not in missing]
+                if not keep:
+                    continue
+                r["rule_set"] = keep
+            out.append(r)
+        return out
+    route_rules = prune_rules(route_rules)
+    dns["rules"] = prune_rules(dns["rules"])
+    mode = {"global": "Global", "direct": "Direct"}.get(d.get("mode"), "Rule")
+    conf = {
+        "log": {"level": "info", "timestamp": True},
+        "dns": dns,
+        "inbounds": inbounds,
+        "outbounds": outbounds,
+        "route": {"rules": route_rules, "rule_set": defs, "final": final if final in policies else "DIRECT",
+                  "auto_detect_interface": True, "default_domain_resolver": t_node},
+        "experimental": {"clash_api": {"external_controller": f"{CTRL_HOST}:{CTRL_PORT}", "secret": d["secret"],
+                                       "default_mode": mode},
+                         "cache_file": {"enabled": True, "path": os.path.join(SB_DIR, "cache.db"), "store_fakeip": True}},
+    }
+    need = {tag: rsd for tag, rsd in rule_sets.items() if rsd["kind"] != "inline"}
+    return conf, list(dict.fromkeys(warn)), need
+
+
+def _rule_lines_to_source(text, behavior, fmt):
+    """mihomo 规则集文本（yaml payload / text）→ sing-box source 规则集"""
+    t = text.strip()
+    items = []
+    if fmt == "yaml" or re.search(r"(?m)^payload\s*:", t):
+        y = yaml_lite(t)
+        items = [str(x) for x in ((y or {}).get("payload") or [])] if isinstance(y, dict) else []
+    else:
+        items = [l.strip() for l in t.splitlines() if l.strip() and not l.strip().startswith(("#", "//"))]
+    r = {}
+    tr = SBRules({}, set(), {}, {})
+    for x in items:
+        x = x.strip().strip("'\"")
+        if behavior == "ipcidr":
+            try:
+                r.setdefault("ip_cidr", []).append(str(ipaddress.ip_network(x, strict=False)))
+            except ValueError:
+                pass
+        elif behavior == "domain":
+            k, v = _mh_domain(x)
+            r.setdefault(k, []).append(v)
+        else:
+            typ, _, val = x.partition(",")
+            c = tr.cond(typ, val.split(",")[0]) if val else None
+            if c:
+                for k, v in c.items():
+                    if isinstance(v, list):
+                        r.setdefault(k, []).extend(v)
+    return {"version": 3, "rules": [r] if r else []}
+
+
+def sb_adblock_source(src):
+    """面板广告列表（每行 +.a.com 或 a.com）→ sing-box source 规则集"""
+    suf, exact = [], []
+    with open(src) as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("+."):
+                suf.append(line[2:])
+            elif line:
+                exact.append(line)
+    r = {}
+    if suf:
+        r["domain_suffix"] = suf
+    if exact:
+        r["domain"] = exact
+    return {"version": 3, "rules": [r] if r else []}
+
+
+def sb_sync_assets(d, force=False, need=None):
+    """下载 / 转换 sing-box 需要的规则集文件；返回失败列表"""
+    if need is None:
+        need = build_singbox(d)[2]
+    gh = (d.get("gh_proxy") or "").rstrip("/")
+    os.makedirs(SB_RULE_DIR, exist_ok=True)
+    bad = []
+    for tag, rsd in need.items():
+        path = os.path.join(SB_RULE_DIR, rsd["path"])
+        try:
+            if rsd["kind"] == "adblock":
+                if os.path.isfile(rsd["src"]) and (force or not os.path.isfile(path) or os.path.getmtime(rsd["src"]) > os.path.getmtime(path)):
+                    write_json(path, sb_adblock_source(rsd["src"]))
+                continue
+            if os.path.isfile(path) and os.path.getsize(path) > 0 and not force:
+                continue
+            urls = ([gh + "/" + rsd["url"]] if gh and "github" in rsd["url"] else []) + [rsd["url"]]
+            data, err = None, ""
+            for u in urls:
+                for use_proxy in ((True, False) if core_alive() else (False,)):
+                    try:
+                        with proxy_opener(use_proxy).open(urllib.request.Request(u, headers={"User-Agent": UA}), timeout=30) as r:
+                            data = r.read(40 << 20)
+                        break
+                    except Exception as e:
+                        err = str(e)[:120]
+                if data is not None:
+                    break
+            if data is None:
+                raise IOError(err or "下载失败")
+            if rsd["kind"] in ("geo", "srs"):
+                if not data.startswith(b"SRS"):
+                    raise ValueError("不是有效的 .srs 文件")
+                with open(path + ".tmp", "wb") as f:
+                    f.write(data)
+                os.replace(path + ".tmp", path)
+            else:
+                src = _rule_lines_to_source(data.decode("utf-8", "ignore"), rsd["behavior"], rsd["format"])
+                if not src["rules"]:
+                    raise ValueError("没有解析出任何规则")
+                write_json(path, src)
+        except Exception as e:
+            bad.append(f"{tag}：{e}")
+    return bad
+
+
+def write_sb_config(d, path=None):
+    os.makedirs(SB_DIR, exist_ok=True)
+    conf, warn, _ = build_singbox(d)
+    SB_STATE["warn"] = warn
+    path = path or SB_CONF
+    with open(path, "w") as f:
+        json.dump(conf, f, ensure_ascii=False, indent=2)
+    return path
+
+
+def check_sb_config(path, binp=None):
+    binp = binp or SB_BIN
+    if not os.path.isfile(binp):
+        return True, ""
+    code, out = sh(f"'{binp}' check -c '{path}' -D '{SB_DIR}'", timeout=90)
+    if code == 0:
+        return True, ""
+    lines = [l for l in out.splitlines() if "FATAL" in l or "ERROR" in l or "error" in l.lower()]
+    return False, "\n".join(lines[-3:]) or out[-400:]
+
+
+def write_active_config(d=None):
+    d = d or load()
+    if active_core(d) == "singbox":
+        return write_sb_config(d)
+    return write_config(d)
+
+
+def core_pid():
+    try:
+        pid = int(open(CORE_PID).read().strip())
+        os.kill(pid, 0)
+        return pid
+    except Exception:
+        return 0
+
+
+def sb_hot_reload():
+    """sing-box 收到 SIGHUP 会重新读取配置（透明代理规则不受影响）；进程不在时重启服务"""
+    pid = core_pid()
+    if pid:
+        try:
+            os.kill(pid, signal.SIGHUP)
+            for _ in range(20):
+                time.sleep(0.5)
+                if core_alive():
+                    return True, "配置已重载"
+            return False, "sing-box 重载后未响应，请查看日志"
+        except OSError:
+            pass
+    sh(SVC + " restart", timeout=90)
+    return True, "已写入配置并重启 sing-box"
+
+
+def sb_version(path=None):
+    path = path or SB_BIN
+    if not os.path.isfile(path):
+        return ""
+    code, out = sh(f"'{path}' version", timeout=15)
+    m = re.search(r"sing-box version (\S+)", out) if code == 0 else None
+    return m.group(1) if m else ""
+
+
+def iso_utc(t):
+    g = time.gmtime(t)
+    return "%04d-%02d-%02dT%02d:%02d:%02dZ" % g[:6]
+
+
+def sb_fake_providers(d):
+    """sing-box 没有 proxy-provider：按 mihomo /providers/proxies 的格式拼出订阅节点及其延迟，前端无需区分内核"""
+    px = (core_json("/proxies", timeout=5) or {}).get("proxies") or {}
+    out = {}
+    for s in d["subs"]:
+        c = sb_sub_cache(s["name"])
+        names = sb_provider_nodes(d).get(s["name"], [])
+        upd = c.get("updated")
+        out[s["name"]] = {"name": s["name"], "type": "Proxy", "vehicleType": "HTTP",
+                          "updatedAt": iso_utc(upd) if upd else "",
+                          "subscriptionInfo": c.get("info") or {},
+                          "proxies": [dict({"name": n, "type": (px.get(n) or {}).get("type", ""), "history": []}, **(px.get(n) or {}))
+                                      for n in names]}
+    return {"providers": out}
+
+
+def sb_fake_rule_providers(d):
+    out = {}
+    need = build_singbox(d)[2]
+    for r in d.get("rulesets") or []:
+        rsd = need.get(r["name"])
+        path = os.path.join(SB_RULE_DIR, rsd["path"]) if rsd else ""
+        mt = os.path.getmtime(path) if path and os.path.isfile(path) else 0
+        out[r["name"]] = {"name": r["name"], "type": "Rule", "vehicleType": "HTTP", "behavior": r.get("behavior", "domain").capitalize(),
+                          "ruleCount": 0, "updatedAt": iso_utc(mt) if mt else ""}
+    return {"providers": out}
+
+
+# ---- 内核切换
+def sb_arch():
+    m = os.uname().machine
+    return {"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64", "armv7l": "armv7", "armv8l": "armv7", "armv6l": "armv6",
+            "i686": "386", "i386": "386", "riscv64": "riscv64", "loongarch64": "loong64", "s390x": "s390x"}.get(m, "")
+
+
+def sb_remote_version(channel, gh):
+    """最新正式版 / 预发布版的版本号（不带 v）"""
+    try:
+        with open_url(SB_API + ("/latest" if channel == "stable" else "?per_page=10"), "", timeout=15) as r:
+            j = json.loads(r.read(400000))
+        if channel != "stable":
+            j = next((x for x in j if x.get("prerelease")), j[0])
+        v = str(j.get("tag_name") or "").lstrip("v")
+        if v:
+            return v
+    except Exception:
+        if channel != "stable":
+            raise
+    with open_url(SB_REPO + "/latest", gh, timeout=15) as r:  # API 受限时从跳转地址里取版本号
+        m = re.search(r"/tag/v?([\w.\-]+)", r.geturl())
+    if not m:
+        raise IOError("获取 sing-box 版本号失败")
+    return m.group(1)
+
+
+def sb_install(channel, gh, force=False):
+    """下载 sing-box 到 SB_BIN（旧版本备份为 .bak）；返回版本号"""
+    import tarfile
+    arch = sb_arch()
+    if not arch:
+        raise ValueError(f"sing-box 不支持当前 CPU 架构：{os.uname().machine}")
+    ver = sb_remote_version(channel, gh)
+    cur = sb_version()
+    if cur == ver and not force:
+        return ver, False
+    url = f"{SB_REPO}/download/v{ver}/sing-box-{ver}-linux-{arch}.tar.gz"
+    _cu("下载", 10, f"下载 sing-box-{ver}-linux-{arch}.tar.gz")
+    tmp = SB_BIN + ".new"
+    with open_url(url, gh, timeout=60) as r:
+        total = int(r.headers.get("Content-Length") or 0)
+        buf, n = io.BytesIO(), 0
+        while True:
+            chunk = r.read(1 << 16)
+            if not chunk:
+                break
+            n += len(chunk)
+            if n > 120 * 2**20:
+                raise ValueError("下载文件异常过大，已中止")
+            buf.write(chunk)
+            if total:
+                CORE_UPD["pct"] = 10 + int(50 * n / total)
+    buf.seek(0)
+    with tarfile.open(fileobj=buf, mode="r:gz") as tf:
+        mem = next((m for m in tf.getmembers() if m.isfile() and os.path.basename(m.name) == "sing-box"), None)
+        if not mem:
+            raise ValueError("压缩包里没有 sing-box 程序")
+        with tf.extractfile(mem) as src, open(tmp, "wb") as f:
+            shutil.copyfileobj(src, f)
+    os.chmod(tmp, 0o755)
+    nv = sb_version(tmp)
+    if not nv:
+        os.remove(tmp)
+        raise ValueError("下载的 sing-box 无法运行（架构不匹配或文件损坏）")
+    if os.path.isfile(SB_BIN):
+        shutil.copy2(SB_BIN, SB_BIN + ".bak")
+    os.replace(tmp, SB_BIN)
+    return nv, True
+
+
+def core_switch_job(kind, gh):
+    """切换内核：准备程序与数据 → 生成并校验配置 → 写入启动选择 → 重启；失败自动换回原内核"""
+    prev = active_core()
+    try:
+        label = CORES[kind]
+        if kind == "singbox":
+            if not sb_version():
+                _cu("安装 sing-box", 5, "设备上还没有 sing-box，正在下载最新正式版")
+                nv, _ = sb_install("stable", gh)
+                _cu("安装 sing-box", 62, f"已安装 sing-box {nv}")
+            d = load()
+            if d["subs"]:
+                _cu("下载订阅", 65, "sing-box 不能自己拉取订阅，由面板下载并解析节点")
+                ok, bad = sb_update_subs(d=d)
+                for x in ok + bad:
+                    _cu("下载订阅", None, x)
+                if not ok:
+                    raise ValueError("订阅全部下载失败，未切换：" + "；".join(bad)[:300])
+            _cu("规则集", 75, "下载 sing-box 格式的 GEO / 规则集文件")
+            bad = sb_sync_assets(d)
+            for x in bad[:5]:
+                _cu("规则集", None, "✗ " + x)
+            tmp = write_sb_config(d, SB_CONF + ".new")
+            ok, err = check_sb_config(tmp)
+            if not ok:
+                os.remove(tmp)
+                raise ValueError("sing-box 配置校验失败，未切换：" + err)
+            os.replace(tmp, SB_CONF)
+        else:
+            if not bin_version(MIHOMO_BIN):
+                raise ValueError("设备上没有可用的 mihomo 程序，请先在「内核更新」里安装")
+            d = load()
+            tmp = write_config(d, os.path.join(CONF_DIR, "config.yaml.new"))
+            ok, err = check_config(tmp)
+            if not ok:
+                os.remove(tmp)
+                raise ValueError("mihomo 配置校验失败，未切换：" + err)
+            os.replace(tmp, os.path.join(CONF_DIR, "config.yaml"))
+        snapshot_selections(force=True)
+        update(lambda x: x.update(core=kind))
+        write_core_file(kind)
+        PROV.update(t=0, data=None)
+        _cu("重启核心", 88, f"正在以 {label} 重启核心（局域网会断网几秒）")
+        WD["manual_stop"] = False
+        sh(SVC + " restart", timeout=90)
+        for _ in range(30):
+            time.sleep(1)
+            if core_alive():
+                break
+        else:
+            tail = [l for l in sh(f"tail -n 30 '{MIHOMO_LOG}'")[1].splitlines() if re.search(r"FATAL|ERROR|level=(?:error|fatal)", l)]
+            update(lambda x: x.update(core=prev))
+            write_core_file(prev)
+            sh(SVC + " restart", timeout=90)
+            log = re.sub(r"\x1b\[[0-9;]*m", "", "\n".join(tail[-3:]))[-400:]
+            raise ValueError(f"{label} 30 秒内未响应，已切回 {CORES[prev]}。" + ("日志：" + log if log else "请查看核心日志"))
+        threading.Thread(target=restore_selections, daemon=True).start()
+        CORE_UPD.update(ok=True, message=f"已切换到 {label}" + (f"（{len(SB_STATE['warn'])} 条兼容提示见设置 → 核心）" if kind == "singbox" and SB_STATE["warn"] else ""))
+        notify(f"🔀 内核已切换：{CORES[prev]} → {label}")
+    except Exception as e:
+        CORE_UPD.update(ok=False, message=str(e))
+    finally:
+        CORE_UPD["pct"] = 100
+        _cu("完成" if CORE_UPD["ok"] else "失败", 100, CORE_UPD["message"])
+        CORE_UPD["busy"] = False
+
+
+def sb_update_job(channel, gh, force=False):
+    try:
+        cur = sb_version()
+        _cu("获取版本", 3, "正在获取 sing-box 最新版本号")
+        nv, changed = sb_install(channel, gh, force)
+        if not changed:
+            CORE_UPD.update(ok=True, message=f"已是最新版本 {nv}，无需更新")
+            return
+        _cu("校验", 70, f"用 sing-box {nv} 检查当前配置")
+        if active_core() == "singbox":
+            ok, err = check_sb_config(SB_CONF)
+            if not ok:
+                shutil.copy2(SB_BIN + ".bak", SB_BIN)
+                raise ValueError("新版 sing-box 不兼容当前配置，已恢复原版本：" + err)
+            _cu("重启核心", 85, "正在重启核心")
+            sh(SVC + " restart", timeout=90)
+            for _ in range(30):
+                time.sleep(1)
+                if core_alive():
+                    break
+            else:
+                shutil.copy2(SB_BIN + ".bak", SB_BIN)
+                sh(SVC + " restart", timeout=90)
+                raise ValueError("新版 sing-box 30 秒内未响应，已恢复原版本")
+        CORE_UPD.update(ok=True, message=f"sing-box 已从 {cur or '未安装'} 更新到 {nv}" + ("，旧版本已备份" if cur else ""))
+    except Exception as e:
+        CORE_UPD.update(ok=False, message=str(e))
+    finally:
+        CORE_UPD["pct"] = 100
+        _cu("完成" if CORE_UPD["ok"] else "失败", 100, CORE_UPD["message"])
+        CORE_UPD["busy"] = False
 
 
 # ---------------------------------------------------------------- 面板在线更新
@@ -1383,6 +2780,9 @@ def _core_swap_and_restart(src, label):
         os.replace(tmp, bak)
     else:
         os.replace(src, MIHOMO_BIN)
+    if active_core() == "singbox":  # 当前运行的是 sing-box：只替换程序，下次切回 mihomo 时生效
+        _cu("完成", 95, f"已替换为 {label}（当前内核是 sing-box，切回 mihomo 时生效）")
+        return True, ""
     _cu("重启核心", 90, f"已替换为 {label}，正在重启核心")
     sh(SVC + " restart", timeout=90)
     for _ in range(30):
@@ -1814,7 +3214,13 @@ def self_rollback():
 
 
 def config_view(d=None, masked=True):
-    cfg = build_config(d or load())
+    d = d or load()
+    if active_core(d) == "singbox":
+        cfg = build_singbox(d)[0]
+        if masked:
+            cfg["experimental"]["clash_api"]["secret"] = "******"
+        return json.dumps(cfg, ensure_ascii=False, indent=2)
+    cfg = build_config(d)
     if masked:
         cfg["secret"] = "******"
     return json.dumps(cfg, ensure_ascii=False, indent=2)
@@ -2070,8 +3476,15 @@ def check_nodes():
         notify("⚠️ 节点选择中的所有节点均测速超时，请检查订阅或网络" if all_down else "✅ 节点已恢复可用")
 
 
+def prov_json():
+    """订阅节点（mihomo /providers/proxies 格式）；sing-box 由面板按缓存拼出同样的结构"""
+    if active_core() == "singbox":
+        return sb_fake_providers(load())
+    return core_json("/providers/proxies") or {}
+
+
 def check_subs():
-    prov = (core_json("/providers/proxies") or {}).get("providers", {})
+    prov = prov_json().get("providers", {})
     names = {s["name"] for s in load()["subs"]}
     st = load_notified()
     changed = False
@@ -2729,6 +4142,10 @@ def config_text(d):
 def ab_apply():
     """列表文件变化后让核心生效：配置结构没变时只刷新对应 rule-provider，否则走完整的校验 + 重载"""
     d = load()
+    if active_core(d) == "singbox":  # 广告列表转换成 sing-box 规则集后重载
+        sb_sync_assets(d)
+        AB_CACHE.clear()
+        return reload_core()
     try:
         with open(os.path.join(CONF_DIR, "config.yaml")) as f:
             same = f.read() == config_text(d)
@@ -3019,6 +4436,17 @@ def sched_event(msg):
 
 def run_task(name):
     d = load()
+    if name == "sub_update" and active_core(d) == "singbox":
+        ok, bad = sb_update_subs(d=d)
+        try:
+            refresh_regions()
+        except Exception:
+            pass
+        return not bad, "订阅已更新" if not bad else "以下订阅更新失败：" + "；".join(bad)
+    if name == "geo_update" and active_core(d) == "singbox":
+        bad = sb_sync_assets(d, force=True)
+        ok, msg = reload_core()
+        return not bad and ok, "GEO / 规则集已更新" if not bad else "部分规则集更新失败：" + "；".join(bad)[:200]
     if name == "sub_update":
         bad = []
         for s in d["subs"]:
@@ -3073,6 +4501,15 @@ def sched_loop():
             mins = int(sc.get("latency") or 0)
             if mins and time.time() - SCHED["done"].get("latency", 0) >= mins * 60:
                 due.append("latency")
+            if active_core(d) == "singbox" and d["subs"]:  # mihomo 的订阅由核心按间隔自动更新；sing-box 由面板代劳
+                iv = max(int(d.get("sub_interval") or 86400), 600)
+                last = min([sb_sub_cache(s["name"]).get("updated", 0) for s in d["subs"]] or [0])
+                if time.time() - max(last, SCHED["done"].get("sb_subs", 0)) >= iv:
+                    SCHED["done"]["sb_subs"] = time.time()
+                    ok_, bad_ = sb_update_subs(d=d)
+                    refresh_regions()
+                    if bad_:
+                        sched_event("订阅自动更新：✗ " + "；".join(bad_)[:200])
             ab = d["adblock"]
             if ab.get("enabled") and ab.get("lists") and int(ab.get("interval") or 0):
                 if time.time() - max(AB_STATE["last"], ab_last_update()) >= int(ab["interval"]):
@@ -3219,10 +4656,17 @@ def diagnose():
 
     code, ver = core("GET", "/version", timeout=5)
     alive = code == 200
-    item("mihomo 核心", alive, json.loads(ver).get("version", "") if alive else "核心未运行或控制器无响应",
+    sb = active_core(d) == "singbox"
+    item(f"{CORES[active_core(d)]} 核心", alive, json.loads(ver).get("version", "") if alive else "核心未运行或控制器无响应",
          "在顶部点「启动」，或执行 rc-service mihomo restart 并查看 /var/log/mihomo.log")
+    if sb:
+        if os.path.isfile(SB_BIN) and os.path.isfile(SB_CONF):
+            ok, err = check_sb_config(SB_CONF)
+            item("配置校验 (sing-box check)", ok, "通过" if ok else err[-200:], "在设置中撤销最近的修改，或切回 mihomo")
+        if SB_STATE["warn"]:
+            item("sing-box 兼容提示", "warn", "；".join(SB_STATE["warn"])[:300], "详见 设置 → 核心 → 内核切换")
     cfg = os.path.join(CONF_DIR, "config.yaml")
-    if os.path.isfile(MIHOMO_BIN) and os.path.isfile(cfg):
+    if not sb and os.path.isfile(MIHOMO_BIN) and os.path.isfile(cfg):
         ok, err = check_config(cfg)
         item("配置校验 (mihomo -t)", ok, "通过" if ok else err[-200:], "在设置中撤销最近的修改，或恢复备份")
     try:
@@ -3574,7 +5018,7 @@ def startup_migrate():
         time.sleep(2)
     else:
         return
-    cur = read_json(os.path.join(CONF_DIR, "config.yaml"), None) or {}
+    cur = {} if active_core() == "singbox" else read_json(os.path.join(CONF_DIR, "config.yaml"), None) or {}
     old = set(legacy_map())
     if any(g.get("name") in old for g in cur.get("proxy-groups") or []):
         snapshot_selections()
@@ -3998,12 +5442,24 @@ class H(BaseHTTPRequestHandler):
         names = [p["name"] for p in cfg["proxies"]]
         plan = region_plan(d, names, list(cfg["proxy-providers"]))
         gnames = [g["name"] for g in cfg["proxy-groups"]]
+        meta = group_meta(d, cfg)
+        sb = active_core(d) == "singbox"
+        if sb:  # sing-box：地区负载均衡并入自动优选，自定义负载均衡 / 故障转移按自动测速运行
+            lbs = {lb_name(r) for r, _ in REGIONS + [(G_OTHER, None)]}
+            gnames = [g for g in gnames if g not in lbs]
+            for n in list(meta):
+                if n in lbs:
+                    meta.pop(n)
+                elif meta[n]["type"] in ("load-balance", "fallback"):
+                    meta[n].update(sb_from=meta[n]["type"], type="url-test")
         regions = [{"name": r[0], "total": r[4], "manual": len(r[3]), "unknown": r[5],
                     "groups": [g for g in gnames if g in (auto_name(r[0]), lb_name(r[0]))]} for r in plan]
         sel = next((g.get("proxies") or [] for g in cfg["proxy-groups"] if g["name"] == G_SEL), [])
+        if sb:
+            sel = [x for x in sel if x in gnames or x in BUILTIN_POLICIES]
         return self.send(200, {"cfg": gcfg(d), "region_groups": d["region_groups"], "custom": d["custom_groups"],
                                "regions": regions, "groups": gnames, "manual": names, "nodes": all_node_names(d),
-                               "meta": group_meta(d, cfg), "types": GROUP_TYPES, "strategies": LB_STRATEGIES,
+                               "meta": meta, "core": active_core(d), "types": GROUP_TYPES, "strategies": LB_STRATEGIES,
                                "region_names": [r[0] for r in REGIONS], "primary": PRIMARY_REGIONS, "selector": sel})
 
     def save_groups_cfg(self, b):
@@ -4100,6 +5556,33 @@ class H(BaseHTTPRequestHandler):
     def api(self, m, p, q):
         b = self.body() if m in ("POST", "PUT", "PATCH", "DELETE") else {}
         # 透传到 mihomo external-controller
+        if p.startswith("/api/core/") and active_core() == "singbox":
+            sub = p[len("/api/core"):]
+            if sub == "/providers/proxies" and m == "GET":
+                return self.send(200, sb_fake_providers(load()))
+            if sub == "/providers/rules" and m == "GET":
+                return self.send(200, sb_fake_rule_providers(load()))
+            if sub.startswith("/providers/proxies/") and m == "PUT":
+                okl, bad = sb_update_subs([unquote(sub.rsplit("/", 1)[1])])
+                if not bad:
+                    refresh_regions()
+                return self.send(204 if not bad else 502, b"" if not bad else {"message": "；".join(bad)})
+            if sub.startswith("/providers/proxies/") and sub.endswith("/healthcheck"):
+                code, raw = core("GET", f"/group/{quote(G_MANUAL)}/delay?url={quote(HC)}&timeout=5000", timeout=60)
+                return self.send(204 if code < 300 else code, b"")
+            if (sub.startswith("/providers/rules/") and m == "PUT") or sub == "/configs/geo":
+                d = load()
+                need = build_singbox(d)[2]
+                if sub.startswith("/providers/rules/"):
+                    nm = unquote(sub.rsplit("/", 1)[1])
+                    need = {k: v for k, v in need.items() if k == nm}
+                bad = sb_sync_assets(d, force=True, need=need)
+                ok, msg = reload_core()
+                return self.send(204 if not bad and ok else 502, b"" if not bad and ok else {"message": "；".join(bad) or msg})
+            if sub.startswith("/configs") and m == "PUT":
+                return self.reply(*reload_core())
+            if sub == "/upgrade":
+                return self.send(400, {"message": "请在 设置 → 核心 → 内核更新 里更新 sing-box"})
         if p.startswith("/api/core/"):
             slow = p.endswith("/delay") or p.endswith("/healthcheck")  # 测速可能超过默认 10 秒
             code, raw = core(m, p[len("/api/core"):] + ("?" + q if q else ""), b if b else None, timeout=60 if slow else 10)
@@ -4115,6 +5598,15 @@ class H(BaseHTTPRequestHandler):
             has = bool(d["subs"] or d["nodes"])
             cfg = build_config(d)
             groups = [g["name"] for g in cfg["proxy-groups"]]
+            gmeta = group_meta(d, cfg)
+            if active_core(d) == "singbox":  # 地区负载均衡并入自动优选；负载均衡 / 故障转移按自动测速运行
+                lbs = {lb_name(r) for r, _ in REGIONS + [(G_OTHER, None)]}
+                groups = [g for g in groups if g not in lbs]
+                for n, mt in list(gmeta.items()):
+                    if n in lbs:
+                        gmeta.pop(n)
+                    elif mt["type"] in ("load-balance", "fallback"):
+                        mt.update(sb_from=mt["type"], type="url-test")
             return self.send(200, {"pw_default": bool(d.get("pw_default")), "mode": d["mode"], "tproxy": d["tproxy"], "subs": d["subs"], "rules": d["rules"],
                                    "running": "started" in st or code == 200, "version": version, "groups": groups,
                                    "has_nodes": has, "nodes": [{"name": n["proxy"]["name"], "type": n["proxy"]["type"],
@@ -4126,9 +5618,9 @@ class H(BaseHTTPRequestHandler):
                                    "default_exclude": DEFAULT_EXCLUDE, "proxy_mode": d["proxy_mode"], "tun": d["tun"],
                                    "log_limit": d["log_limit"], "dns": dns_cfg(d), "dns_default": DNS_DEFAULT,
                                    "schedule": d["schedule"], "devices": d["devices"], "adblock_on": d["adblock"]["enabled"],
-                                   "sched_events": list(SCHED["events"])[:20], "group_meta": group_meta(d, cfg),
+                                   "sched_events": list(SCHED["events"])[:20], "group_meta": gmeta,
                                    "custom_groups": d["custom_groups"], "groups_cfg": gcfg(d), "sniffer": d["sniffer"],
-                                   "gh_proxy": d["gh_proxy"], "panel_version": PANEL_VERSION,
+                                   "gh_proxy": d["gh_proxy"], "panel_version": PANEL_VERSION, "core": active_core(d),
                                    "wd": {"status": WD["status"], "fails": WD["fails"], "last_check": WD["last_check"],
                                           "events": list(WD["events"])[:20]}})
         if p == "/api/groups" and m == "GET":
@@ -4155,9 +5647,10 @@ class H(BaseHTTPRequestHandler):
             return self.reply(*refresh_regions())
         if p == "/api/config" and m == "GET":
             txt = config_view(load(), masked=True)
+            sbm = active_core() == "singbox"
             if "download" in parse_qs(q):
-                return self.send(200, txt.encode(), "application/x-yaml")
-            return self.send(200, {"text": txt, "path": os.path.join(CONF_DIR, "config.yaml"), "size": len(txt.encode())})
+                return self.send(200, txt.encode(), "application/json" if sbm else "application/x-yaml")
+            return self.send(200, {"text": txt, "path": core_conf_path(), "size": len(txt.encode()), "core": active_core()})
         if p == "/api/sysopt" and m == "GET":
             return self.send(200, opt_status())
         if p == "/api/sysopt" and m == "POST":
@@ -4169,6 +5662,45 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/speedtest" and m == "GET":
             via = q1(parse_qs(q), "via", default="proxy")
             return self.send(200, speed_test(via == "proxy"))
+        if p == "/api/coreswitch" and m == "GET":
+            d = load()
+            if active_core(d) == "singbox" and not SB_STATE["warn"]:
+                SB_STATE["warn"] = build_singbox(d)[1]
+            return self.send(200, {"core": active_core(d), "versions": {"mihomo": bin_version(MIHOMO_BIN), "singbox": sb_version()},
+                                   "warn": SB_STATE["warn"] if active_core(d) == "singbox" else [], "busy": CORE_UPD["busy"]})
+        if p == "/api/coreswitch" and m == "POST":
+            kind = b.get("core")
+            if kind not in CORES:
+                return self.send(400, {"message": "未知的内核"})
+            if kind == active_core():
+                return self.send(400, {"message": f"当前已经是 {CORES[kind]}"})
+            ok, msg = core_job_start(core_switch_job, kind, load().get("gh_proxy") or "")
+            return self.send(200 if ok else 409, {"message": msg})
+        if p == "/api/coreupdate" and m == "GET" and (q1(parse_qs(q), "core") or active_core()) == "singbox":
+            ch = q1(parse_qs(q), "channel", default="stable")
+            info = {"current": sb_version() or "未安装", "arch": sb_arch() or os.uname().machine, "channel": ch,
+                    "backup": sb_version(SB_BIN + ".bak"), "remote": "", "busy": CORE_UPD["busy"], "core": "singbox"}
+            try:
+                info["remote"] = sb_remote_version(ch, load().get("gh_proxy") or "")
+            except Exception as e:
+                info["message"] = "获取最新版本失败：" + str(e)
+                return self.send(502, info)
+            info["latest"] = info["remote"] == sb_version()
+            return self.send(200, info)
+        if p == "/api/coreupdate" and m == "POST" and (b.get("core") or active_core()) == "singbox":
+            if b.get("action") == "rollback":
+                if not sb_version(SB_BIN + ".bak"):
+                    return self.send(400, {"message": "没有可回滚的 sing-box 备份"})
+                tmp = SB_BIN + ".swap"
+                shutil.copy2(SB_BIN, tmp)
+                os.replace(SB_BIN + ".bak", SB_BIN)
+                os.replace(tmp, SB_BIN + ".bak")
+                if active_core() == "singbox":
+                    sh(SVC + " restart", timeout=90)
+                return self.reply(True, f"已回滚到 sing-box {sb_version()}")
+            ch = b.get("channel") or "stable"
+            ok, msg = core_job_start(sb_update_job, ch, load().get("gh_proxy") or "", bool(b.get("force")))
+            return self.send(200 if ok else 409, {"message": msg})
         if p == "/api/coreupdate" and m == "GET":
             ch = q1(parse_qs(q), "channel", default="stable")
             if ch not in CORE_CHANNELS:
@@ -4198,6 +5730,11 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/subs/update" and m == "POST":
             name = b.get("name") or ""
             names = [s["name"] for s in load()["subs"]] if not name else [name]
+            if active_core() == "singbox":
+                okl, bad = sb_update_subs(names)
+                ok2, msg2 = refresh_regions()
+                msg = ("已更新：" + "；".join(okl) if not bad else "更新失败：" + "；".join(bad)) + ("；" + msg2 if msg2 and "无变化" not in msg2 else "")
+                return self.reply(not bad, msg)
             bad = []
             for nm in names:
                 code, raw = core("PUT", "/providers/proxies/" + quote(nm), timeout=120)
@@ -4226,6 +5763,12 @@ class H(BaseHTTPRequestHandler):
                     return self.send(400, {"message": f"正则表达式无效：{pat}（{e}）"})
             prev = update(lambda d: d.update(subs=[s for s in d["subs"] if s["name"] != name] +
                                               [{"name": name, "url": url, "filter": flt, "exclude": exc}]))
+            if active_core() == "singbox":  # 先由面板下载节点，再生成配置
+                okl, bad = sb_update_subs([name])
+                ok, msg = reload_core(prev)
+                if ok and bad:
+                    ok, msg = False, "订阅已保存，但下载失败：" + "；".join(bad)
+                return self.reply(ok, msg if not ok else "已添加：" + "；".join(okl))
             ok, msg = reload_core(prev)
             if ok:
                 refresh_after_sub(name)  # 订阅下载完成后按实际节点生成地区 / 均衡分组
@@ -4261,8 +5804,9 @@ class H(BaseHTTPRequestHandler):
                 d = load()
                 d["mode"] = mode
                 save(d)
-                write_config(d)
-            core("PATCH", "/configs", {"mode": mode})
+                sb = active_core(d) == "singbox"
+                write_active_config(d)
+            core("PATCH", "/configs", {"mode": mode.capitalize() if sb else mode})
             return self.send(200, {"message": "ok"})
         if p == "/api/tproxy" and m == "PUT":  # 兼容旧接口
             return self.set_proxy_mode({"mode": "tproxy" if b.get("enable") else "off"})
@@ -4395,9 +5939,13 @@ class H(BaseHTTPRequestHandler):
                 WD["manual_stop"] = act == "stop"
                 code, out = sh(SVC + " " + act, timeout=90)
                 return self.reply(code == 0, out)
+            if act == "upgrade" and active_core() == "singbox":
+                return self.send(400, {"message": "请在 设置 → 核心 → 内核更新 里更新 sing-box"})
             if act == "upgrade":
                 code, raw = core("POST", "/upgrade", {}, timeout=300)
                 return self.send(code if code != 502 else 500, raw or b'{"message":"ok"}')
+            if act == "geo" and active_core() == "singbox":
+                return self.reply(*run_task("geo_update"))
             if act == "geo":
                 code, raw = core("POST", "/configs/geo", {}, timeout=120)
                 return self.send(code, raw or b'{"message":"ok"}')
@@ -4516,8 +6064,10 @@ if __name__ == "__main__":
     if "--tpenv" in sys.argv:
         print(tp_env())
         sys.exit(0)
-    if "--gen" in sys.argv:
-        print(write_config(load()))
+    if "--gen" in sys.argv:  # init.d/mihomo 启动前调用：按当前内核生成配置
+        dd = load()
+        write_core_file(active_core(dd))
+        print(write_active_config(dd))
         sys.exit(0)
     if "--snapshot" in sys.argv:  # install.sh 升级前调用：记下各组当前选择，新配置生效后由面板恢复
         print("saved" if snapshot_selections() is not None else "skip")

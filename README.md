@@ -6,6 +6,25 @@
 
 Alpine Linux 上运行的 **mihomo 旁路由透明代理 + 一体化 Web 面板**。后端是零依赖的 Python3，前端是单个 HTML 文件。
 
+## v6.4 新增：mihomo / sing-box 双内核
+
+「设置 → 核心 → 内核」一键切换。订阅、节点、规则、规则集、DNS、广告拦截、绕过设备、设备备注等设置两个内核共用，切换时按各自格式生成**独立的配置文件**：mihomo 用 `/etc/mihomo/config.yaml`，sing-box 用 `/etc/sing-box/config.json`。
+
+- 切换流程：设备上没有 sing-box 时先下载最新正式版 → 下载订阅、GEO / 规则集 → 生成配置并用 `sing-box check` 校验 → 重启核心；30 秒内没响应自动切回原内核
+- 面板其余功能不变：节点切换与测速、连接、流量、日志、规则测试、诊断、看门狗、定时任务都通过 sing-box 的 Clash API 工作
+- sing-box 下改配置用 SIGHUP 热重载，透明代理规则不受影响
+- 「设置 → 系统 → 内核更新」可分别更新 / 回滚 mihomo 与 sing-box
+
+sing-box 与 mihomo 的差异（面板已自动处理）：
+
+| 项目 | sing-box 下的处理 |
+|---|---|
+| 负载均衡 / 故障转移组 | sing-box 没有：地区「⚖️ 负载均衡」并入同地区「自动优选」，引用它的规则 / DNS 自动改指向；自定义的这两类组按自动测速（urltest）运行 |
+| 订阅 | sing-box 不能自己拉取：面板下载并解析（Clash YAML / sing-box JSON / Base64 / 分享链接），按「订阅自动更新间隔」刷新；ssr、snell、wireguard 节点跳过 |
+| GEO / 规则集 | 改用 MetaCubeX meta-rules-dat 的 `.srs`，由面板下载到 `/etc/sing-box/rules/`；yaml / text 规则集自动转换；mihomo 专用 `.mrs`（MetaCubeX 的除外）无法使用 |
+| DNS | 每组 DNS 只用第一个服务器；hosts 只支持精确域名 → IP |
+| URLTest 组 | 不能手动固定节点 |
+
 ## v6.3 新增
 
 - **安全**：密码改为 PBKDF2 哈希保存（旧版明文密码首次启动自动转换）；登录改用随机会话令牌，30 天无访问自动失效；可「退出登录 / 退出所有设备」，改密码后其他设备自动下线；仍在使用默认密码 admin 时登录后强制修改；实时日志改用 60 秒一次性票据，令牌不再出现在 URL 里
@@ -149,6 +168,10 @@ sh install.sh --update-core  # 重新下载最新 mihomo 核心
 | 路径 | 说明 |
 |---|---|
 | `/etc/mihomo/config.yaml` | 面板自动生成的 mihomo 配置（勿手改，会被覆盖） |
+| `/etc/sing-box/config.json` | 面板自动生成的 sing-box 配置（使用 sing-box 内核时） |
+| `/etc/sing-box/rules/` | sing-box 用的 GEO / 规则集 / 广告规则文件 |
+| `/etc/mihomo-panel/core` | 当前内核（mihomo / singbox），开机由 `/etc/init.d/mihomo` 读取 |
+| `/etc/mihomo-panel/sb_subs/` | sing-box 模式下面板下载解析的订阅节点缓存 |
 | `/etc/mihomo-panel/data.json` | 面板数据：密码、订阅、手动节点、自定义规则、通知设置 |
 | `/etc/mihomo-panel/stats.json` | 流量统计（保留 60 天） |
 | `/etc/mihomo-panel/provider_nodes.json` | 订阅节点名缓存（核心未运行时用于生成地区分组） |

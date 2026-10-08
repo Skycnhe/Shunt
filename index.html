@@ -319,7 +319,7 @@ nav .ico{display:none}nav .more{display:none}
         <div class="dsc">按节点名称识别地区，只为确实有节点的地区生成「🇯🇵 日本自动优选」（自动测速）与「⚖️ 日本负载均衡」分组。「🚀 节点选择」只包含：各地区自动优选 → 各地区负载均衡 → 🖐️ 手动选择 → ⚡ 全局自动选择 → 🏠 直连。</div></div>
         <label class="sw"><input type="checkbox" id="gc-on"><span></span></label></div>
       <div id="gc-box">
-      <div class="opt"><div class="sp"><div class="t">「负载均衡」组</div><div class="dsc">每个有节点的地区都生成，如 <code>⚖️ 香港负载均衡</code>、<code>⚖️ 日本负载均衡</code>；「自动优选」组始终生成（url-test）</div></div><label class="sw sm"><input type="checkbox" id="gc-lb"><span></span></label></div>
+      <div class="opt"><div class="sp"><div class="t">「负载均衡」组</div><div class="dsc">每个有节点的地区都生成，如 <code>⚖️ 香港负载均衡</code>、<code>⚖️ 日本负载均衡</code>；「自动优选」组始终生成（url-test）<div class="warn hide" id="gc-lb-sb">当前内核是 sing-box：没有负载均衡组，地区负载均衡已并入同地区「自动优选」</div></div></div><label class="sw sm"><input type="checkbox" id="gc-lb"><span></span></label></div>
       <div class="opt"><div class="sp"><div class="t">负载均衡策略</div><div class="dsc" id="gc-st-d"></div></div>
         <div class="seg" id="gc-st"><button data-v="consistent-hashing">一致性哈希</button><button data-v="round-robin">轮询</button><button data-v="sticky-sessions">粘性会话</button></div></div>
       <div class="opt"><div class="sp"><div class="t">识别扩展地区</div><div class="dsc">韩国、英国、德国、法国、荷兰、加拿大、澳大利亚、俄罗斯、印度、土耳其、东南亚、南美等</div></div><label class="sw sm"><input type="checkbox" id="gc-extra"><span></span></label></div>
@@ -330,7 +330,7 @@ nav .ico{display:none}nav .more{display:none}
         <input id="gc-tol" type="number" min="0" max="1000" style="width:86px" title="容差 ms"><span class="mut small">ms</span></div>
       <div class="opt"><div class="sp"><div class="t">测速地址</div></div><input id="gc-url" style="width:min(100%,300px)"></div>
       </div>
-      <div class="row mt"><span class="sp mut small">保存前用 mihomo -t 校验，失败自动撤销</span><button class="btn" onclick="saveGC()">保存并应用</button></div></div>
+      <div class="row mt"><span class="sp mut small">保存前先校验配置，失败自动撤销</span><button class="btn" onclick="saveGC()">保存并应用</button></div></div>
     <div class="card"><div class="row"><h3 class="sp" style="margin:0">已识别的地区</h3><button class="btn g sm" onclick="refreshRegions(this)">按订阅重新识别</button></div>
       <div class="tw mt"><table><thead><tr><th>地区</th><th>节点</th><th>生成的分组</th></tr></thead><tbody id="gc-regions"></tbody></table></div>
       <div class="lbl">🚀 节点选择 当前包含</div><div id="gc-sel" class="mchips"></div>
@@ -454,7 +454,7 @@ nav .ico{display:none}nav .more{display:none}
       <div class="opt"><div class="sp"><div class="t">阻止客户端绕过 DNS</div><div class="dsc">拒绝局域网设备直连 DoT / DoQ（853 端口）和常见公共 DoH 服务器，迫使浏览器 / 手机回落到旁路由 DNS</div></div><label class="sw sm"><input type="checkbox" id="dns-bb"><span></span></label></div>
       <div class="opt"><div class="sp"><div class="t">缓存算法</div></div><div class="seg" id="dns-cache"><button data-v="arc">ARC</button><button data-v="lru">LRU</button></div></div>
       <div id="dns-lists"></div>
-      <div class="row mt"><span class="sp mut small">格式：IP、udp:// tcp:// tls:// https:// quic:// dhcp://、system；可加 <code>#策略组</code>。保存前用 mihomo -t 校验，失败自动撤销</span>
+      <div class="row mt"><span class="sp mut small">格式：IP、udp:// tcp:// tls:// https:// quic:// dhcp://、system；可加 <code>#策略组</code>。保存前先校验配置，失败自动撤销</span>
         <button class="btn" onclick="saveDNS()">保存 DNS 设置</button></div></div>
     </div>
     <div>
@@ -540,6 +540,14 @@ nav .ico{display:none}nav .more{display:none}
     <div data-sg="net" class="card"><h3>订阅与分组</h3><div class="row">
       <span>订阅自动更新间隔</span><select id="sub-int"><option value="3600">1 小时</option><option value="21600">6 小时</option><option value="43200">12 小时</option><option value="86400">24 小时</option><option value="259200">3 天</option></select></div>
       <div class="row mt"><span class="sp mut small">地区分组、负载均衡、自定义策略组在「策略组」页设置</span><button class="btn g" onclick="go('策略组')">策略组</button><button class="btn" onclick="saveGroupOpts()">保存并应用</button></div></div>
+    <div data-sg="core" class="card"><div class="row"><h3 class="sp" style="margin:0">内核</h3><span class="tag" id="sw-cur"></span></div>
+      <div class="mut small" style="margin:4px 0 8px">订阅、节点、规则、DNS、设备等设置两个内核共用，切换时按各自格式生成独立的配置文件（mihomo：<code>/etc/mihomo/config.yaml</code>，sing-box：<code>/etc/sing-box/config.json</code>）。新配置先校验，通过后才重启；30 秒内没响应会自动切回原内核。</div>
+      <div class="seg" id="sw-seg"><button data-v="mihomo">mihomo</button><button data-v="singbox">sing-box</button></div>
+      <div id="sw-ver" class="mut small mt"></div>
+      <div id="sw-note" class="small mt"></div>
+      <div id="sw-prog" class="hide mt"><div style="height:6px;border-radius:3px;background:rgba(127,127,127,.2);overflow:hidden"><div id="sw-bar" style="height:6px;width:0;background:var(--pri);transition:width .3s"></div></div>
+        <div id="sw-log" class="mut small mt" style="white-space:pre-line;max-height:120px;overflow:auto"></div></div>
+      <div class="row mt"><span class="sp"></span><button class="btn" id="sw-btn" onclick="switchCore()" disabled>切换内核</button></div></div>
     <div data-sg="core" class="card"><h3>核心服务</h3><div class="row">
       <button class="btn" onclick="svc('reload')">重载配置</button><button class="btn g" onclick="svc('geo')">更新 GEO 数据库</button>
       <button class="btn g" onclick="flushFake()">清空 Fake-IP 缓存</button></div>
@@ -572,8 +580,8 @@ nav .ico{display:none}nav .more{display:none}
         <button class="btn g sm" onclick="speedTest('direct',this)">直连</button><button class="btn g sm" onclick="speedTest('proxy',this)">经代理</button></div>
       <div id="sp-r" class="small mt"></div></div>
     <div data-sg="sys" class="card"><div class="row"><h3 class="sp" style="margin:0">内核更新</h3><span class="tag" id="cv"></span></div>
-      <div class="mut small" style="margin:4px 0 8px">从 MetaCubeX/mihomo 下载对应 CPU 架构的核心，使用「备份与更新 → 面板更新」里填写的 GitHub 加速地址。新核心先校验能否运行、能否读取当前配置，通过后才替换并重启；30 秒内没响应会自动换回旧核心。重启期间网络会中断几秒。</div>
-      <div class="row"><select id="core-ch"><option value="stable">稳定版</option><option value="alpha">预览版 Alpha</option></select><span class="sp"></span>
+      <div class="mut small" style="margin:4px 0 8px">从 GitHub（MetaCubeX/mihomo 或 SagerNet/sing-box）下载对应 CPU 架构的程序，使用「备份与更新 → 面板更新」里填写的 GitHub 加速地址。新程序先校验能否运行、能否读取当前配置，通过后才替换；正在使用的内核会重启，30 秒内没响应会自动换回旧版本。</div>
+      <div class="row"><select id="core-kind" onchange="$('#core-r').innerHTML='';$('#cv').textContent=''"><option value="mihomo">mihomo</option><option value="singbox">sing-box</option></select><select id="core-ch"><option value="stable">稳定版</option><option value="alpha">预览版 Alpha</option></select><span class="sp"></span>
         <button class="btn g" onclick="coreCheck()" id="core-chk">检查更新</button></div>
       <div id="core-r" class="small mt"></div>
       <div id="core-prog" class="hide mt"><div style="height:6px;border-radius:3px;background:rgba(127,127,127,.2);overflow:hidden"><div id="core-bar" style="height:6px;width:0;background:var(--pri);transition:width .3s"></div></div>
@@ -815,7 +823,7 @@ const LBD={'consistent-hashing':'一致性哈希：同一目标域名固定走�
 const TYN={'select':'手动选择','url-test':'自动测速','fallback':'故障转移','load-balance':'负载均衡'};
 const TYC={'select':'k-sel','url-test':'k-auto','fallback':'k-fb','load-balance':'k-lb'};
 async function loadGroupsPage(){try{[GI]=await Promise.all([api('/api/groups'),loadState().catch(()=>{})])}catch(e){return toast(e.message)}
-  GCF=Object.assign({},GI.cfg,{on:GI.region_groups});renderGC();renderRegions();renderCGList()}
+  GCF=Object.assign({},GI.cfg,{on:GI.region_groups});renderGC();renderRegions();renderCGList();$('#gc-lb-sb').classList.toggle('hide',GI.core!=='singbox')}
 function renderGC(){const c=GCF;$('#gc-on').checked=c.on;$('#gc-on').onchange=e=>{GCF.on=e.target.checked;renderGC()};
   $('#gc-box').classList.toggle('dim',!c.on);$('#gc-box').style.opacity=c.on?'':'.5';
   segv('#gc-st',c.strategy,v=>{GCF.strategy=v;renderGC()});$('#gc-st-d').textContent=LBD[c.strategy]||'';
@@ -838,7 +846,7 @@ function cgRefs(n){let c=0;(STATE.rules||[]).forEach(r=>{if(r.startsWith('#'))re
   const dn=STATE.dns||{};[...(dn.direct||[]),...(dn.proxy||[]),...(dn.pserver||[]),...(dn.policies||[]).flatMap(p=>p.servers)].forEach(x=>{if(x.includes('#')&&x.split('#')[1].split('&')[0]===n)c++});return c}
 function renderCGList(){$('#cg-list').innerHTML=(GI.custom||[]).map((g,i)=>{const mem=g.proxies.slice(0,3).map(esc).join('、')+(g.proxies.length>3?` 等 ${g.proxies.length} 项`:'');
     const ex=GI.meta[g.name];return `<tr><td class="w" style="min-width:120px"><b style="font-weight:600">${g.icon?`<img class="gico" style="width:18px;height:18px;vertical-align:-4px;margin-right:4px" src="${esc(g.icon)}" onerror="this.remove()">`:''}${esc(g.name)}</b>${g.expose?'':'<div class="mut small">不加入分流组候选</div>'}</td>
-    <td><span class="tag ${TYC[g.type]}">${TYN[g.type]}</span>${g.type==='load-balance'?`<div class="mut small">${LBS[g.strategy]||''}</div>`:''}</td>
+    <td><span class="tag ${TYC[g.type]}">${TYN[g.type]}</span>${g.type==='load-balance'?`<div class="mut small">${LBS[g.strategy]||''}</div>`:''}${ex&&ex.sb_from?'<div class="warn small">sing-box 下按自动测速</div>':''}</td>
     <td class="w small" style="max-width:260px">${mem||''}${g.filter?`${mem?'<br>':''}<span class="mut">正则：</span><code>${esc(g.filter)}</code>${g.subs?'':' <span class="mut">（仅手动节点）</span>'}`:''}${ex?'':'<div class="warn small">未生效</div>'}</td>
     <td>${cgRefs(g.name)}</td><td style="text-align:right;white-space:nowrap"><button class="btn g sm" onclick="editCG(${i})">编辑</button> <button class="btn r sm" onclick="delCG(${i})">删除</button></td></tr>`}).join('')
     ||'<tr><td colspan="5" class="mut">还没有自定义策略组。例如：把美国和日本节点合成一个「🎯 美日均衡」负载均衡组，或建一个「🎮 游戏」组给规则引用</td></tr>'}
@@ -1042,7 +1050,7 @@ let TUNF={};
 let SG=localStorage.getItem('mp_sg')||'net';
 function renderSG(){document.querySelectorAll('#snav button').forEach(b=>{b.classList.toggle('on',b.dataset.g===SG);b.onclick=()=>{SG=b.dataset.g;localStorage.setItem('mp_sg',SG);renderSG()}});
   document.querySelectorAll('[data-sg]').forEach(c=>c.classList.toggle('hide',c.dataset.sg!==SG))}
-async function renderSettings(){renderSG();await loadState().catch(()=>{});fillSettings();
+async function renderSettings(){renderSG();await loadState().catch(()=>{});fillSettings();loadCoreSw();if(!CORE_POLL)$('#core-kind').value=STATE.core||'mihomo';
   segv('#pm',STATE.proxy_mode,v=>setPM(v));$('#pm-desc').textContent=PM_DESC[STATE.proxy_mode]||'';
   TUNF=Object.assign({},STATE.tun);renderTunForm();
   sw('#v6',STATE.ipv6,v=>saveSettings({ipv6:v},'IPv6 已'+(v?'开启':'关闭')));
@@ -1172,7 +1180,7 @@ function findCfg(){const q=$('#cfg-q').value.trim().toLowerCase();const el=$('#c
   if(!q){el.textContent=CFG_TXT;return}const ls=CFG_TXT.split('\n');const hit=ls.map((l,i)=>[i,l]).filter(([,l])=>l.toLowerCase().includes(q));
   el.textContent=hit.length?hit.slice(0,400).map(([i,l])=>String(i+1).padStart(5)+'  '+l).join('\n'):'无匹配'}
 async function downloadConfig(){try{const r=await fetch('/api/config?download=1',{headers:{'X-Token':TOKEN}});if(!r.ok)throw new Error('HTTP '+r.status);
-  const a=document.createElement('a');a.href=URL.createObjectURL(await r.blob());a.download='config.yaml';a.click()}catch(e){toast(e.message)}}
+  const a=document.createElement('a');a.href=URL.createObjectURL(await r.blob());a.download=STATE.core==='singbox'?'config.json':'config.yaml';a.click()}catch(e){toast(e.message)}}
 async function saveGhProxy(){const v=$('#gh-proxy').value.trim();if(v!==(STATE.gh_proxy||'')){await api('/api/settings','PUT',{gh_proxy:v});await loadState()}}
 async function checkUpdate(){const b=$('#upd-chk');b.disabled=true;$('#upd-r').innerHTML='<span class="mut">正在检查…</span>';
   try{await saveGhProxy();const j=await api('/api/selfupdate');
@@ -1205,17 +1213,44 @@ async function speedTest(via,b){b.disabled=true;const r=$('#sp-r'),lab=via==='pr
 // 内核更新
 let CORE_POLL=null;
 function coreCh(){return $('#core-ch').value}
+function coreKind(){return $('#core-kind').value}
+const CORE_LABEL={mihomo:'mihomo',singbox:'sing-box'};
 async function coreCheck(){const b=$('#core-chk');b.disabled=true;$('#core-r').innerHTML='<span class="mut">正在检查…</span>';
-  try{await saveGhProxy();const j=await api('/api/coreupdate?channel='+coreCh());coreShow(j)}
+  try{await saveGhProxy();const j=await api('/api/coreupdate?channel='+coreCh()+'&core='+coreKind());coreShow(j)}
   catch(e){$('#core-r').innerHTML=`<span class="bad">${esc(e.message)}</span>`}b.disabled=false}
 function coreShow(j){$('#cv').textContent='当前 '+(j.current||'-');
   $('#core-r').innerHTML=(j.latest?`<span class="ok">● 已是最新</span> ${esc(j.current)}`:`<span class="warn">● 有更新</span> ${esc(j.current)} → ${esc(j.remote)}`)+
     ` · 架构 ${esc(j.arch)}`+(j.backup?` · 可回滚到 ${esc(j.backup)}`:'');$('#core-btn').textContent=j.latest?'重新安装':'更新内核';$('#core-btn').dataset.force=j.latest?'1':''}
 async function coreUpdate(){const force=!!$('#core-btn').dataset.force;
-  if(!confirm(`${force?'重新下载并安装':'下载并更新'} mihomo ${coreCh()==='alpha'?'预览版':'稳定版'}内核？\n更新后核心会重启，网络中断几秒。`))return;
-  try{await saveGhProxy();await api('/api/coreupdate','POST',{channel:coreCh(),force});corePoll()}catch(e){toast(e.message)}}
-async function coreRollback(){if(!confirm('回滚到上一个内核版本？核心会重启。'))return;
-  try{await api('/api/coreupdate','POST',{action:'rollback'});corePoll()}catch(e){toast(e.message)}}
+  const k=coreKind(),live=k===(STATE.core||'mihomo');
+  if(!confirm(`${force?'重新下载并安装':'下载并更新'} ${CORE_LABEL[k]} ${coreCh()==='alpha'?'预览版':'稳定版'}？\n${live?'更新后核心会重启，网络中断几秒。':'当前没有使用它，只替换程序，不会重启。'}`))return;
+  try{await saveGhProxy();await api('/api/coreupdate','POST',{channel:coreCh(),force,core:k});corePoll()}catch(e){toast(e.message)}}
+async function coreRollback(){if(!confirm(`回滚 ${CORE_LABEL[coreKind()]} 到上一个版本？正在使用时核心会重启。`))return;
+  try{const j=await api('/api/coreupdate','POST',{action:'rollback',core:coreKind()});if(j.message&&coreKind()==='singbox'){toast(j.message);coreCheck()}else corePoll()}catch(e){toast(e.message)}}
+// 内核切换
+let SW_SEL='';
+async function loadCoreSw(){try{const j=await api('/api/coreswitch');SW_SEL=j.core;const v=j.versions||{};
+    $('#sw-cur').textContent='当前 '+CORE_LABEL[j.core];
+    $('#sw-ver').innerHTML=`mihomo ${v.mihomo?esc(v.mihomo):'<span class="warn">未安装</span>'} · sing-box ${v.singbox?esc(v.singbox):'<span class="mut">未安装（切换时自动下载最新正式版）</span>'}`;
+    const pick=x=>{SW_SEL=x;segv('#sw-seg',x,pick);swRender(j)};pick(j.core);if(j.busy&&!SW_POLL)swPoll()}catch(e){$('#sw-ver').textContent=e.message}}
+function swRender(j){const to=SW_SEL,diff=to!==j.core;$('#sw-btn').disabled=!diff;$('#sw-btn').textContent=diff?'切换到 '+CORE_LABEL[to]:'切换内核';
+  const sbNote='<div class="warn">sing-box 与 mihomo 的差异：</div><ul style="margin:4px 0 0 18px;padding:0">'+
+    '<li>没有负载均衡 / 故障转移组：地区「⚖️ 负载均衡」并入同地区「自动优选」，自定义的这两类组按自动测速运行</li>'+
+    '<li>订阅由面板下载并解析（Clash YAML / Base64 / 分享链接），按「订阅自动更新间隔」刷新；ssr、snell、wireguard 节点会被跳过</li>'+
+    '<li>GEO 与规则集改用 .srs 格式，由面板下载；mihomo 专用的 .mrs 规则集（MetaCubeX 的除外）无法使用</li>'+
+    '<li>每组 DNS 只用列表里的第一个服务器；hosts 只支持精确域名 → IP</li>'+
+    '<li>URLTest 组不能手动固定节点</li></ul>';
+  let h='';if(j.core==='singbox'&&(j.warn||[]).length)h+='<div class="warn">当前配置的兼容提示：</div><ul style="margin:4px 0 8px 18px;padding:0">'+j.warn.map(w=>`<li>${esc(w)}</li>`).join('')+'</ul>';
+  if(to==='singbox'||j.core==='singbox')h+=sbNote;$('#sw-note').innerHTML=h}
+let SW_POLL=null;
+async function switchCore(){const to=SW_SEL;if(!confirm(`切换到 ${CORE_LABEL[to]}？\n会生成并校验新配置，然后重启核心，局域网会断网几秒。失败会自动切回。`))return;
+  try{await saveGhProxy();await api('/api/coreswitch','POST',{core:to});swPoll()}catch(e){toast(e.message)}}
+function swPoll(){$('#sw-prog').classList.remove('hide');$('#sw-btn').disabled=true;clearInterval(SW_POLL);
+  const tick=async()=>{let j;try{j=await api('/api/coreupdate/status')}catch(e){return}
+    $('#sw-bar').style.width=(j.pct||0)+'%';$('#sw-log').textContent=(j.log||[]).join('\n');
+    if(!j.busy){clearInterval(SW_POLL);SW_POLL=null;toast(j.message||(j.ok?'已切换':'切换失败'));await loadState().catch(()=>{});loadCoreSw();
+      $('#sw-log').textContent=(j.ok?'✓ ':'✗ ')+(j.message||'')+'\n'+(j.log||[]).slice(1).join('\n')}};
+  tick();SW_POLL=setInterval(tick,1500)}
 function corePoll(){$('#core-prog').classList.remove('hide');['#core-btn','#core-rb','#core-chk'].forEach(x=>$(x).disabled=true);clearInterval(CORE_POLL);
   const tick=async()=>{let j;try{j=await api('/api/coreupdate/status')}catch(e){return}  // 核心重启时请求可能短暂失败
     $('#core-bar').style.width=(j.pct||0)+'%';$('#core-log').textContent=(j.log||[]).join('\n');
