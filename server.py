@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""mihomo-panel: 零依赖的 mihomo 旁路由管理后端 (Alpine Linux)"""
+"""Shunt 分流: 零依赖的旁路由透明代理管理后端 (Alpine Linux, mihomo / sing-box)"""
 import json, os, sys, signal, time, hashlib, hmac, secrets, subprocess, threading, re, socket, ssl, base64, copy, ipaddress, shutil
 import urllib.request, urllib.error, http.client, gzip, io
 from collections import deque
@@ -84,7 +84,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 6
-PANEL_VERSION = "6.6.2"
+PANEL_VERSION = "6.6.3"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -2601,7 +2601,7 @@ def sb_update_job(channel, gh, force=False):
 
 
 # ---------------------------------------------------------------- 面板在线更新
-PANEL_RAW = os.environ.get("PANEL_RAW", "https://raw.githubusercontent.com/Skycnhe/mihomo-panel/Hk001")
+PANEL_RAW = os.environ.get("PANEL_RAW", "https://raw.githubusercontent.com/Skycnhe/Shunt/Hk001")
 UPD_FILES = ["server.py", "index.html", "tproxy.sh", "selftest.sh", "init.d/mihomo", "init.d/mihomo-panel"]
 UPD_STATE = {"busy": False}
 
@@ -5199,7 +5199,7 @@ def gen_cert():
     if not sh("command -v openssl")[1]:
         sh("apk add --no-cache openssl", timeout=120)
     os.makedirs(PANEL_DIR, exist_ok=True)
-    code, out = sh(f"openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj '/CN=mihomo-panel' "
+    code, out = sh(f"openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj '/CN=Shunt' "
                    f"-keyout '{KEY}' -out '{CERT}'", timeout=120)
     if code == 0:
         os.chmod(KEY, 0o600)
@@ -6274,7 +6274,7 @@ if __name__ == "__main__":
         ctx.load_cert_chain(CERT, KEY)
         srv.socket = ctx.wrap_socket(srv.socket, server_side=True, do_handshake_on_connect=False)
         scheme = "https"
-    print(f"Shunt (mihomo-panel) listening on {scheme}://0.0.0.0:{PORT}", flush=True)
+    print(f"Shunt listening on {scheme}://0.0.0.0:{PORT}", flush=True)
     try:
         srv.serve_forever()
     finally:

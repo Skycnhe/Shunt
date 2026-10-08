@@ -23,10 +23,10 @@
 
 ```sh
 # 国内网络
-wget -qO- https://ghfast.top/https://raw.githubusercontent.com/Skycnhe/mihomo-panel/Hk001/install.sh | sh -s -- --cn
+wget -qO- https://ghfast.top/https://raw.githubusercontent.com/Skycnhe/Shunt/Hk001/install.sh | sh -s -- --cn
 
 # 国外网络
-wget -qO- https://raw.githubusercontent.com/Skycnhe/mihomo-panel/Hk001/install.sh | sh
+wget -qO- https://raw.githubusercontent.com/Skycnhe/Shunt/Hk001/install.sh | sh
 ```
 
 装完会显示面板地址（默认 `http://旁路由IP:8080`）和随机生成的初始密码，登录后可在「设置」里修改。
@@ -64,6 +64,8 @@ rc-service mihomo-panel restart    # 重启面板
 ```
 
 面板和内核都能在「设置」里在线更新，出问题可一键回滚。
+
+> 为兼容旧版，系统里的服务名和目录仍叫 `mihomo-panel`（`/opt/mihomo-panel`、`/etc/mihomo-panel`），升级不受影响。
 
 ## 端口
 

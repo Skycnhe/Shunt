@@ -3,8 +3,8 @@
 # Shunt 分流 —— mihomo 旁路由面板一键安装 (Alpine Linux)
 # 用法: sh install.sh [--cn] [--update-core] [--https] [--selftest]
 # 一键安装（无需先下载仓库）:
-#   国外: wget -qO- https://raw.githubusercontent.com/Skycnhe/mihomo-panel/Hk001/install.sh | sh
-#   国内: wget -qO- https://ghfast.top/https://raw.githubusercontent.com/Skycnhe/mihomo-panel/Hk001/install.sh | sh -s -- --cn
+#   国外: wget -qO- https://raw.githubusercontent.com/Skycnhe/Shunt/Hk001/install.sh | sh
+#   国内: wget -qO- https://ghfast.top/https://raw.githubusercontent.com/Skycnhe/Shunt/Hk001/install.sh | sh -s -- --cn
 #   --cn           国内网络：apk 换国内镜像，GitHub 下载走加速代理（默认 https://ghfast.top/，可用 GH_PROXY 覆盖）
 #   --update-core  重新下载最新 mihomo 核心
 #   --https        生成自签名证书并让面板使用 https://（也可之后在“设置”里开关）
@@ -13,7 +13,7 @@ set -e
 [ "$(id -u)" = 0 ] || { echo "请用 root 运行"; exit 1; }
 SRC="$(cd "$(dirname "$0")" && pwd)"
 GH="${GH_PROXY:-}"   # 国内可设置 GH_PROXY=https://ghfast.top/ 加速
-REPO="${PANEL_REPO:-Skycnhe/mihomo-panel}"; BRANCH="${PANEL_BRANCH:-Hk001}"
+REPO="${PANEL_REPO:-Skycnhe/Shunt}"; BRANCH="${PANEL_BRANCH:-Hk001}"
 CN=""; UPDATE_CORE=""; HTTPS=""; SELFTEST=""
 for a in "$@"; do
   case "$a" in

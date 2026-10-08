@@ -648,7 +648,7 @@ nav .ico{display:none}nav .more{display:none}
           <div class="opt"><div class="sp"><div class="t" title="越高文字越清楚">遮罩</div></div><div class="rng" style="width:min(220px,60vw)"><input type="range" min="0" max="90" id="bg-dim" oninput="bgSet()"><span id="bg-dim-v"></span></div></div>
         </div></div></div>
     <div data-sg="bak" class="card"><div class="row"><h3 class="sp" style="margin:0">面板更新</h3><span class="tag" id="pv"></span></div>
-      <div class="mut small" style="margin:4px 0 8px">从 GitHub 仓库 <code>Skycnhe/mihomo-panel</code>（分支 Hk001）获取最新面板文件：先经 mihomo 代理下载，失败再直连；国内可填加速地址。更新前自动校验并备份，可一键回滚。</div>
+      <div class="mut small" style="margin:4px 0 8px">从 GitHub 仓库 <code>Skycnhe/Shunt</code>（分支 Hk001）获取最新面板文件：先经 mihomo 代理下载，失败再直连；国内可填加速地址。更新前自动校验并备份，可一键回滚。</div>
       <div class="row"><input id="gh-proxy" placeholder="GitHub 加速（可空），如 https://ghfast.top/" class="sp"><button class="btn g" onclick="checkUpdate()" id="upd-chk">检查更新</button></div>
       <div id="upd-r" class="small mt"></div>
       <div class="row mt"><span class="sp"></span><button class="btn g" onclick="rollbackPanel()">回滚上一版本</button><button class="btn" id="upd-btn" onclick="doUpdate()">立即更新</button></div></div>
@@ -1395,7 +1395,7 @@ function saveTests(){const t=$('#tests').value.split('\n').map(l=>l.split('|')).
   if(!t.length)return toast('格式：名称|网址');saveSettings({tests:t},'已保存').then(testSites).catch(()=>{})}
 function saveGroupOpts(){saveSettings({sub_interval:+$('#sub-int').value},'已应用').catch(()=>{})}
 async function backup(){try{const j=await api('/api/backup');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(j,null,2)],{type:'application/json'}));
-  a.download='mihomo-panel-backup-'+new Date().toISOString().slice(0,10)+'.json';a.click()}catch(e){toast(e.message)}}
+  a.download='shunt-backup-'+new Date().toISOString().slice(0,10)+'.json';a.click()}catch(e){toast(e.message)}}
 async function restore(){const inp=$('#restore-file'),f=inp.files[0];inp.value='';if(!f)return;if(!confirm(`用「${f.name}」恢复设置？当前设置会先保存为配置快照。`))return;try{const j=JSON.parse(await f.text());const r=await api('/api/restore','POST',j);toast(r.message);loadState().then(fillSettings)}catch(e){toast('恢复失败：'+e.message)}}
 let _rz=0;addEventListener('resize',()=>{clearTimeout(_rz);_rz=setTimeout(()=>{drawChart();if(TAB==='统计')drawDays()},120)});
 async function start(){
