@@ -228,6 +228,7 @@ nav .ico{display:none}nav .more{display:none}
   .ctable td:nth-child(3),.ctable td:nth-child(7),.ctable td:nth-child(8){display:none}
   .ctable td[colspan]{grid-column:1/-1!important}
 }
+.btn.g.on{background:var(--pri);color:#fff}
 </style>
 </head>
 <body>
@@ -303,6 +304,7 @@ nav .ico{display:none}nav .more{display:none}
   <section data-tab="节点">
     <div class="row ntool" style="margin-bottom:12px"><span class="sp mut small">点击组标题展开 / 收起，点击节点切换；自动测速 / 故障转移组点选节点可“固定”</span>
       <div class="seg" id="nsort"><button data-v="default">默认顺序</button><button data-v="delay">按延迟</button></div>
+      <button class="btn g" id="hidedead" onclick="toggleDead()" title="隐藏测速超时的节点（未测速的节点和当前选中的节点照常显示）">隐藏超时</button>
       <button class="btn g" onclick="setAllOpen(true)">全部展开</button><button class="btn g" onclick="setAllOpen(false)">全部收起</button>
       <button class="btn g" id="test-all" onclick="testAll(this)">全部测速</button><button class="btn g" onclick="loadProxies()">刷新</button></div>
     <div class="nfilter"><input id="nf-q" placeholder="搜索节点 / 分组" oninput="NF.q=this.value.trim().toLowerCase();renderGroups()"><span id="nf-r" class="row" style="gap:6px;flex-wrap:wrap"></span></div>
@@ -675,14 +677,12 @@ const SEL='🚀 节点选择',G_MANUAL='\u{1F590}\uFE0F 手动选择';
 async function testGroupKeep(g){const fx=PROXIES[g]?.fixed;
   try{await core(`/group/${encodeURIComponent(g)}/delay?url=${encodeURIComponent(HCURL)}&timeout=5000`)}catch(e){}
   if(fx)try{await core('/proxies/'+encodeURIComponent(g),'PUT',{name:fx})}catch(e){}}
-async function loadPX(){const [a,b]=await Promise.all([core('/proxies'),core('/providers/proxies').catch(()=>({}))]);
-  const px=Object.assign({},a.proxies||{});
-  for(const pv of Object.values(b.providers||{}))for(const n of (pv.proxies||[]))if(n&&n.name&&!px[n.name])px[n.name]=n;
-  return px}
+// 面板合并 /proxies 与订阅节点，并用缓存补上核心暂时没有的延迟（重载 / 重启后核心记录会清空）
+async function loadPX(){const j=await api('/api/px');return j.proxies||{}}
 async function loadQS(){let px;try{px=await loadPX()}catch(e){$('#qs-card').classList.add('hide');return}
   const g=px[SEL];$('#qs-card').classList.toggle('hide',!g);if(!g)return;PROXIES=px;
   const ch=nowChain(SEL);$('#qs-now').textContent=ch.length?'当前：'+ch.join(' → '):'';
-  $('#qs').innerHTML=g.all.map((n,j)=>{const d=lastDelay(n),p=px[n]||{},sub=p.now?'→ '+p.now:(p.type==='LoadBalance'?'负载均衡':'');
+  $('#qs').innerHTML=g.all.map((n,j)=>{if(HIDEDEAD&&n!==g.now&&isDead(n))return '';const d=lastDelay(n),p=px[n]||{},sub=p.now?'→ '+p.now:(p.type==='LoadBalance'?'负载均衡':'');
     return `<div class="node ${n===g.now?'sel':''}" onclick="qsPick(${j})" title="${esc(n)}"><div class="n">${esc(n)}</div><div class="d"><span class="mut" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(sub)}</span><span class="${dcls(d)}">${dtxt(d)}</span></div></div>`}).join('')}
 async function qsPick(j){const n=PROXIES[SEL].all[j];try{await core('/proxies/'+encodeURIComponent(SEL),'PUT',{name:n});toast(SEL+' → '+n);loadQS()}catch(e){toast(e.message)}}
 async function qsTest(b){b.disabled=true;b.textContent='测速中…';
@@ -732,7 +732,9 @@ async function editDev(ip){const mac=DEVS[ip]?.mac;const cur=(STATE.devices||{})
   try{await api('/api/devices','PUT',{devices:d});STATE.devices=d;await loadDevs();toast('已保存');if(TAB==='统计')loadStats()}catch(e){toast(e.message)}}
 
 // 节点：可折叠的策略组卡片 + 策略选择
-let PROXIES={},NSORT=localStorage.getItem('mp_nsort')||'default',GL=[],GALL=[];
+let PROXIES={},NSORT=localStorage.getItem('mp_nsort')||'default',GL=[],GALL=[],HIDEDEAD=localStorage.getItem('mp_hidedead')==='1';
+const isDead=n=>!isGroup(n)&&(()=>{const d=lastDelay(n);return d!==undefined&&d<=0})();
+function toggleDead(){HIDEDEAD=!HIDEDEAD;localStorage.setItem('mp_hidedead',HIDEDEAD?'1':'0');renderGroups();if(TAB==='概览')loadQS()}
 let GOPEN=(()=>{try{return JSON.parse(localStorage.getItem('mp_gopen')||'{}')}catch{return {}}})();
 const HCURL='https://www.gstatic.com/generate_204';
 const GT={Selector:'手动选择',URLTest:'自动测速',Fallback:'故障转移',LoadBalance:'负载均衡',Relay:'链式代理'};
@@ -742,9 +744,13 @@ const isGroup=n=>!!(PROXIES[n]&&PROXIES[n].all);
 const BIG=12;
 async function loadProxies(){document.querySelectorAll('#nsort button').forEach(b=>{b.classList.toggle('on',b.dataset.v===NSORT);b.onclick=()=>{NSORT=b.dataset.v;localStorage.setItem('mp_nsort',NSORT);renderGroups()}});
   try{PROXIES=await loadPX();renderGroups()}catch(e){$('#groups').innerHTML=`<div class="card bad">${esc(e.message)}</div>`;$('#policies').innerHTML=''}}
-function rawDelay(n){const p=PROXIES[n];if(!p)return undefined;const h=(p.history&&p.history.length)?p.history:(p.extra?.[HCURL]?.history||[]);return h.length?h[h.length-1].delay:undefined}
+function rawDelay(n){const p=PROXIES[n];if(!p)return undefined;if(p._d!==undefined)return p._d;
+  let best;[p.history||[],...Object.values(p.extra||{}).map(x=>x?.history||[])].forEach(h=>{const e=h[h.length-1];if(e&&(!best||String(e.time||'')>String(best.time||'')))best=e});
+  return best?best.delay:undefined}
 // 负载均衡组没有单一的“当前节点”，组延迟取成员中最快的可用节点；成员都没测过时再用组自身的记录
+// 选择 / 自动测速 / 故障转移组的延迟 = 当前实际使用节点的延迟（组自身的记录很少更新，会忽有忽无）
 function lastDelay(n,_d){const p=PROXIES[n];if(!p)return undefined;
+  if(p.all&&p.type!=='LoadBalance'&&p.now&&PROXIES[p.now]&&(_d||0)<5){const d=lastDelay(p.now,(_d||0)+1);if(d!==undefined)return d}
   if(p.type==='LoadBalance'&&(_d||0)<4){let best,tested=false;for(const m of (p.all||[])){const d=lastDelay(m,(_d||0)+1);if(d===undefined)continue;tested=true;if(d>0&&(best===undefined||d<best))best=d}
     if(tested)return best===undefined?0:best}
   return rawDelay(n)}
@@ -777,11 +783,12 @@ function renderGroups(){
   $('#groups').innerHTML=GL.map((g,i)=>{const p=PROXIES[g],m=(STATE.group_meta||{})[g]||{};
     const all0=NSORT==='delay'?p.all.slice().sort((a,b)=>key(a)-key(b)):p.all.slice();GALL[i]=all0;
     if(policyOnly(g))return '';
-    const all=filt?all0.filter(nfVisible):all0;if(filt&&!all.length&&!(NF.q&&g.toLowerCase().includes(NF.q)))return '';
+    const vis=filt?all0.filter(nfVisible):all0;if(filt&&!vis.length&&!(NF.q&&g.toLowerCase().includes(NF.q)))return '';
+    const all=HIDEDEAD?vis.filter(n=>n===p.now||!isDead(n)):vis,hid=vis.length-all.length;
     const ch=nowChain(g),dl=lastDelay(g),lb=p.type==='LoadBalance';
     const sub=lb?`策略：<b>${esc(LBS[m.strategy]||m.strategy||'-')}</b>`:ch.length?'→ <b>'+ch.map(esc).join(' → ')+'</b>':'';
     const nodesN=all.filter(n=>!isGroup(n)).length,groupsN=all.length-nodesN;
-    const cnt=[nodesN?nodesN+' 个节点':'',groupsN?groupsN+' 个分组':''].filter(Boolean).join(' · ');
+    const cnt=[nodesN?nodesN+' 个节点':'',groupsN?groupsN+' 个分组':'',hid?`<span class="bad">已隐藏 ${hid} 个超时</span>`:''].filter(Boolean).join(' · ');
     const pin=p.fixed?`<span class="tag pin" title="点击取消固定，恢复自动选择" onclick="event.stopPropagation();unfix(${i})">📌 已固定 ✕</span>`:'';
     const ico=p.icon?`<img class="gico" src="${esc(p.icon)}" alt="" onerror="this.remove()">`:'';
     const dots=all.slice(0,80).map(n=>`<i class="${dcls(lastDelay(n))==='mut'?'':dcls(lastDelay(n))}"></i>`).join('');
@@ -794,6 +801,7 @@ function renderGroups(){
         const s2=sg?`<div class="sub2">${esc(GT[PROXIES[n].type]||'')}${PROXIES[n].now?' → '+esc(PROXIES[n].now):''}</div>`:'';
         return `<div class="node ${n===p.now&&!lb?'sel':''} ${lb?'lbm':''}" onclick="pick(${i},${j})" title="${esc(n)}">
         <div class="n">${sg?'📁 ':''}${esc(n)}</div>${s2}<div class="d"><span class="mut">${esc(sg?'分组':PROXIES[n]?.type||'')}</span> <span class="${dcls(d)}">${dtxt(d)}</span></div></div>`}).join('')}</div></div></div>`}).join('')||(filt?'<div class="card mut">没有匹配的节点</div>':'<div class="card mut">还没有节点，先去“订阅”添加订阅或导入节点</div>');
+  $('#hidedead').classList.toggle('on',HIDEDEAD);$('#hidedead').textContent=HIDEDEAD?'显示超时':'隐藏超时';
   renderPolicies()}
 function renderPolicies(){const sel=GL.filter(g=>g!=='GLOBAL'&&PROXIES[g].type==='Selector'&&(PROXIES[g].all||[]).length>1);
   $('#pol-card').classList.toggle('hide',!sel.length);
@@ -906,7 +914,7 @@ async function addSub(){const name=$('#sub-name').value.trim(),url=$('#sub-url')
 async function updSub(n,btn){btn.disabled=true;btn.textContent='更新中…';try{const j=await api('/api/subs/update','POST',{name:decodeURIComponent(n)});toast(j.message)}catch(e){toast(e.message)}btn.disabled=false;btn.textContent='更新';loadSubs()}
 async function delSub(n){if(!confirm('删除订阅 '+decodeURIComponent(n)+'？'))return;try{await api('/api/subs','DELETE',{name:decodeURIComponent(n)});toast('已删除');loadSubs()}catch(e){toast(e.message)}}
 async function renderNodes(){let px={};try{px=await loadPX()}catch(e){}
-  $('#mynodes').innerHTML=(STATE.nodes||[]).map(n=>{const h=px[n.name]?.history||[];const d=h.length?h[h.length-1].delay:undefined;
+  $('#mynodes').innerHTML=(STATE.nodes||[]).map(n=>{const q=px[n.name]||{},h=q.history||[];const d=q._d!==undefined?q._d:h.length?h[h.length-1].delay:undefined;
     return `<tr><td class="w">${esc(n.name)}</td><td>${esc(n.type)}</td><td class="w">${esc(n.server)}:${esc(n.port)}</td><td class="${dcls(d)}">${dtxt(d)}</td>
     <td style="text-align:right"><button class="btn g sm" onclick="testNode('${encodeURIComponent(n.name)}',this)">测速</button> <button class="btn r sm" onclick="delNode('${encodeURIComponent(n.name)}')">删除</button></td></tr>`}).join('')||'<tr><td class="mut">暂无手动节点</td></tr>'}
 async function importNodes(){const links=$('#node-links').value.trim();if(!links)return toast('请粘贴节点链接');

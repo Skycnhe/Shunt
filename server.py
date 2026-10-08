@@ -83,7 +83,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 6
-PANEL_VERSION = "6.4"
+PANEL_VERSION = "6.5"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -1170,6 +1170,7 @@ def reload_core(prev=None):
             return False, "配置校验失败，已撤销本次修改：" + err
         os.replace(tmp, final)
     WD["manual_stop"] = False
+    retest_soon()
     if sb:
         return sb_hot_reload()
     code, body = core("PUT", "/configs?force=true", {"path": final}, timeout=30)
@@ -3476,6 +3477,105 @@ def check_nodes():
         notify("⚠️ 节点选择中的所有节点均测速超时，请检查订阅或网络" if all_down else "✅ 节点已恢复可用")
 
 
+# ---------------------------------------------------------------- 节点延迟缓存
+# 核心只在内存里保存最近几次测速记录：重载配置、重启、切换内核后全部清空，订阅节点的记录又分散在
+# /proxies 与 /providers/proxies 两处，前端轮询时就会「一会有一会没有」。面板把每个节点最近一次的
+# 测速结果（任意测速地址中时间最新的一条）缓存到文件，核心暂时没有记录时用缓存补上。
+DELAY_FILE = os.path.join(PANEL_DIR, "delays.json")
+DELAYS = {"data": None, "saved": 0, "dirty": False}
+RETEST = {"pending": False, "last": 0}
+
+
+def _hist_last(p):
+    """节点所有测速记录（history 与各地址的 extra.history）里时间最新的一条 → (延迟, 时间串)"""
+    best = None
+    lists = [p.get("history") or []] + [v.get("history") or [] for v in (p.get("extra") or {}).values() if isinstance(v, dict)]
+    for h in lists:
+        if h and isinstance(h[-1], dict) and "delay" in h[-1]:
+            e = h[-1]
+            if best is None or str(e.get("time") or "") > best[1]:
+                best = (int(e.get("delay") or 0), str(e.get("time") or ""))
+    return best
+
+
+def delay_merge(px):
+    """用核心的最新记录更新缓存，并给每个节点写入 _d（延迟）/ _dt（测速时间）"""
+    if DELAYS["data"] is None:
+        DELAYS["data"] = read_json(DELAY_FILE, {}) or {}
+    data, now = DELAYS["data"], int(time.time())
+    for name, p in px.items():
+        if p.get("all") is not None:  # 策略组的延迟取当前节点，前端处理
+            continue
+        r = _hist_last(p)
+        if r:
+            old = data.get(name)
+            if not old or old.get("ts") != r[1]:
+                data[name] = {"d": r[0], "ts": r[1], "at": now}
+                DELAYS["dirty"] = True
+        c = data.get(name)
+        if c:
+            p["_d"], p["_dt"] = c["d"], c["at"]
+    if px:
+        for n in [n for n in data if n not in px]:  # 节点已不存在
+            data.pop(n)
+            DELAYS["dirty"] = True
+    if DELAYS["dirty"] and now - DELAYS["saved"] > 30:
+        try:
+            write_json(DELAY_FILE, data)
+            DELAYS.update(saved=now, dirty=False)
+        except Exception:
+            pass
+    return px
+
+
+def retest_soon(wait=6):
+    """重载 / 重启后核心的测速记录清空：稍后在后台用「🖐️ 手动选择」（select 组，不会清除 url-test 的固定）测一遍全部节点"""
+    if RETEST["pending"] or time.time() - RETEST["last"] < 60:
+        return
+    RETEST["pending"] = True
+
+    def run():
+        try:
+            for _ in range(20):
+                time.sleep(wait if _ == 0 else 3)
+                if core_alive():
+                    break
+            if core_json("/proxies/" + quote(G_MANUAL), timeout=5):
+                core("GET", f"/group/{quote(G_MANUAL)}/delay?url={quote(HC)}&timeout=5000", timeout=60)
+            RETEST["last"] = time.time()
+            proxies_merged()
+        except Exception:
+            pass
+        finally:
+            RETEST["pending"] = False
+    threading.Thread(target=run, daemon=True).start()
+
+
+def proxies_merged():
+    """/proxies + 订阅节点（mihomo 在 /providers/proxies，sing-box 由面板拼出）合并成一份，并补上缓存的延迟"""
+    a = core_json("/proxies", timeout=8)
+    if a is None:
+        return None
+    px = dict(a.get("proxies") or {})
+    try:
+        prov = prov_json().get("providers") or {}
+    except Exception:
+        prov = {}
+    for pv in prov.values():
+        for n in pv.get("proxies") or []:
+            if n and n.get("name"):
+                cur = px.get(n["name"])
+                if not cur:
+                    px[n["name"]] = n
+                elif not _hist_last(cur) and _hist_last(n):  # 同名节点：保留有测速记录的那份
+                    cur["history"], cur["extra"] = n.get("history") or [], n.get("extra") or {}
+    delay_merge(px)
+    nodes = [p for p in px.values() if p.get("all") is None and p.get("type") not in ("Direct", "Reject", "RejectDrop", "Pass", "Compatible", "Dns")]
+    if nodes and not any("_d" in p for p in nodes):  # 一个延迟都没有（刚启动 / 刚重载）：后台补测
+        retest_soon(1)
+    return px
+
+
 def prov_json():
     """订阅节点（mihomo /providers/proxies 格式）；sing-box 由面板按缓存拼出同样的结构"""
     if active_core() == "singbox":
@@ -5662,6 +5762,11 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/speedtest" and m == "GET":
             via = q1(parse_qs(q), "via", default="proxy")
             return self.send(200, speed_test(via == "proxy"))
+        if p == "/api/px" and m == "GET":
+            px = proxies_merged()
+            if px is None:
+                return self.send(502, {"message": "核心未运行或无法连接"})
+            return self.send(200, {"proxies": px, "retesting": RETEST["pending"]})
         if p == "/api/coreswitch" and m == "GET":
             d = load()
             if active_core(d) == "singbox" and not SB_STATE["warn"]:
@@ -5938,6 +6043,8 @@ class H(BaseHTTPRequestHandler):
             if act in ("restart", "stop", "start"):
                 WD["manual_stop"] = act == "stop"
                 code, out = sh(SVC + " " + act, timeout=90)
+                if act != "stop":
+                    retest_soon()
                 return self.reply(code == 0, out)
             if act == "upgrade" and active_core() == "singbox":
                 return self.send(400, {"message": "请在 设置 → 核心 → 内核更新 里更新 sing-box"})
