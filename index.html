@@ -247,10 +247,10 @@ pre{background:var(--pre);padding:12px;border-radius:14px;max-height:65vh;overfl
    <div class="cols">
     <div>
     <div class="card"><div class="opt" style="padding-top:0"><div class="sp"><div class="t" style="font-size:16px">地区分组</div>
-        <div class="dsc">按节点名称识别地区，只为确实有节点的地区生成「🇯🇵 日本自动优选」（自动测速）与「⚖️ 日本负载均衡」（2 个及以上节点）分组。「🚀 节点选择」只包含：各地区自动优选 → 各地区负载均衡 → 🖐️ 手动选择 → ⚡ 全局自动选择 → 🏠 直连。</div></div>
+        <div class="dsc">按节点名称识别地区，只为确实有节点的地区生成「🇯🇵 日本自动优选」（自动测速）与「⚖️ 日本负载均衡」分组。「🚀 节点选择」只包含：各地区自动优选 → 各地区负载均衡 → 🖐️ 手动选择 → ⚡ 全局自动选择 → 🏠 直连。</div></div>
         <label class="sw"><input type="checkbox" id="gc-on"><span></span></label></div>
       <div id="gc-box">
-      <div class="opt"><div class="sp"><div class="t">「负载均衡」组</div><div class="dsc">地区有 2 个及以上节点时生成，如 <code>⚖️ 香港负载均衡</code>、<code>⚖️ 日本负载均衡</code>；「自动优选」组始终生成（url-test）</div></div><label class="sw sm"><input type="checkbox" id="gc-lb"><span></span></label></div>
+      <div class="opt"><div class="sp"><div class="t">「负载均衡」组</div><div class="dsc">每个有节点的地区都生成，如 <code>⚖️ 香港负载均衡</code>、<code>⚖️ 日本负载均衡</code>；「自动优选」组始终生成（url-test）</div></div><label class="sw sm"><input type="checkbox" id="gc-lb"><span></span></label></div>
       <div class="opt"><div class="sp"><div class="t">负载均衡策略</div><div class="dsc" id="gc-st-d"></div></div>
         <div class="seg" id="gc-st"><button data-v="consistent-hashing">一致性哈希</button><button data-v="round-robin">轮询</button><button data-v="sticky-sessions">粘性会话</button></div></div>
       <div class="opt"><div class="sp"><div class="t">识别扩展地区</div><div class="dsc">韩国、英国、德国、法国、荷兰、加拿大、澳大利亚、俄罗斯、印度、土耳其、东南亚、南美等</div></div><label class="sw sm"><input type="checkbox" id="gc-extra"><span></span></label></div>

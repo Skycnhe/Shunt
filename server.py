@@ -738,7 +738,7 @@ def build_config(d, strict=False):
     for rname, flt, exc, matched, total, unknown in region_plan(d, names, use):
         label = region_label(rname)[1]
         variants = [(auto_name(rname), "url-test", autos)]
-        if gc["lb"] and (total >= 2 or (unknown and use)):
+        if gc["lb"]:  # 每个有节点的地区都生成「⚖️ <地区>负载均衡」
             variants.append((lb_name(rname), "load-balance", lbs))
         for gname, t, bucket in variants:
             g = with_src(dict({"name": gname}, **group_opts(t, gc)), matched)
