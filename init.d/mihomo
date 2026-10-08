@@ -1,4 +1,5 @@
 #!/sbin/openrc-run
+# SPDX-License-Identifier: GPL-3.0-or-later
 # 代理核心：按 /etc/mihomo-panel/core 选择 mihomo 或 sing-box（面板「设置 → 核心 → 内核」切换）
 CORE=$(cat /etc/mihomo-panel/core 2>/dev/null)
 name="mihomo"

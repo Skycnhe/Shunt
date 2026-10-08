@@ -1,4 +1,5 @@
 #!/sbin/openrc-run
+# SPDX-License-Identifier: GPL-3.0-or-later
 name="mihomo-panel"
 description="Shunt - mihomo side-router panel"
 command="/usr/bin/python3"
