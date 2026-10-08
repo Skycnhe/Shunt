@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
 # mihomo 旁路由透明代理规则 (nftables)。
 # 用法: tproxy.sh start|dns|stop|apply|status
 #   start  TProxy 模式：TCP/UDP 打标记转发到 mihomo 的 7893，DNS 劫持到 1053

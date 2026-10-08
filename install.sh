@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Shunt 分流 —— mihomo 旁路由面板一键安装 (Alpine Linux)
 # 用法: sh install.sh [--cn] [--update-core] [--https] [--selftest]
 # 一键安装（无需先下载仓库）:

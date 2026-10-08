@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
 """mihomo-panel: 零依赖的 mihomo 旁路由管理后端 (Alpine Linux)"""
 import json, os, sys, signal, time, hashlib, hmac, secrets, subprocess, threading, re, socket, ssl, base64, copy, ipaddress, shutil
 import urllib.request, urllib.error, http.client, gzip, io

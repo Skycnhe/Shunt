@@ -69,6 +69,19 @@ rc-service mihomo-panel restart    # 重启面板
 
 8080 面板 · 7890 HTTP/SOCKS 代理 · 7893 TProxy · 1053 DNS · 9090 控制器（仅本机）
 
+## 特别鸣谢
+
+- [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo)：代理核心
+- [SagerNet/sing-box](https://github.com/SagerNet/sing-box)：代理核心
+- [MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat)：GeoIP / GeoSite 数据与规则集
+- [AdGuard DNS filter](https://github.com/AdguardTeam/AdGuardSDNSFilter)、[anti-AD](https://github.com/privacy-protection-tools/anti-AD)：广告拦截规则
+- [ghfast.top](https://ghfast.top/)：国内 GitHub 下载加速
+- [Alpine Linux](https://alpinelinux.org/)：运行系统
+
+## 许可证
+
+本项目基于 [GNU General Public License v3.0 or later](LICENSE) 开源。
+
 ---
 
 更新记录和详细说明见 [CHANGELOG.md](CHANGELOG.md)。

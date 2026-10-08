@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
 # 用真实 mihomo 核心校验面板生成的配置（多种场景）。
 # 用法: sh selftest.sh            （设备上默认使用 /usr/local/bin/mihomo 与 /etc/mihomo 下的 GEO 数据）
 #       MIHOMO_BIN=/tmp/mihomo GEO_DIR=/tmp/geo sh selftest.sh
