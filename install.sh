@@ -83,6 +83,7 @@ done
 
 echo ">> 安装面板"
 cp "$SRC/server.py" "$SRC/index.html" "$SRC/tproxy.sh" "$SRC/selftest.sh" /opt/mihomo-panel/
+for f in icon.svg icon-180.png icon-512.png; do [ -f "$SRC/$f" ] && cp "$SRC/$f" /opt/mihomo-panel/; done
 chmod +x /opt/mihomo-panel/tproxy.sh /opt/mihomo-panel/selftest.sh
 cp "$SRC/init.d/mihomo" "$SRC/init.d/mihomo-panel" /etc/init.d/
 chmod +x /etc/init.d/mihomo /etc/init.d/mihomo-panel

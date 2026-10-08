@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """mihomo-panel: 零依赖的 mihomo 旁路由管理后端 (Alpine Linux)"""
 import json, os, sys, signal, time, hashlib, hmac, secrets, subprocess, threading, re, socket, ssl, base64, copy, ipaddress, shutil
-import urllib.request, urllib.error, http.client
+import urllib.request, urllib.error, http.client, gzip
 from collections import deque
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, urlsplit, parse_qs, unquote, quote
@@ -21,7 +21,7 @@ MAX_BODY = 32 * 2**20  # 请求体上限 32MB（备份恢复可能较大）
 CTRL = f"http://{CTRL_HOST}:{CTRL_PORT}"
 MIXED = 7890
 WD_INTERVAL = int(os.environ.get("PANEL_WD_INTERVAL", "30"))  # 看门狗检查间隔（秒）
-LOCK = threading.Lock()
+LOCK = threading.RLock()  # 可重入：load() 内迁移写盘时可能已在 update() 的锁内
 
 SVC = os.environ.get("PANEL_SVC", "rc-service mihomo")  # 核心服务控制命令（测试环境可覆盖）
 LOG_FILES = [x for x in os.environ.get("PANEL_LOGS", "/var/log/mihomo.log,/var/log/mihomo-panel.log").split(",") if x]
@@ -62,7 +62,7 @@ TUN_DEFAULT = {"stack": "mixed", "device": "Meta", "auto_redirect": True, "stric
 GROUPS_DEFAULT = {"type": "url-test", "lb": True, "auto": True, "strategy": "consistent-hashing", "interval": 300,
                   "tolerance": 50, "url": "https://www.gstatic.com/generate_204", "extra": True, "other": True, "lazy": True}
 SCHED_DEFAULT = {"sub_update": "", "core_restart": "", "geo_update": "", "latency": 0}
-DEFAULT = {"password": "admin", "secret": "", "mode": "rule", "tproxy": True, "subs": [], "rules": [],
+DEFAULT = {"password": "admin", "pw_hash": "", "pw_default": False, "secret": "", "mode": "rule", "tproxy": True, "subs": [], "rules": [],
            "rulesets": [], "bypass": [], "tests": None, "sub_interval": 86400, "region_groups": True,
            "nodes": [], "ipv6": False, "https": False, "watchdog": True, "tg_token": "", "tg_chat": "",
            "proxy_mode": "", "tun": TUN_DEFAULT, "log_limit": 5, "adblock": AB_DEFAULT, "dns": DNS_DEFAULT,
@@ -83,7 +83,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 6
-PANEL_VERSION = "6.2"
+PANEL_VERSION = "6.3"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -138,6 +138,11 @@ def load():
     if not d["tests"]:
         d["tests"] = [dict(t) for t in TESTS]
     dirty = False
+    if d.get("password") and not d.get("pw_hash"):  # 旧版明文密码 → PBKDF2 哈希，明文不再落盘
+        d["pw_default"] = d["password"] == "admin"
+        d["pw_hash"] = pw_hash(d["password"])
+        d["password"] = ""
+        dirty = True
     if not d["secret"]:
         d["secret"] = secrets.token_hex(16)
         dirty = True
@@ -146,7 +151,8 @@ def load():
         d["schema"] = SCHEMA
         dirty = True
     if dirty:
-        save(d)
+        with LOCK:
+            save(d)
     return d
 
 
@@ -256,7 +262,7 @@ def update(fn):
 
 HISTORY_FILE = os.path.join(PANEL_DIR, "history.json")
 HISTORY_MAX = 10
-HISTORY_SKIP = {"password", "secret", "devices", "https", "schema", "sysopt", "sysopt_orig", "sysopt_mods"}
+HISTORY_SKIP = {"password", "pw_hash", "pw_default", "secret", "devices", "https", "schema", "sysopt", "sysopt_orig", "sysopt_mods"}
 KEY_LABEL = {"subs": "订阅", "nodes": "节点", "rules": "自定义规则", "rulesets": "规则集", "dns": "DNS", "adblock": "广告拦截",
              "custom_groups": "自定义策略组", "groups_cfg": "地区分组", "region_groups": "地区分组", "proxy_mode": "代理方式",
              "tun": "TUN", "ipv6": "IPv6", "bypass": "绕过设备", "mode": "代理模式", "sniffer": "域名嗅探", "schedule": "定时任务",
@@ -1102,11 +1108,25 @@ def check_config(path):
 DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # 访问本机控制器绝不走系统代理
 
 
+_SECRET = [None, ""]
+
+
+def ctrl_secret():
+    """控制器密钥按 data.json 修改时间缓存：每秒的实时请求不再反复读取解析整份配置"""
+    try:
+        st = os.stat(DATA_FILE)
+        key = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = None
+    if key is None or _SECRET[0] != key:
+        _SECRET[:] = [key, load()["secret"]]
+    return _SECRET[1]
+
+
 def core(method, path, body=None, timeout=10):
-    d = load()
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(CTRL + path, data=data, method=method,
-                                 headers={"Authorization": "Bearer " + d["secret"], "Content-Type": "application/json"})
+                                 headers={"Authorization": "Bearer " + ctrl_secret(), "Content-Type": "application/json"})
     try:
         with DIRECT_OPENER.open(req, timeout=timeout) as r:
             return r.status, r.read()
@@ -1836,8 +1856,107 @@ def delay_test():
     return out
 
 
-def token(d):
-    return hashlib.sha256((d["password"] + d["secret"]).encode()).hexdigest()
+# ---------------------------------------------------------------- 认证：PBKDF2 密码 + 随机会话
+PW_ITER = 60000  # 低端 ARM 上约 0.3 秒，只在登录 / 改密时计算
+SESS_FILE = os.path.join(PANEL_DIR, "sessions.json")
+SESS_TTL = 30 * 86400  # 会话 30 天无访问即过期（每次访问顺延）
+SESS_MAX = 50
+SESS, SESS_LOCK, TICKETS = {}, threading.Lock(), {}
+
+
+def pw_hash(pw, salt=None):
+    salt = salt or secrets.token_hex(16)
+    h = hashlib.pbkdf2_hmac("sha256", pw.encode(), bytes.fromhex(salt), PW_ITER).hex()
+    return f"pbkdf2_sha256${PW_ITER}${salt}${h}"
+
+
+def pw_check(pw, d):
+    st = d.get("pw_hash") or ""
+    if not st:
+        return hmac.compare_digest(pw.encode(), (d.get("password") or "admin").encode())
+    try:
+        _, it, salt, h = st.split("$")
+        return hmac.compare_digest(hashlib.pbkdf2_hmac("sha256", pw.encode(), bytes.fromhex(salt), int(it)).hex(), h)
+    except Exception:
+        return False
+
+
+def _tk(tok):
+    return hashlib.sha256(str(tok).encode()).hexdigest()
+
+
+def sess_load():
+    try:
+        with open(SESS_FILE) as f:
+            SESS.update({k: v for k, v in json.load(f).items() if isinstance(v, dict) and v.get("exp", 0) > time.time()})
+    except Exception:
+        pass
+
+
+def sess_save():
+    try:
+        tmp = SESS_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(SESS, f)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, SESS_FILE)
+    except Exception as e:
+        print("session save error", e, flush=True)
+
+
+def sess_new(ip="", ua=""):
+    tok = secrets.token_urlsafe(32)
+    now = time.time()
+    with SESS_LOCK:
+        for k in [k for k, v in SESS.items() if v.get("exp", 0) <= now]:
+            SESS.pop(k)
+        while len(SESS) >= SESS_MAX:  # 只保留最近的会话
+            SESS.pop(min(SESS, key=lambda k: SESS[k].get("seen", 0)))
+        SESS[_tk(tok)] = {"t": int(now), "seen": int(now), "exp": int(now + SESS_TTL), "ip": ip, "ua": ua[:120]}
+        sess_save()
+    return tok
+
+
+def sess_ok(tok):
+    if not tok:
+        return False
+    k, now = _tk(tok), time.time()
+    with SESS_LOCK:
+        e = SESS.get(k)
+        if not e or e.get("exp", 0) <= now:
+            SESS.pop(k, None)
+            return False
+        if now - e.get("seen", 0) > 3600:  # 每小时最多落盘一次，避免频繁写闪存
+            e["seen"], e["exp"] = int(now), int(now + SESS_TTL)
+            sess_save()
+    return True
+
+
+def sess_drop(tok=None, keep=None):
+    """tok：注销该会话；tok 为空：注销全部（keep 除外）"""
+    with SESS_LOCK:
+        if tok:
+            SESS.pop(_tk(tok), None)
+        else:
+            kk = _tk(keep) if keep else None
+            for k in [k for k in SESS if k != kk]:
+                SESS.pop(k)
+        sess_save()
+
+
+def ticket_new():
+    """日志流（EventSource 无法带请求头）用的一次性票据，60 秒有效"""
+    now = time.time()
+    for k in [k for k, v in TICKETS.items() if v <= now]:
+        TICKETS.pop(k, None)
+    t = secrets.token_urlsafe(18)
+    TICKETS[t] = now + 60
+    return t
+
+
+def ticket_use(t):
+    exp = TICKETS.pop(str(t or ""), 0)
+    return exp > time.time()
 
 
 # ---------------------------------------------------------------- Telegram 通知
@@ -3551,17 +3670,85 @@ def rename_policy(d, old, new):
     return map_refs(d, {old: new}, drop={old} if new == G_SEL else ())
 
 
+# ---------------------------------------------------------------- 静态资源：gzip + ETag
+STATIC = {}
+STATIC_TYPES = {"index.html": "text/html", "icon.svg": "image/svg+xml", "icon-180.png": "image/png", "icon-512.png": "image/png"}
+MANIFEST = {"name": "Shunt 分流", "short_name": "Shunt", "description": "mihomo 旁路由面板", "start_url": "/", "scope": "/",
+            "display": "standalone", "background_color": "#f2f2f7", "theme_color": "#0a84ff",
+            "icons": [{"src": "/icon-180.png", "sizes": "180x180", "type": "image/png"},
+                      {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}]}
+
+
+def static_file(name):
+    """返回 (原始, gzip, etag, 类型)；按文件修改时间缓存。图标文件缺失时（旧版面板在线更新上来）从 index.html 内嵌的图标取"""
+    path = os.path.join(BASE, name)
+    try:
+        st = os.stat(path)
+        key = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        if not name.endswith(".png"):
+            return None
+        idx = static_file("index.html")
+        m = re.search(rb'rel="apple-touch-icon" href="data:image/png;base64,([A-Za-z0-9+/=]+)"', idx[0]) if idx else None
+        if not m:
+            return None
+        raw = base64.b64decode(m.group(1))
+        return raw, None, '"i%s"' % hashlib.md5(raw).hexdigest()[:16], "image/png"
+    c = STATIC.get(name)
+    if c and c[0] == key:
+        return c[1]
+    with open(path, "rb") as f:
+        raw = f.read()
+    gz = gzip.compress(raw, 6) if not name.endswith(".png") else None
+    val = (raw, gz, '"%s"' % hashlib.md5(raw).hexdigest()[:16], STATIC_TYPES.get(name, "application/octet-stream"))
+    STATIC[name] = (key, val)
+    return val
+
+
 # ---------------------------------------------------------------- HTTP
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def gzip_ok(self):
+        return "gzip" in (self.headers.get("Accept-Encoding") or "")
+
     def send(self, code, obj, ctype="application/json"):
         body = obj if isinstance(obj, bytes) else json.dumps(obj, ensure_ascii=False).encode()
+        zipped = len(body) > 1400 and ctype in ("application/json", "text/html", "text/plain") and self.gzip_ok()
+        if zipped:  # 连接列表、节点列表等较大的 JSON 压缩后通常只有 1/5～1/10
+            body = gzip.compress(body, 5)
         self.send_response(code)
         self.send_header("Content-Type", ctype + "; charset=utf-8")
+        if zipped:
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def send_static(self, name):
+        f = static_file(name)
+        if not f:
+            return self.send(404, {"message": "not found"})
+        raw, gz, etag, ctype = f
+        if self.headers.get("If-None-Match") == etag:  # 浏览器已有最新版本，不再传输
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            return
+        body = gz if gz is not None and self.gzip_ok() else raw
+        self.send_response(200)
+        self.send_header("Content-Type", ctype + ("; charset=utf-8" if ctype.startswith("text/") else ""))
+        if body is gz:
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("ETag", etag)
+        # 页面每次打开都向服务器确认（未变化时只回 304），面板更新后立即生效；图标缓存 1 天
+        self.send_header("Cache-Control", "no-cache" if name == "index.html" else "public, max-age=86400")
         self.end_headers()
         self.wfile.write(body)
 
@@ -3580,8 +3767,11 @@ class H(BaseHTTPRequestHandler):
         except Exception:
             return {}
 
-    def authed(self, tok=None):
-        return hmac.compare_digest(str(tok if tok is not None else self.headers.get("X-Token") or ""), token(load()))
+    def tok(self):
+        return self.headers.get("X-Token") or ""
+
+    def authed(self):
+        return sess_ok(self.tok())
 
     def do_GET(self): self.route("GET")
     def do_POST(self): self.route("POST")
@@ -3592,9 +3782,10 @@ class H(BaseHTTPRequestHandler):
     def route(self, m):
         u = urlparse(self.path)
         p = u.path
-        if m == "GET" and (p == "/" or p == "/index.html"):
-            with open(os.path.join(BASE, "index.html"), "rb") as f:
-                return self.send(200, f.read(), "text/html")
+        if m == "GET" and (p in ("/", "/index.html") or p.lstrip("/") in STATIC_TYPES):
+            return self.send_static("index.html" if p == "/" else p.lstrip("/"))
+        if m == "GET" and p == "/manifest.webmanifest":
+            return self.send(200, json.dumps(MANIFEST, ensure_ascii=False).encode(), "application/manifest+json")
         if p == "/api/login" and m == "POST":
             ip = self.client_address[0]
             left = login_blocked(ip)
@@ -3606,17 +3797,18 @@ class H(BaseHTTPRequestHandler):
                 pw = str(bd.get("password") or "") if isinstance(bd, dict) else ""
             except ValueError as e:
                 return self.send(413, {"message": str(e)})
-            if hmac.compare_digest(pw, d["password"]):
+            if pw_check(pw, d):
                 FAILS.pop(ip, None)
-                return self.send(200, {"token": token(d)})
+                return self.send(200, {"token": sess_new(ip, self.headers.get("User-Agent") or ""),
+                                       "must_change": bool(d.get("pw_default"))})
             login_failed(ip)
             n = FAILS[ip][0]
             return self.send(401, {"message": "密码错误" + (f"，还可尝试 {5 - n} 次" if n < 5 else "，已锁定 10 分钟")})
         if not p.startswith("/api/"):
             return self.send(404, {"message": "not found"})
-        if p == "/api/logstream" and m == "GET":  # EventSource 无法带自定义头，此接口单独允许 ?token=
+        if p == "/api/logstream" and m == "GET":  # EventSource 无法带自定义头，用 /api/logticket 换来的一次性票据
             qs = parse_qs(u.query)
-            if not self.authed(q1(qs, "token")):
+            if not ticket_use(q1(qs, "ticket")):
                 return self.send(401, {"message": "未登录"})
             return self.logstream(q1(qs, "level", default="info"))
         if not self.authed():
@@ -3923,7 +4115,7 @@ class H(BaseHTTPRequestHandler):
             has = bool(d["subs"] or d["nodes"])
             cfg = build_config(d)
             groups = [g["name"] for g in cfg["proxy-groups"]]
-            return self.send(200, {"mode": d["mode"], "tproxy": d["tproxy"], "subs": d["subs"], "rules": d["rules"],
+            return self.send(200, {"pw_default": bool(d.get("pw_default")), "mode": d["mode"], "tproxy": d["tproxy"], "subs": d["subs"], "rules": d["rules"],
                                    "running": "started" in st or code == 200, "version": version, "groups": groups,
                                    "has_nodes": has, "nodes": [{"name": n["proxy"]["name"], "type": n["proxy"]["type"],
                                                                 "server": n["proxy"]["server"], "port": n["proxy"]["port"]} for n in d["nodes"]],
@@ -4076,6 +4268,15 @@ class H(BaseHTTPRequestHandler):
             return self.set_proxy_mode({"mode": "tproxy" if b.get("enable") else "off"})
         if p == "/api/proxymode" and m == "PUT":
             return self.set_proxy_mode(b)
+        if p == "/api/conns" and m == "GET":  # 精简后的连接列表：只保留前端用到的字段
+            c = core_json("/connections", timeout=5)
+            if c is None:
+                return self.send(502, {"message": "mihomo 未运行或无法连接"})
+            keep = ("sourceIP", "host", "sniffHost", "destinationIP", "destinationPort", "network")
+            out = [{"id": x.get("id"), "start": x.get("start"), "upload": x.get("upload", 0), "download": x.get("download", 0),
+                    "rule": x.get("rule"), "rulePayload": x.get("rulePayload"), "chains": x.get("chains"),
+                    "metadata": {k: (x.get("metadata") or {}).get(k) for k in keep}} for x in c.get("connections") or []]
+            return self.send(200, {"connections": out})
         if p == "/api/live" and m == "GET":
             out = dict(LIVE)
             if time.time() - out["t"] > 5:  # 后台 /traffic 流未就绪（核心刚启动或已停止）时退回连接快照
@@ -4245,7 +4446,7 @@ class H(BaseHTTPRequestHandler):
             return self.reply(*tg_send("✅ 测试消息：通知已配置成功", d))
         if p == "/api/backup" and m == "GET":
             d = load()
-            return self.send(200, {k: v for k, v in d.items() if k not in ("password", "secret")})
+            return self.send(200, {k: v for k, v in d.items() if k not in ("password", "pw_hash", "pw_default", "secret")})
         if p == "/api/restore" and m == "POST":
             keys = ("mode", "tproxy", "subs", "rules", "rulesets", "bypass", "tests", "sub_interval", "region_groups",
                     "nodes", "ipv6", "watchdog", "tg_token", "tg_chat", "proxy_mode", "tun", "log_limit", "adblock", "dns",
@@ -4266,8 +4467,20 @@ class H(BaseHTTPRequestHandler):
             pw = b.get("password") or ""
             if len(pw) < 4:
                 return self.send(400, {"message": "密码至少 4 位"})
-            update(lambda d: d.update(password=pw))
-            return self.send(200, {"token": token(load())})
+            if pw == "admin":
+                return self.send(400, {"message": "不能使用默认密码 admin"})
+            h = pw_hash(pw)
+            update(lambda d: d.update(password="", pw_hash=h, pw_default=False))
+            sess_drop(keep=self.tok())  # 改密后其他设备全部下线
+            return self.send(200, {"token": self.tok(), "message": "密码已修改，其他设备已退出登录"})
+        if p == "/api/logout" and m == "POST":
+            if b.get("all"):
+                sess_drop()
+                return self.send(200, {"message": "所有设备已退出登录"})
+            sess_drop(self.tok())
+            return self.send(200, {"message": "已退出登录"})
+        if p == "/api/logticket" and m == "POST":
+            return self.send(200, {"ticket": ticket_new()})
         return self.send(404, {"message": "not found"})
 
 
@@ -4314,6 +4527,7 @@ if __name__ == "__main__":
         print(out)
         sys.exit(0 if ok else 1)
     d = load()
+    sess_load()
     signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))  # 让 finally 有机会保存统计
     STATS = Stats()
     AD_STATS = AdStats()
