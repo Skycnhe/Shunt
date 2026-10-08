@@ -1,14 +1,22 @@
 #!/sbin/openrc-run
+# 代理核心：按 /etc/mihomo-panel/core 选择 mihomo 或 sing-box（面板「设置 → 核心 → 内核」切换）
+CORE=$(cat /etc/mihomo-panel/core 2>/dev/null)
 name="mihomo"
-description="mihomo proxy core"
-command="/usr/local/bin/mihomo"
-command_args="-d /etc/mihomo"
+if [ "$CORE" = "singbox" ] && [ -x /usr/local/bin/sing-box ]; then
+  description="sing-box proxy core"
+  command="/usr/local/bin/sing-box"
+  command_args="run --disable-color -c /etc/sing-box/config.json -D /etc/sing-box"
+else
+  description="mihomo proxy core"
+  command="/usr/local/bin/mihomo"
+  command_args="-d /etc/mihomo"
+fi
 command_background=true
 pidfile="/run/${RC_SVCNAME}.pid"
 output_log="/var/log/mihomo.log"
 error_log="/var/log/mihomo.log"
 
 depend() { need net; after firewall; }
-start_pre() { : > /var/log/mihomo.log; modprobe tun 2>/dev/null; python3 /opt/mihomo-panel/server.py --gen >/dev/null; }
+start_pre() { : > /var/log/mihomo.log; modprobe tun 2>/dev/null; mkdir -p /etc/sing-box; python3 /opt/mihomo-panel/server.py --gen >/dev/null; }
 start_post() { sleep 1; /opt/mihomo-panel/tproxy.sh apply; }  # 按代理方式：TProxy 全量规则 / TUN 仅 DNS 重定向 / 关闭
 stop_post() { /opt/mihomo-panel/tproxy.sh stop; }
