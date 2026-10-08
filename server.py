@@ -83,7 +83,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 6
-PANEL_VERSION = "6.6"
+PANEL_VERSION = "6.6.1"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -3530,6 +3530,15 @@ def delay_merge(px):
     return px
 
 
+def fix_global():
+    """mihomo 的「全局」模式走内置 GLOBAL 组，它默认选第一项 DIRECT（全局模式反而不走代理）：没选过代理时指向「🚀 节点选择」"""
+    if active_core() == "singbox":  # sing-box 的 Global 已直接指向节点选择
+        return
+    g = core_json("/proxies/GLOBAL", timeout=5) or {}
+    if g.get("now") in (None, "", "DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE") and G_SEL in (g.get("all") or []):
+        core("PUT", "/proxies/GLOBAL", {"name": G_SEL}, timeout=5)
+
+
 def retest_soon(wait=6):
     """重载 / 重启后核心的测速记录清空：稍后在后台用「🖐️ 手动选择」（select 组，不会清除 url-test 的固定）测一遍全部节点"""
     if RETEST["pending"] or time.time() - RETEST["last"] < 60:
@@ -3542,6 +3551,7 @@ def retest_soon(wait=6):
                 time.sleep(wait if _ == 0 else 3)
                 if core_alive():
                     break
+            fix_global()
             if core_json("/proxies/" + quote(G_MANUAL), timeout=5):
                 core("GET", f"/group/{quote(G_MANUAL)}/delay?url={quote(HC)}&timeout=5000", timeout=60)
             RETEST["last"] = time.time()
@@ -5975,6 +5985,8 @@ class H(BaseHTTPRequestHandler):
                 sb = active_core(d) == "singbox"
                 write_active_config(d)
             core("PATCH", "/configs", {"mode": mode.capitalize() if sb else mode})
+            if mode == "global":
+                fix_global()
             return self.send(200, {"message": "ok"})
         if p == "/api/tproxy" and m == "PUT":  # 兼容旧接口
             return self.set_proxy_mode({"mode": "tproxy" if b.get("enable") else "off"})
