@@ -864,7 +864,6 @@ const GT={Selector:'手动选择',URLTest:'自动测速',Fallback:'故障转移'
 const GTC={Selector:'k-sel',URLTest:'k-auto',Fallback:'k-fb',LoadBalance:'k-lb'};
 const LBS={'consistent-hashing':'一致性哈希','round-robin':'轮询','sticky-sessions':'粘性会话'};
 const isGroup=n=>!!(PROXIES[n]&&PROXIES[n].all);
-const BIG=12;
 async function loadProxies(){document.querySelectorAll('#nsort button').forEach(b=>{b.classList.toggle('on',b.dataset.v===NSORT);b.onclick=()=>{NSORT=b.dataset.v;localStorage.setItem('mp_nsort',NSORT);renderGroups()}});
   try{PROXIES=await loadPX();renderGroups()}catch(e){$('#groups').innerHTML=`<div class="card bad">${esc(e.message)}</div>`;$('#policies').innerHTML=''}}
 function rawDelay(n){const p=PROXIES[n];if(!p)return undefined;if(p._d!==undefined)return p._d;
