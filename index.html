@@ -393,6 +393,7 @@ nav .ico{display:none}nav .more{display:none}
       <div class="opt"><div class="sp"><div class="t">「负载均衡」组</div><div class="dsc">节点 ≥2 个的地区各生成一个 <code>⚖️ 日本哈希</code>：一致性哈希，同一目标域名固定走同一节点，会话稳定，不会因 IP 变化被要求重新登录<br>「竞技」组始终生成（url-test）<div class="warn hide" id="gc-lb-sb">当前内核是 sing-box：没有负载均衡组，地区的哈希组并入同地区「竞技」</div></div></div><label class="sw sm"><input type="checkbox" id="gc-lb"><span></span></label></div>
       <div class="opt"><div class="sp"><div class="t">识别扩展地区</div><div class="dsc">韩国、英国、德国、法国、荷兰、加拿大、澳大利亚、俄罗斯、印度、土耳其、东南亚、南美等</div></div><label class="sw sm"><input type="checkbox" id="gc-extra"><span></span></label></div>
       <div class="opt"><div class="sp"><div class="t">「🌐 其他」分组</div><div class="dsc">收纳未识别出地区的节点（<code>🌐 其他竞技</code>）</div></div><label class="sw sm"><input type="checkbox" id="gc-other"><span></span></label></div>
+      <div class="opt"><div class="sp"><div class="t">LightGBM 模型（仅 mihomo Smart）</div><div class="dsc">Smart 竞技组用模型预测节点权重；开启后自动下载 Model.bin（约 9 MB），其他内核下不生效</div></div><button class="btn g sm" onclick="lgbmUpdate(this)">更新模型</button><label class="sw sm"><input type="checkbox" id="gc-lgbm"><span></span></label></div>
       <div class="opt"><div class="sp"><div class="t">懒惰测速（lazy）</div><div class="dsc">分组没有被使用时不做健康检查，节省流量</div></div><label class="sw sm"><input type="checkbox" id="gc-lazy"><span></span></label></div>
       <div class="opt"><div class="sp"><div class="t">测速间隔 / 容差</div><div class="dsc">容差：新节点比当前节点快超过该值才切换（竞技 / 全局自动选择）；0 = 谁最快就用谁</div></div>
         <select id="gc-int"><option value="60">1 分钟</option><option value="180">3 分钟</option><option value="300">5 分钟</option><option value="600">10 分钟</option><option value="1800">30 分钟</option><option value="3600">1 小时</option></select>
@@ -612,8 +613,8 @@ nav .ico{display:none}nav .more{display:none}
       <span>订阅自动更新间隔</span><select id="sub-int"><option value="3600">1 小时</option><option value="21600">6 小时</option><option value="43200">12 小时</option><option value="86400">24 小时</option><option value="259200">3 天</option></select></div>
       <div class="row mt"><span class="sp mut small">地区分组、负载均衡、自定义策略组在「策略组」页设置</span><button class="btn g" onclick="go('策略组')">策略组</button><button class="btn" onclick="saveGroupOpts()">保存并应用</button></div></div>
     <div data-sg="core" class="card"><div class="row"><h3 class="sp" style="margin:0">内核</h3><span class="tag" id="sw-cur"></span></div>
-      <div class="mut small" style="margin:4px 0 8px">订阅、节点、规则、DNS、设备等设置两个内核共用，切换时按各自格式生成独立的配置文件（mihomo：<code>/etc/mihomo/config.yaml</code>，sing-box：<code>/etc/sing-box/config.json</code>）。新配置先校验，通过后才重启；30 秒内没响应会自动切回原内核。</div>
-      <div class="seg" id="sw-seg"><button data-v="mihomo">mihomo</button><button data-v="singbox">sing-box</button></div>
+      <div class="mut small" style="margin:4px 0 8px">订阅、节点、规则、DNS、设备等设置所有内核共用，切换时按所选内核生成对应的配置文件和策略组（mihomo / mihomo Smart：<code>/etc/mihomo/config.yaml</code>，sing-box：<code>/etc/sing-box/config.json</code>）。新配置先校验，通过后才重启；30 秒内没响应会自动切回原内核。</div>
+      <div class="seg" id="sw-seg"><button data-v="mihomo">mihomo</button><button data-v="smart">mihomo Smart</button><button data-v="singbox">sing-box</button></div>
       <div id="sw-ver" class="mut small mt"></div>
       <div id="sw-note" class="small mt"></div>
       <div id="sw-prog" class="hide mt"><div style="height:6px;border-radius:3px;background:rgba(127,127,127,.2);overflow:hidden"><div id="sw-bar" style="height:6px;width:0;background:var(--pri);transition:width .3s"></div></div>
@@ -651,8 +652,8 @@ nav .ico{display:none}nav .more{display:none}
         <button class="btn g sm" onclick="speedTest('direct',this)">直连</button><button class="btn g sm" onclick="speedTest('proxy',this)">经代理</button></div>
       <div id="sp-r" class="small mt"></div></div>
     <div data-sg="sys" class="card"><div class="row"><h3 class="sp" style="margin:0">内核更新</h3><span class="tag" id="cv"></span></div>
-      <div class="mut small" style="margin:4px 0 8px">从 GitHub（MetaCubeX/mihomo 或 SagerNet/sing-box）下载对应 CPU 架构的程序，使用「备份与更新 → 面板更新」里填写的 GitHub 加速地址。新程序先校验能否运行、能否读取当前配置，通过后才替换；正在使用的内核会重启，30 秒内没响应会自动换回旧版本。</div>
-      <div class="row"><select id="core-kind" onchange="$('#core-r').innerHTML='';$('#cv').textContent=''"><option value="mihomo">mihomo</option><option value="singbox">sing-box</option></select><select id="core-ch"><option value="stable">稳定版</option><option value="alpha">预览版 Alpha</option></select><span class="sp"></span>
+      <div class="mut small" style="margin:4px 0 8px">从 GitHub（MetaCubeX/mihomo、vernesong/mihomo（Smart，只有预览版）或 SagerNet/sing-box）下载对应 CPU 架构的程序，使用「备份与更新 → 面板更新」里填写的 GitHub 加速地址。新程序先校验能否运行、能否读取当前配置，通过后才替换；正在使用的内核会重启，30 秒内没响应会自动换回旧版本。</div>
+      <div class="row"><select id="core-kind" onchange="$('#core-r').innerHTML='';$('#cv').textContent='';coreKindUI()"><option value="mihomo">mihomo</option><option value="smart">mihomo Smart</option><option value="singbox">sing-box</option></select><select id="core-ch"><option value="stable">稳定版</option><option value="alpha">预览版 Alpha</option></select><span class="sp"></span>
         <button class="btn g" onclick="coreCheck()" id="core-chk">检查更新</button></div>
       <div id="core-r" class="small mt"></div>
       <div id="core-prog" class="hide mt"><div style="height:6px;border-radius:3px;background:rgba(127,127,127,.2);overflow:hidden"><div id="core-bar" style="height:6px;width:0;background:var(--pri);transition:width .3s"></div></div>
@@ -807,7 +808,7 @@ async function loadPX(){const j=await api('/api/px');return j.proxies||{}}
 async function loadQS(){let px;try{px=await loadPX()}catch(e){$('#qs-card').classList.add('hide');return}
   const g=px[SEL];$('#qs-card').classList.toggle('hide',!g);if(!g)return;PROXIES=px;
   const ch=nowChain(SEL);$('#qs-now').textContent=ch.length?'当前：'+ch.join(' → '):'';
-  $('#qs').innerHTML=g.all.map((n,j)=>{if(HIDEDEAD&&n!==g.now&&isDead(n))return '';const d=lastDelay(n),p=px[n]||{},sub=p.now?'→ '+p.now:(p.type==='LoadBalance'?'负载均衡':'');
+  $('#qs').innerHTML=g.all.map((n,j)=>{if(HIDEDEAD&&n!==g.now&&isDead(n))return '';const d=lastDelay(n),p=px[n]||{},sub=p.type==='Smart'?'智能竞技':p.now?'→ '+p.now:(p.type==='LoadBalance'?'负载均衡':'');
     return `<div class="node ${n===g.now?'sel':''}" onclick="qsPick(${j})" title="${esc(n)}"><div class="n">${esc(n)}</div><div class="d"><span class="mut" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(sub)}</span><span class="${dcls(d)}">${dtxt(d)}</span></div></div>`}).join('')}
 async function qsPick(j){const n=PROXIES[SEL].all[j];try{await core('/proxies/'+encodeURIComponent(SEL),'PUT',{name:n});toast(SEL+' → '+n);loadQS()}catch(e){toast(e.message)}}
 async function qsTest(b){b.disabled=true;b.textContent='测速中…';
@@ -862,8 +863,8 @@ const isDead=n=>!isGroup(n)&&(()=>{const d=lastDelay(n);return d!==undefined&&d<
 function toggleDead(){HIDEDEAD=!HIDEDEAD;localStorage.setItem('mp_hidedead',HIDEDEAD?'1':'0');renderGroups();if(TAB==='概览')loadQS()}
 let GOPEN=(()=>{try{const o=JSON.parse(localStorage.getItem('mp_gopen')||'{}');return o&&typeof o==='object'&&!Array.isArray(o)?o:{}}catch{return {}}})();
 const HCURL='https://www.gstatic.com/generate_204';
-const GT={Selector:'手动选择',URLTest:'自动测速',Fallback:'故障转移',LoadBalance:'负载均衡',Relay:'链式代理'};
-const GTC={Selector:'k-sel',URLTest:'k-auto',Fallback:'k-fb',LoadBalance:'k-lb'};
+const GT={Selector:'手动选择',URLTest:'自动测速',Smart:'智能竞技',Fallback:'故障转移',LoadBalance:'负载均衡',Relay:'链式代理'};
+const GTC={Selector:'k-sel',URLTest:'k-auto',Smart:'k-auto',Fallback:'k-fb',LoadBalance:'k-lb'};
 const LBS={'consistent-hashing':'一致性哈希','round-robin':'轮询','sticky-sessions':'粘性会话'};
 const isGroup=n=>!!(PROXIES[n]&&PROXIES[n].all);
 async function loadProxies(){document.querySelectorAll('#nsort button').forEach(b=>{b.classList.toggle('on',b.dataset.v===NSORT);b.onclick=()=>{NSORT=b.dataset.v;localStorage.setItem('mp_nsort',NSORT);renderGroups()}});
@@ -874,19 +875,19 @@ function rawDelay(n){const p=PROXIES[n];if(!p)return undefined;if(p._d!==undefin
 // 负载均衡组没有单一的“当前节点”，组延迟取成员中最快的可用节点；成员都没测过时再用组自身的记录
 // 选择 / 自动测速 / 故障转移组的延迟 = 当前实际使用节点的延迟（组自身的记录很少更新，会忽有忽无）
 function lastDelay(n,_d){const p=PROXIES[n];if(!p)return undefined;
-  if(p.all&&p.type!=='LoadBalance'&&p.now&&PROXIES[p.now]&&(_d||0)<5){const d=lastDelay(p.now,(_d||0)+1);if(d!==undefined)return d}
-  if(p.type==='LoadBalance'&&(_d||0)<4){let best,tested=false;for(const m of (p.all||[])){const d=lastDelay(m,(_d||0)+1);if(d===undefined)continue;tested=true;if(d>0&&(best===undefined||d<best))best=d}
+  if(p.all&&p.type!=='LoadBalance'&&p.type!=='Smart'&&p.now&&PROXIES[p.now]&&(_d||0)<5){const d=lastDelay(p.now,(_d||0)+1);if(d!==undefined)return d}
+  if((p.type==='LoadBalance'||p.type==='Smart')&&(_d||0)<4){let best,tested=false;for(const m of (p.all||[])){const d=lastDelay(m,(_d||0)+1);if(d===undefined)continue;tested=true;if(d>0&&(best===undefined||d<best))best=d}
     if(tested)return best===undefined?0:best}
   return rawDelay(n)}
 function groupOrder(){const order=(PROXIES.GLOBAL&&PROXIES.GLOBAL.all)||Object.keys(PROXIES);
   return order.filter(n=>isGroup(n)).concat(['GLOBAL']).filter((v,i,a)=>a.indexOf(v)===i&&PROXIES[v])}
-function nowChain(g){const out=[];let n=PROXIES[g]?.now,k=0;while(n&&k++<5){out.push(n);n=isGroup(n)?PROXIES[n].now:''}return out}
+function nowChain(g){const out=[];let n=PROXIES[g]?.type==='Smart'?'':PROXIES[g]?.now,k=0;while(n&&k++<5){out.push(n);n=isGroup(n)&&PROXIES[n].type!=='Smart'?PROXIES[n].now:''}return out}
 // 默认只展开「🚀 节点选择」和「🖐️ 手动选择」，其他组收成一行；展开 / 收起会被记住
 function gOpen(g){if(NF.q||NF.r)return true;return g in GOPEN?GOPEN[g]:(g===SEL||g===G_MANUAL)}
 // 筛选：关键词 + 地区（地区 = 「xx竞技」组的成员）
 let NF={q:'',r:''};
 const AUTO_TAIL='竞技';
-function regionGroups(){return Object.keys(PROXIES).filter(n=>isGroup(n)&&n.endsWith(AUTO_TAIL)&&PROXIES[n].type==='URLTest')}
+function regionGroups(){return Object.keys(PROXIES).filter(n=>isGroup(n)&&n.endsWith(AUTO_TAIL)&&['URLTest','Smart'].includes(PROXIES[n].type))}
 function nfVisible(n){const q=NF.q,r=NF.r;
   if(q&&!n.toLowerCase().includes(q))return false;
   if(r){const lab=r.slice(0,-AUTO_TAIL.length).split(' ').pop();if(isGroup(n))return n.includes(lab);return (PROXIES[r]?.all||[]).includes(n)}
@@ -910,7 +911,7 @@ function renderGroups(){
     const vis=filt?all0.filter(nfVisible):all0;if(filt&&!vis.length&&!(NF.q&&g.toLowerCase().includes(NF.q)))return '';
     const all=HIDEDEAD?vis.filter(n=>n===p.now||!isDead(n)):vis,hid=vis.length-all.length;
     const ch=nowChain(g),dl=lastDelay(g),lb=p.type==='LoadBalance';
-    const sub=lb?`策略：<b>${esc(LBS[m.strategy]||m.strategy||'-')}</b>`:ch.length?'→ <b>'+ch.map(esc).join(' → ')+'</b>':'';
+    const sub=lb?`策略：<b>${esc(LBS[m.strategy]||m.strategy||'-')}</b>`:p.type==='Smart'?(p.fixed?'已固定 → <b>'+esc(p.fixed)+'</b>':'智能竞技：按延迟 / 丢包 / 速度打分'+(p.uselightgbm||p.useLightGBM?' + LightGBM':'')):ch.length?'→ <b>'+ch.map(esc).join(' → ')+'</b>':'';
     const nodesN=all.filter(n=>!isGroup(n)).length,groupsN=all.length-nodesN;
     const cnt=[nodesN?nodesN+' 个节点':'',groupsN?groupsN+' 个分组':'',hid?`<span class="bad">已隐藏 ${hid} 个超时</span>`:''].filter(Boolean).join(' · ');
     const pin=p.fixed?`<span class="tag pin" title="点击取消固定，恢复自动选择" onclick="event.stopPropagation();unfix(${i})">📌 已固定 ✕</span>`:'';
@@ -934,7 +935,7 @@ function renderPolicies(){const sel=GL.filter(g=>g!=='GLOBAL'&&PROXIES[g].type==
       <select onchange="pickName(${i},this.value)">${p.all.map(n=>`<option ${n===p.now?'selected':''} value="${esc(n)}">${isGroup(n)?'📁 ':''}${esc(n)}</option>`).join('')}</select></div>`}).join('')}
 async function pickName(i,n){const g=GL[i],p=PROXIES[g];if(!p)return;
   if(p.type==='LoadBalance'){toast('负载均衡组按策略自动分配连接，不能手动指定节点');return}
-  if(!['Selector','URLTest','Fallback'].includes(p.type)){toast('该组不支持手动切换');return}
+  if(!['Selector','URLTest','Fallback','Smart'].includes(p.type)){toast('该组不支持手动切换');return}
   try{await core('/proxies/'+encodeURIComponent(g),'PUT',{name:n});
     toast(p.type==='Selector'?`${g} → ${n}`:`${g} 已固定为 ${n}（点 📌 取消固定恢复自动）`);loadProxies()}catch(e){toast(e.message)}}
 function pick(i,j){pickName(i,GALL[i][j])}
@@ -955,11 +956,12 @@ async function loadGroupsPage(){try{[GI]=await Promise.all([api('/api/groups'),l
   GCF=Object.assign({},GI.cfg,{on:GI.region_groups});renderGC();renderRegions();renderCGList();$('#gc-lb-sb').classList.toggle('hide',GI.core!=='singbox')}
 function renderGC(){const c=GCF;$('#gc-on').checked=c.on;$('#gc-on').onchange=e=>{GCF.on=e.target.checked;renderGC()};
   $('#gc-box').classList.toggle('dim',!c.on);$('#gc-box').style.opacity=c.on?'':'.5';
-  [['#gc-lb','lb'],['#gc-extra','extra'],['#gc-other','other'],['#gc-lazy','lazy']].forEach(([k,f])=>{$(k).checked=!!c[f];$(k).onchange=e=>{GCF[f]=e.target.checked}});
+  [['#gc-lb','lb'],['#gc-extra','extra'],['#gc-other','other'],['#gc-lazy','lazy'],['#gc-lgbm','lgbm']].forEach(([k,f])=>{$(k).checked=!!c[f];$(k).onchange=e=>{GCF[f]=e.target.checked}});
   const iv=$('#gc-int');if(![...iv.options].some(o=>o.value===String(c.interval)))iv.insertAdjacentHTML('beforeend',`<option value="${c.interval}">${c.interval} 秒</option>`);
   iv.value=String(c.interval);iv.onchange=e=>GCF.interval=+e.target.value;$('#gc-tol').value=c.tolerance;$('#gc-tol').onchange=e=>GCF.tolerance=+e.target.value;
   $('#gc-url').value=c.url;$('#gc-url').onchange=e=>GCF.url=e.target.value.trim()}
-async function saveGC(){const c=GCF;const body={region_groups:c.on,lb:c.lb,extra:c.extra,other:c.other,lazy:c.lazy,
+async function lgbmUpdate(b){b.disabled=true;toast('正在下载 LightGBM 模型…');try{const j=await api('/api/coreupdate','POST',{action:'lgbm',core:'smart'});toast(j.message)}catch(e){toast(e.message)}b.disabled=false}
+async function saveGC(){const c=GCF;const body={region_groups:c.on,lb:c.lb,extra:c.extra,other:c.other,lazy:c.lazy,lgbm:!!c.lgbm,
     interval:+$('#gc-int').value,tolerance:+$('#gc-tol').value,url:$('#gc-url').value.trim()};
   try{toast('正在校验并应用…');const j=await api('/api/groups/cfg','PUT',body);toast(j.message);loadGroupsPage()}catch(e){toast(e.message)}}
 function renderRegions(){$('#gc-regions').innerHTML=GI.regions.map(r=>`<tr><td><b style="font-weight:600">${esc(r.name)}</b></td>
@@ -1179,7 +1181,7 @@ let TUNF={};
 let SG=localStorage.getItem('mp_sg')||'net';
 function renderSG(){document.querySelectorAll('#snav button').forEach(b=>{b.classList.toggle('on',b.dataset.g===SG);b.onclick=()=>{SG=b.dataset.g;localStorage.setItem('mp_sg',SG);renderSG()}});
   document.querySelectorAll('[data-sg]').forEach(c=>c.classList.toggle('hide',c.dataset.sg!==SG))}
-async function renderSettings(){renderSG();renderLook();await loadState().catch(()=>{});fillSettings();loadCoreSw();if(!CORE_POLL)$('#core-kind').value=STATE.core||'mihomo';
+async function renderSettings(){renderSG();renderLook();await loadState().catch(()=>{});fillSettings();loadCoreSw();if(!CORE_POLL){$('#core-kind').value=STATE.core||'mihomo';coreKindUI()}
   segv('#pm',STATE.proxy_mode,v=>setPM(v));$('#pm-desc').textContent=PM_DESC[STATE.proxy_mode]||'';
   TUNF=Object.assign({},STATE.tun);renderTunForm();
   sw('#v6',STATE.ipv6,v=>saveSettings({ipv6:v},'IPv6 已'+(v?'开启':'关闭')));
@@ -1343,7 +1345,8 @@ async function speedTest(via,b){b.disabled=true;const r=$('#sp-r'),lab=via==='pr
 let CORE_POLL=null;
 function coreCh(){return $('#core-ch').value}
 function coreKind(){return $('#core-kind').value}
-const CORE_LABEL={mihomo:'mihomo',singbox:'sing-box'};
+const CORE_LABEL={mihomo:'mihomo',smart:'mihomo Smart',singbox:'sing-box'};
+function coreKindUI(){const sm=coreKind()==='smart';if(sm)$('#core-ch').value='alpha';$('#core-ch').disabled=sm}
 async function coreCheck(){const b=$('#core-chk');b.disabled=true;$('#core-r').innerHTML='<span class="mut">正在检查…</span>';
   try{await saveGhProxy();const j=await api('/api/coreupdate?channel='+coreCh()+'&core='+coreKind());coreShow(j)}
   catch(e){$('#core-r').innerHTML=`<span class="bad">${esc(e.message)}</span>`}b.disabled=false}
@@ -1360,7 +1363,7 @@ async function coreRollback(){if(!confirm(`回滚 ${CORE_LABEL[coreKind()]} 到�
 let SW_SEL='';
 async function loadCoreSw(){try{const j=await api('/api/coreswitch');SW_SEL=j.core;const v=j.versions||{};
     $('#sw-cur').textContent='当前 '+CORE_LABEL[j.core];
-    $('#sw-ver').innerHTML=`mihomo ${v.mihomo?esc(v.mihomo):'<span class="warn">未安装</span>'} · sing-box ${v.singbox?esc(v.singbox):'<span class="mut">未安装（切换时自动下载最新正式版）</span>'}`;
+    $('#sw-ver').innerHTML=`mihomo ${v.mihomo?esc(v.mihomo):'<span class="warn">未安装</span>'} · Smart ${v.smart?esc(v.smart):'<span class="mut">未安装（切换时自动下载）</span>'}${j.core==='smart'?' · LightGBM 模型 '+(j.lgbm?'已下载':'<span class="mut">未下载</span>'):''} · sing-box ${v.singbox?esc(v.singbox):'<span class="mut">未安装（切换时自动下载最新正式版）</span>'}`;
     const pick=x=>{SW_SEL=x;segv('#sw-seg',x,pick);swRender(j)};pick(j.core);if(j.busy&&!SW_POLL)swPoll()}catch(e){$('#sw-ver').textContent=e.message}}
 function swRender(j){const to=SW_SEL,diff=to!==j.core;$('#sw-btn').disabled=!diff;$('#sw-btn').textContent=diff?'切换到 '+CORE_LABEL[to]:'切换内核';
   const sbNote='<div class="warn">sing-box 与 mihomo 的差异：</div><ul style="margin:4px 0 0 18px;padding:0">'+
@@ -1370,7 +1373,12 @@ function swRender(j){const to=SW_SEL,diff=to!==j.core;$('#sw-btn').disabled=!dif
     '<li>每组 DNS 只用列表里的第一个服务器；hosts 只支持精确域名 → IP</li>'+
     '<li>URLTest 组不能手动固定节点</li></ul>';
   let h='';if(j.core==='singbox'&&(j.warn||[]).length)h+='<div class="warn">当前配置的兼容提示：</div><ul style="margin:4px 0 8px 18px;padding:0">'+j.warn.map(w=>`<li>${esc(w)}</li>`).join('')+'</ul>';
-  if(to==='singbox'||j.core==='singbox')h+=sbNote;$('#sw-note').innerHTML=h}
+  if(to==='singbox'||j.core==='singbox')h+=sbNote;
+  if(to==='smart'||j.core==='smart')h+='<div class="warn">mihomo Smart（vernesong/mihomo 预览版）：</div><ul style="margin:4px 0 0 18px;padding:0">'+
+    '<li>地区「竞技」组和「⚡ 全局自动选择」改用 smart 类型：按延迟、丢包、速度综合打分选节点；切回 mihomo 时自动恢复 url-test</li>'+
+    '<li>「⚖️ 哈希」组、自定义策略组、规则、DNS 都不变</li>'+
+    '<li>LightGBM 模型在「策略组 → 地区分组」开关，开启后自动下载 Model.bin（约 9 MB）并每 72 小时更新，会多占一些内存</li></ul>';
+  $('#sw-note').innerHTML=h}
 let SW_POLL=null;
 async function switchCore(){const to=SW_SEL;if(!confirm(`切换到 ${CORE_LABEL[to]}？\n会生成并校验新配置，然后重启核心，局域网会断网几秒。失败会自动切回。`))return;
   try{await saveGhProxy();await api('/api/coreswitch','POST',{core:to});swPoll()}catch(e){toast(e.message)}}

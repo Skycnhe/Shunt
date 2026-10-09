@@ -16,6 +16,7 @@ NOTIFY_FILE = os.path.join(PANEL_DIR, "notify.json")
 CERT, KEY = os.path.join(PANEL_DIR, "cert.pem"), os.path.join(PANEL_DIR, "key.pem")
 PORT = int(os.environ.get("PANEL_PORT", "8080"))
 MIHOMO_BIN = os.environ.get("MIHOMO_BIN", "/usr/local/bin/mihomo")
+SMART_BIN = os.environ.get("SMART_BIN", "/usr/local/bin/mihomo-smart")  # vernesong/mihomo：带 Smart 策略组的 mihomo
 TPROXY_SH = os.environ.get("PANEL_TPROXY", os.path.join(BASE, "tproxy.sh"))
 CTRL_HOST, CTRL_PORT = "127.0.0.1", 9090
 MAX_BODY = 32 * 2**20  # 请求体上限 32MB（备份恢复可能较大）
@@ -77,7 +78,8 @@ AB_PRESETS = [
      "dsc": "伪装成网站子域名的追踪器"}]
 TUN_DEFAULT = {"stack": "mixed", "device": "Meta", "auto_redirect": True, "strict_route": False}
 GROUPS_DEFAULT = {"type": "url-test", "lb": True, "auto": True, "strategy": "consistent-hashing", "interval": 60,
-                  "tolerance": 0, "url": "https://www.gstatic.com/generate_204", "extra": True, "other": True, "lazy": True}
+                  "tolerance": 0, "url": "https://www.gstatic.com/generate_204", "extra": True, "other": True, "lazy": True,
+                  "lgbm": False}
 SCHED_DEFAULT = {"sub_update": "", "core_restart": "", "geo_update": "", "latency": 0}
 DEFAULT = {"password": "admin", "pw_hash": "", "pw_default": False, "secret": "", "mode": "rule", "tproxy": True, "subs": [], "rules": [],
            "rulesets": [], "bypass": [], "tests": None, "sub_interval": 86400, "region_groups": True,
@@ -101,7 +103,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "6.7.3"
+PANEL_VERSION = "6.8.0"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -629,10 +631,12 @@ def group_opts(t, gc, extra=None):
     g = {"type": t}
     if t != "select":
         g.update({"url": e.get("url") or gc["url"], "interval": int(e.get("interval") or gc["interval"]), "lazy": bool(gc["lazy"])})
-        if t == "url-test":
+        if t in ("url-test", "smart"):
             g["tolerance"] = int(e.get("tolerance") if e.get("tolerance") not in (None, "") else gc["tolerance"])
         if t == "load-balance":
             g["strategy"] = "consistent-hashing"
+        if t == "smart":  # Smart 内核：按延迟 / 丢包 / 速度综合打分，可用 LightGBM 模型预测权重
+            g.update({"uselightgbm": bool(gc.get("lgbm")), "collectdata": False})
     return g
 
 
@@ -786,6 +790,7 @@ def build_config(d, strict=False):
     proxies = [n["proxy"] for n in d.get("nodes", [])]
     names = [p["name"] for p in proxies]
     gc = gcfg(d)
+    race = "smart" if active_core(d) == "smart" else "url-test"  # 竞技组：mihomo 用 url-test，Smart 内核用 smart
 
     def with_src(g, members, src=True):
         if members:
@@ -800,7 +805,7 @@ def build_config(d, strict=False):
     autos, lbs = [], []
     for rname, flt, exc, matched, total, unknown in region_plan(d, names, use):
         label = region_label(rname)[1]
-        variants = [(auto_name(rname), "url-test", autos, None)]
+        variants = [(auto_name(rname), race, autos, None)]
         if gc["lb"] and (total >= 2 or unknown):  # 地区有 ≥2 个节点时生成负载均衡组（一致性哈希）
             variants += [(lb_name(rname, st), "load-balance", lbs, {"strategy": st}) for st, _ in LB_KINDS]
         for gname, t, bucket, ex in variants:
@@ -847,7 +852,7 @@ def build_config(d, strict=False):
     if have:
         groups = [{"name": G_SEL, "type": "select", "proxies": rnames + [G_MANUAL, G_AUTO, G_DIRECT]}] + region_groups + [
             with_src({"name": G_MANUAL, "type": "select"}, names),
-            with_src(dict({"name": G_AUTO}, **group_opts("url-test", gc)), names), direct_g]
+            with_src(dict({"name": G_AUTO}, **group_opts(race, gc)), names), direct_g]
         side = [G_SEL] + rnames + [G_MANUAL, G_AUTO] + exposed + ["DIRECT"] + names
     else:
         groups = [{"name": G_SEL, "type": "select", "proxies": [G_DIRECT]}, direct_g]
@@ -950,7 +955,11 @@ def build_config(d, strict=False):
                "strict-route": bool(tc.get("strict_route", False))}
     else:
         tun = {"enable": False}
-    return {
+    extra = {}
+    if active_core(d) == "smart" and gcfg(d).get("lgbm"):  # 模型放在 -d 目录（/etc/mihomo/Model.bin），内核每 72 小时自动更新
+        gh = (d.get("gh_proxy") or "").rstrip("/")
+        extra = {"lgbm-auto-update": True, "lgbm-update-interval": 72, "lgbm-url": (gh + "/" if gh else "") + LGBM_URL}
+    return dict(extra, **{
         "mixed-port": MIXED, "tproxy-port": 7893, "allow-lan": True, "bind-address": "*",
         "mode": d.get("mode", "rule"), "log-level": "info", "ipv6": v6,
         "external-controller": f"{CTRL_HOST}:{CTRL_PORT}", "secret": d["secret"],
@@ -968,7 +977,7 @@ def build_config(d, strict=False):
         "dns": dns, "tun": tun, "hosts": hosts,
         "proxies": proxies,
         "proxy-providers": providers, "rule-providers": rule_providers, "proxy-groups": groups, "rules": rules,
-    }
+    })
 
 
 def rule_policy_index(parts):
@@ -1149,11 +1158,17 @@ def write_config(d, path=None):
     return path
 
 
-def check_config(path):
+def mh_bin(kind=None):
+    """mihomo 系内核的程序路径：smart → mihomo-smart，其余 → mihomo"""
+    return SMART_BIN if (kind or active_core()) == "smart" else MIHOMO_BIN
+
+
+def check_config(path, kind=None):
     """用 mihomo -t 校验配置；没有核心程序时跳过"""
-    if not os.path.isfile(MIHOMO_BIN):
+    b = mh_bin(kind)
+    if not os.path.isfile(b):
         return True, ""
-    code, out = sh(f"'{MIHOMO_BIN}' -t -d '{CONF_DIR}' -f '{path}'", timeout=90)
+    code, out = sh(f"'{b}' -t -d '{CONF_DIR}' -f '{path}'", timeout=90)
     if code == 0:
         return True, ""
     lines = [l for l in out.splitlines() if "level=error" in l or "level=fatal" in l or "test failed" in l.lower() or l.startswith("panic:")]
@@ -1287,7 +1302,7 @@ SB_RULE_DIR = os.environ.get("SB_RULES", os.path.join(SB_DIR, "rules"))
 SB_SUB_DIR = os.path.join(PANEL_DIR, "sb_subs")
 CORE_FILE = os.path.join(PANEL_DIR, "core")  # init.d/mihomo 读取它决定启动哪个内核
 CORE_PID = os.environ.get("PANEL_CORE_PID", "/run/mihomo.pid")
-CORES = {"mihomo": "mihomo", "singbox": "sing-box"}
+CORES = {"mihomo": "mihomo", "smart": "mihomo Smart", "singbox": "sing-box"}
 SB_GEO = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo"
 SB_REPO = os.environ.get("SB_REPO", "https://github.com/SagerNet/sing-box/releases")
 SB_API = os.environ.get("SB_API", "https://api.github.com/repos/SagerNet/sing-box/releases")
@@ -2577,14 +2592,25 @@ def core_switch_job(kind, gh):
                 raise ValueError("sing-box 配置校验失败，未切换：" + err)
             os.replace(tmp, SB_CONF)
         else:
-            if not bin_version(MIHOMO_BIN):
-                raise ValueError("设备上没有可用的 mihomo 程序，请先在「内核更新」里安装")
-            d = load()
+            if kind == "smart" and not bin_version(SMART_BIN):
+                _cu("安装 Smart 内核", 5, "设备上还没有 mihomo Smart，正在从 vernesong/mihomo 下载")
+                tmp = mh_fetch("smart", "alpha", gh, lambda pc: CORE_UPD.update(pct=5 + int(55 * pc)))[0]
+                os.replace(tmp, SMART_BIN)
+                _cu("安装 Smart 内核", 62, f"已安装 {bin_version(SMART_BIN)}")
+            if not bin_version(mh_bin(kind)):
+                raise ValueError(f"设备上没有可用的 {label} 程序，请先在「内核更新」里安装")
+            d = dict(load(), core=kind)  # 按目标内核生成（Smart：竞技组改为 smart 类型）
+            if kind == "smart" and gcfg(d)["lgbm"] and not os.path.isfile(LGBM_FILE):
+                _cu("LightGBM 模型", 64, "下载 LightGBM 模型 Model.bin")
+                try:
+                    lgbm_fetch(gh)
+                except Exception as e:
+                    _cu("LightGBM 模型", None, "✗ 模型下载失败，Smart 组先用内置算法：" + str(e)[:120])
             tmp = write_config(d, os.path.join(CONF_DIR, "config.yaml.new"))
-            ok, err = check_config(tmp)
+            ok, err = check_config(tmp, kind)
             if not ok:
                 os.remove(tmp)
-                raise ValueError("mihomo 配置校验失败，未切换：" + err)
+                raise ValueError(f"{label} 配置校验失败，未切换：" + err)
             os.replace(tmp, os.path.join(CONF_DIR, "config.yaml"))
         snapshot_selections(force=True)
         update(lambda x: x.update(core=kind))
@@ -2747,6 +2773,9 @@ def self_update(apply=False, gh=""):
 # ---------------------------------------------------------------- 内核（mihomo）更新
 CORE_REPO = os.environ.get("CORE_REPO", "https://github.com/MetaCubeX/mihomo/releases")
 CORE_CHANNELS = {"stable": "latest/download", "alpha": "download/Prerelease-Alpha"}
+SMART_REPO = os.environ.get("SMART_REPO", "https://github.com/vernesong/mihomo/releases")  # 只发布 Alpha 预览版
+LGBM_URL = SMART_REPO + "/download/LightGBM-Model/Model.bin"
+LGBM_FILE = os.path.join(CONF_DIR, "Model.bin")
 CORE_UPD = {"busy": False, "stage": "", "pct": 0, "ok": None, "message": "", "log": deque(maxlen=30), "t": 0}
 
 
@@ -2787,8 +2816,8 @@ def open_url(url, gh, timeout=20):
     raise IOError(err)
 
 
-def core_remote_version(channel, gh):
-    url = f"{CORE_REPO}/{CORE_CHANNELS[channel]}/version.txt"
+def core_remote_version(channel, gh, kind="mihomo"):
+    url = f"{SMART_REPO}/download/Prerelease-Alpha/version.txt" if kind == "smart" else f"{CORE_REPO}/{CORE_CHANNELS[channel]}/version.txt"
     with open_url(url, gh) as r:
         v = r.read(200).decode(errors="ignore").strip()
     if not re.match(r"^[\w.\-]+$", v):
@@ -2796,12 +2825,14 @@ def core_remote_version(channel, gh):
     return v
 
 
-def core_check(channel, gh):
-    arch = core_arch()
-    info = {"current": bin_version(MIHOMO_BIN) or "未安装", "arch": arch or os.uname().machine, "channel": channel,
-            "backup": bin_version(MIHOMO_BIN + ".bak"), "remote": ""}
+def core_check(channel, gh, kind="mihomo"):
+    arch, b = core_arch(), mh_bin(kind)
+    if kind == "smart":
+        channel = "alpha"
+    info = {"current": bin_version(b) or "未安装", "arch": arch or os.uname().machine, "channel": channel,
+            "backup": bin_version(b + ".bak"), "remote": "", "core": kind}
     try:
-        info["remote"] = core_remote_version(channel, gh)
+        info["remote"] = core_remote_version(channel, gh, kind)
     except Exception as e:
         info["message"] = "获取最新版本失败：" + str(e)
         return False, info
@@ -2817,21 +2848,22 @@ def _cu(stage, pct=None, msg=None):
     CORE_UPD["log"].appendleft(f"{time.strftime('%H:%M:%S')} {msg or stage}")
 
 
-def _core_swap_and_restart(src, label):
+def _core_swap_and_restart(src, label, kind="mihomo"):
     """把 src 换成正式核心并重启；30 秒内控制接口没起来就自动换回原来的核心"""
-    bak = MIHOMO_BIN + ".bak"
-    had_old = os.path.isfile(MIHOMO_BIN)
+    B = mh_bin(kind)
+    bak = B + ".bak"
+    had_old = os.path.isfile(B)
     if had_old and src != bak:
-        shutil.copy2(MIHOMO_BIN, bak)
+        shutil.copy2(B, bak)
     if src == bak:  # 回滚：当前核心与备份互换，方便再“回滚”回来
-        tmp = MIHOMO_BIN + ".swap"
-        shutil.copy2(MIHOMO_BIN, tmp)
-        os.replace(bak, MIHOMO_BIN)
+        tmp = B + ".swap"
+        shutil.copy2(B, tmp)
+        os.replace(bak, B)
         os.replace(tmp, bak)
     else:
-        os.replace(src, MIHOMO_BIN)
-    if active_core() == "singbox":  # 当前运行的是 sing-box：只替换程序，下次切回 mihomo 时生效
-        _cu("完成", 95, f"已替换为 {label}（当前内核是 sing-box，切回 mihomo 时生效）")
+        os.replace(src, B)
+    if active_core() != kind:  # 这个内核没在运行：只替换程序，切换过去时生效
+        _cu("完成", 95, f"已替换为 {label}（当前内核是 {CORES[active_core()]}，切到 {CORES[kind]} 时生效）")
         return True, ""
     _cu("重启核心", 90, f"已替换为 {label}，正在重启核心")
     sh(SVC + " restart", timeout=90)
@@ -2841,30 +2873,30 @@ def _core_swap_and_restart(src, label):
             return True, ""
     if had_old and src != bak:  # 新核心起不来 → 自动恢复
         _cu("自动回滚", 95, "新核心 30 秒内未响应，正在恢复原核心")
-        shutil.copy2(bak, MIHOMO_BIN)
+        shutil.copy2(bak, B)
         sh(SVC + " restart", timeout=90)
         return False, "新核心启动失败，已自动恢复为原核心。日志：" + sh(f"tail -n 5 '{MIHOMO_LOG}'")[1][-300:]
     return False, "核心重启后 30 秒内未响应，请查看日志"
 
 
-def core_update_job(channel, gh, force=False):
-    tmp = MIHOMO_BIN + ".new"
-    try:
-        arch = core_arch()
-        if not arch:
-            raise ValueError(f"不支持的 CPU 架构：{os.uname().machine}")
-        _cu("获取版本", 2, "正在获取最新版本号")
-        ver = core_remote_version(channel, gh)
-        cur = bin_version(MIHOMO_BIN)
-        if ver == cur and not force:
-            CORE_UPD.update(ok=True, message=f"已是最新版本 {cur}，无需更新")
-            return
-        free = shutil.disk_usage(os.path.dirname(MIHOMO_BIN)).free
-        if free < 80 * 2**20:
-            raise ValueError(f"{os.path.dirname(MIHOMO_BIN)} 剩余空间不足（{free // 2**20} MB，至少需要 80 MB）")
+def mh_fetch(kind, channel, gh, prog=None):
+    """下载 mihomo / mihomo Smart 到 <程序>.new 并校验能运行；返回 (临时文件, 版本号)"""
+    import gzip
+    B = mh_bin(kind)
+    arch = core_arch()
+    if not arch:
+        raise ValueError(f"不支持的 CPU 架构：{os.uname().machine}")
+    ver = core_remote_version(channel, gh, kind)
+    free = shutil.disk_usage(os.path.dirname(B)).free
+    if free < 80 * 2**20:
+        raise ValueError(f"{os.path.dirname(B)} 剩余空间不足（{free // 2**20} MB，至少需要 80 MB）")
+    if kind == "smart":
+        url = f"{SMART_REPO}/download/Prerelease-Alpha/mihomo-linux-{arch}-{ver}.gz"
+    else:
         url = f"{CORE_REPO}/download/{'Prerelease-Alpha' if channel == 'alpha' else ver}/mihomo-linux-{arch}-{ver}.gz"
-        _cu("下载", 5, f"下载 mihomo-linux-{arch}-{ver}.gz")
-        import gzip
+    _cu("下载", None, f"下载 {url.rsplit('/', 1)[-1]}")
+    tmp = B + ".new"
+    try:
         with open_url(url, gh, timeout=30) as r:
             total = int(r.headers.get("Content-Length") or 0)
 
@@ -2875,8 +2907,8 @@ def core_update_job(channel, gh, force=False):
                 def read(self, k=-1):
                     b = r.read(k)
                     self.n += len(b)
-                    if total:
-                        CORE_UPD["pct"] = 5 + int(70 * self.n / total)
+                    if total and prog:
+                        prog(min(1.0, self.n / total))
                     return b
             with gzip.GzipFile(fileobj=Counter()) as gz, open(tmp, "wb") as f:
                 size = 0
@@ -2889,21 +2921,45 @@ def core_update_job(channel, gh, force=False):
                         raise ValueError("解压后的文件异常过大，已中止")
                     f.write(chunk)
         os.chmod(tmp, 0o755)
-        _cu("校验", 78, "校验新核心能否运行")
         nv = bin_version(tmp)
         if not nv:
             raise ValueError("新核心无法运行（架构不匹配或文件损坏），未做任何替换")
-        _cu("校验", 84, f"新核心 {nv}，正在用它检查当前配置")
-        code, out = sh(f"'{tmp}' -t -d '{CONF_DIR}' -f '{os.path.join(CONF_DIR, 'config.yaml')}'", timeout=90)
+        return tmp, nv
+    except Exception:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+
+
+def core_update_job(channel, gh, force=False, kind="mihomo"):
+    B = mh_bin(kind)
+    tmp = B + ".new"
+    try:
+        _cu("获取版本", 2, "正在获取最新版本号")
+        ver = core_remote_version(channel, gh, kind)
+        cur = bin_version(B)
+        if ver == cur and not force:
+            CORE_UPD.update(ok=True, message=f"已是最新版本 {cur}，无需更新")
+            return
+        CORE_UPD["pct"] = 5
+        tmp, nv = mh_fetch(kind, channel, gh, lambda pc: CORE_UPD.update(pct=5 + int(70 * pc)))
+        _cu("校验", 84, f"新核心 {nv}，正在用它检查配置")
+        if active_core() == kind:  # 正在用：拿当前配置校验；没在用：按它的格式生成一份再校验
+            cfg = os.path.join(CONF_DIR, "config.yaml")
+        else:
+            cfg = write_config(dict(load(), core=kind), os.path.join(CONF_DIR, "config.yaml.chk"))
+        code, out = sh(f"'{tmp}' -t -d '{CONF_DIR}' -f '{cfg}'", timeout=90)
+        if cfg.endswith(".chk"):
+            os.remove(cfg)
         if code != 0:
             raise ValueError("新核心不兼容当前配置，未做任何替换：" + out[-300:])
-        ok, err = _core_swap_and_restart(tmp, nv)
+        ok, err = _core_swap_and_restart(tmp, nv, kind)
         if not ok:
             raise ValueError(err)
-        CORE_UPD.update(ok=True, message=f"内核已从 {cur or '无'} 更新到 {nv}，旧版本已备份，可一键回滚")
+        CORE_UPD.update(ok=True, message=f"{CORES[kind]} 已从 {cur or '无'} 更新到 {nv}" + ("，旧版本已备份，可一键回滚" if cur else ""))
         tg = load()
         if tg.get("tg_token") and tg.get("tg_chat"):
-            notify(f"⬆️ mihomo 内核已更新：{cur or '无'} → {nv}")
+            notify(f"⬆️ {CORES[kind]} 内核已更新：{cur or '无'} → {nv}")
     except Exception as e:
         CORE_UPD.update(ok=False, message=str(e))
     finally:
@@ -2914,13 +2970,46 @@ def core_update_job(channel, gh, force=False):
         CORE_UPD["busy"] = False
 
 
-def core_rollback_job():
+def lgbm_fetch(gh):
+    """下载 LightGBM 模型到 /etc/mihomo/Model.bin（约 9 MB，Smart 组 uselightgbm 用）"""
+    tmp = LGBM_FILE + ".new"
     try:
-        old = bin_version(MIHOMO_BIN + ".bak")
+        with open_url(LGBM_URL, gh, timeout=60) as r, open(tmp, "wb") as f:
+            n = 0
+            while True:
+                chunk = r.read(1 << 16)
+                if not chunk:
+                    break
+                n += len(chunk)
+                if n > 64 * 2**20:
+                    raise ValueError("模型文件异常过大，已中止")
+                f.write(chunk)
+        if n < 1 << 20:
+            raise ValueError("下载的模型文件不完整")
+        os.replace(tmp, LGBM_FILE)
+        return n
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def lgbm_fetch_reload():
+    try:
+        lgbm_fetch(load().get("gh_proxy") or "")
+        if active_core() == "smart":
+            reload_core()
+    except Exception as e:
+        print(f"LightGBM 模型下载失败：{e}", file=sys.stderr)
+
+
+def core_rollback_job(kind="mihomo"):
+    try:
+        B = mh_bin(kind)
+        old = bin_version(B + ".bak")
         if not old:
             raise ValueError("没有可回滚的内核备份")
-        cur = bin_version(MIHOMO_BIN)
-        ok, err = _core_swap_and_restart(MIHOMO_BIN + ".bak", old)
+        cur = bin_version(B)
+        ok, err = _core_swap_and_restart(B + ".bak", old, kind)
         if not ok:
             raise ValueError(err)
         CORE_UPD.update(ok=True, message=f"已回滚：{cur} → {old}（{cur} 保留为备份）")
@@ -4961,7 +5050,7 @@ def diagnose():
         if SB_STATE["warn"]:
             item("sing-box 兼容提示", "warn", "；".join(SB_STATE["warn"])[:300], "详见 设置 → 核心 → 内核切换")
     cfg = os.path.join(CONF_DIR, "config.yaml")
-    if not sb and os.path.isfile(MIHOMO_BIN) and os.path.isfile(cfg):
+    if not sb and os.path.isfile(mh_bin(active_core(d))) and os.path.isfile(cfg):
         ok, err = check_config(cfg)
         item("配置校验 (mihomo -t)", ok, "通过" if ok else err[-200:], "在设置中撤销最近的修改，或恢复备份")
     try:
@@ -5778,7 +5867,7 @@ class H(BaseHTTPRequestHandler):
 
     def save_groups_cfg(self, b):
         gc = gcfg(load())
-        for k in ("lb", "extra", "other", "lazy"):
+        for k in ("lb", "extra", "other", "lazy", "lgbm"):
             if k in b:
                 gc[k] = bool(b[k])
         try:
@@ -5809,6 +5898,9 @@ class H(BaseHTTPRequestHandler):
             return self.send(400, {"message": "；".join(errs[:3])})
         prev = update(fn)
         ok, msg = reload_core(prev)
+        if ok and gc["lgbm"] and active_core() == "smart" and not os.path.isfile(LGBM_FILE):
+            threading.Thread(target=lgbm_fetch_reload, daemon=True).start()
+            msg = "策略组设置已生效，LightGBM 模型正在后台下载，下载完会自动重载"
         return self.reply(ok, "策略组设置已生效" if ok else msg)
 
     def save_custom_group(self, b):
@@ -6014,7 +6106,8 @@ class H(BaseHTTPRequestHandler):
             d = load()
             if active_core(d) == "singbox" and not SB_STATE["warn"]:
                 SB_STATE["warn"] = build_singbox(d)[1]
-            return self.send(200, {"core": active_core(d), "versions": {"mihomo": bin_version(MIHOMO_BIN), "singbox": sb_version()},
+            return self.send(200, {"core": active_core(d), "versions": {"mihomo": bin_version(MIHOMO_BIN), "smart": bin_version(SMART_BIN), "singbox": sb_version()},
+                                   "lgbm": os.path.isfile(LGBM_FILE),
                                    "warn": SB_STATE["warn"] if active_core(d) == "singbox" else [], "busy": CORE_UPD["busy"]})
         if p == "/api/coreswitch" and m == "POST":
             kind = b.get("core")
@@ -6051,21 +6144,31 @@ class H(BaseHTTPRequestHandler):
             return self.send(200 if ok else 409, {"message": msg})
         if p == "/api/coreupdate" and m == "GET":
             ch = q1(parse_qs(q), "channel", default="stable")
+            kind = "smart" if (q1(parse_qs(q), "core") or active_core()) == "smart" else "mihomo"
             if ch not in CORE_CHANNELS:
                 return self.send(400, {"message": "未知的更新通道"})
-            ok, info = core_check(ch, load().get("gh_proxy") or "")
+            ok, info = core_check(ch, load().get("gh_proxy") or "", kind)
             info["busy"] = CORE_UPD["busy"]
             return self.send(200 if ok else 502, info)
         if p == "/api/coreupdate/status" and m == "GET":
             return self.send(200, core_upd_status())
         if p == "/api/coreupdate" and m == "POST":
+            kind = "smart" if (b.get("core") or active_core()) == "smart" else "mihomo"
+            if b.get("action") == "lgbm":
+                try:
+                    n = lgbm_fetch(load().get("gh_proxy") or "")
+                except Exception as e:
+                    return self.send(502, {"message": "模型下载失败：" + str(e)[:200]})
+                if active_core() == "smart":
+                    reload_core()
+                return self.reply(True, f"LightGBM 模型已更新（{n // 2**20} MB）")
             if b.get("action") == "rollback":
-                ok, msg = core_job_start(core_rollback_job)
+                ok, msg = core_job_start(core_rollback_job, kind)
             else:
-                ch = b.get("channel") or "stable"
+                ch = "alpha" if kind == "smart" else (b.get("channel") or "stable")
                 if ch not in CORE_CHANNELS:
                     return self.send(400, {"message": "未知的更新通道"})
-                ok, msg = core_job_start(core_update_job, ch, load().get("gh_proxy") or "", bool(b.get("force")))
+                ok, msg = core_job_start(core_update_job, ch, load().get("gh_proxy") or "", bool(b.get("force")), kind)
             return self.send(200 if ok else 409, {"message": msg})
         if p == "/api/selfupdate" and m == "GET":
             ok, info = self_update(False, load().get("gh_proxy") or "")

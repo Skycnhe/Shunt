@@ -1,5 +1,17 @@
 # 更新记录与详细说明
 
+## v6.8.0 新增 mihomo Smart 内核
+- 设置 → 核心 → 内核：新增「mihomo Smart」（vernesong/mihomo，只有预览版），切换时没装会自动下载到 `/usr/local/bin/mihomo-smart`，与原版 mihomo 并存
+- 策略随内核走，共用同一份设置、按内核生成配置：
+  - mihomo：地区「竞技」组和「⚡ 全局自动选择」是 url-test
+  - mihomo Smart：这些组自动改为 `type: smart`（按延迟 / 丢包 / 速度综合打分），切回 mihomo 自动恢复 url-test
+  - sing-box：保持原样
+  - 「⚖️ 哈希」组、自定义策略组、规则、DNS 三个内核都不变
+- LightGBM 模型：策略组 → 地区分组里的开关，默认关；开启后下载 `Model.bin`（约 9 MB）到 `/etc/mihomo`，配置写入 `lgbm-auto-update`，每 72 小时经 GitHub 加速地址更新；也可点「更新模型」手动更新
+- 内核更新：可选 mihomo Smart，支持检查、更新、回滚
+- 节点页：Smart 组显示「智能竞技」，延迟取组内最低值，仍可点节点临时固定
+- init.d/mihomo：按 `/etc/mihomo-panel/core` 为 `smart` 时启动 mihomo-smart
+
 ## v6.7.3 地区「自动优选」改为「竞技」
 - 「🚀 节点选择」里的「🇯🇵 日本自动优选」等改名为「🇯🇵 日本竞技」：每 60 秒测速一次，容差 0，谁延迟最低就用谁
 - 默认测速间隔 300 秒 → 60 秒、容差 50 ms → 0 ms；升级时仍是旧默认值的自动改过来，自己改过的保留（策略组 → 测速间隔 / 容差，⚡ 全局自动选择同样适用）
