@@ -956,14 +956,15 @@ async function loadGroupsPage(){try{[GI]=await Promise.all([api('/api/groups'),l
   GCF=Object.assign({},GI.cfg,{on:GI.region_groups});renderGC();renderRegions();renderCGList();$('#gc-lb-sb').classList.toggle('hide',GI.core!=='singbox')}
 function renderGC(){const c=GCF;$('#gc-on').checked=c.on;$('#gc-on').onchange=e=>{GCF.on=e.target.checked;renderGC()};
   $('#gc-box').classList.toggle('dim',!c.on);$('#gc-box').style.opacity=c.on?'':'.5';
-  [['#gc-lb','lb'],['#gc-extra','extra'],['#gc-other','other'],['#gc-lazy','lazy'],['#gc-lgbm','lgbm']].forEach(([k,f])=>{$(k).checked=!!c[f];$(k).onchange=e=>{GCF[f]=e.target.checked}});
+  [['#gc-lb','lb'],['#gc-extra','extra'],['#gc-other','other'],['#gc-lazy','lazy'],['#gc-lgbm','lgbm']].forEach(([k,f])=>{$(k).checked=!!c[f];$(k).onchange=e=>{GCF[f]=e.target.checked;if(f==='lgbm')saveGC()}});  // LightGBM 开关点了直接保存
   const iv=$('#gc-int');if(![...iv.options].some(o=>o.value===String(c.interval)))iv.insertAdjacentHTML('beforeend',`<option value="${c.interval}">${c.interval} 秒</option>`);
   iv.value=String(c.interval);iv.onchange=e=>GCF.interval=+e.target.value;$('#gc-tol').value=c.tolerance;$('#gc-tol').onchange=e=>GCF.tolerance=+e.target.value;
   $('#gc-url').value=c.url;$('#gc-url').onchange=e=>GCF.url=e.target.value.trim()}
 async function lgbmUpdate(b){b.disabled=true;toast('正在下载 LightGBM 模型…');try{const j=await api('/api/coreupdate','POST',{action:'lgbm',core:'smart'});toast(j.message)}catch(e){toast(e.message)}b.disabled=false}
 async function saveGC(){const c=GCF;const body={region_groups:c.on,lb:c.lb,extra:c.extra,other:c.other,lazy:c.lazy,lgbm:!!c.lgbm,
     interval:+$('#gc-int').value,tolerance:+$('#gc-tol').value,url:$('#gc-url').value.trim()};
-  try{toast('正在校验并应用…');const j=await api('/api/groups/cfg','PUT',body);toast(j.message);loadGroupsPage()}catch(e){toast(e.message)}}
+  try{toast('正在校验并应用…');const j=await api('/api/groups/cfg','PUT',body);toast(j.message);await loadGroupsPage();
+    if(body.lgbm&&!GI.cfg.lgbm)toast('LightGBM 开关没有保存成功：面板服务端还是旧版本，请确认「面板更新」显示 6.8.1 并重启面板服务')}catch(e){toast(e.message);loadGroupsPage()}}
 function renderRegions(){$('#gc-regions').innerHTML=GI.regions.map(r=>`<tr><td><b style="font-weight:600">${esc(r.name)}</b></td>
     <td>${r.unknown&&!r.total?'<span class="mut">订阅未加载</span>':r.total+(r.unknown?'+':'')}${r.manual&&r.manual!==r.total?` <span class="mut small">（手动 ${r.manual}）</span>`:''}</td>
     <td class="w">${r.groups.map(g=>`<span class="tag ${TYC[GI.meta[g]?.type]||''}" style="margin:1px 4px 1px 0;display:inline-block">${esc(g)} · ${esc(TYN[GI.meta[g]?.type]||'')}</span>`).join('')}</td></tr>`).join('')

@@ -1,5 +1,9 @@
 # 更新记录与详细说明
 
+## v6.8.1 LightGBM 开关
+- 策略组页的 LightGBM 开关点了立即保存并应用，不用再点「保存并应用」
+- 保存后服务端没有记住（服务端仍是旧版本）时明确提示，不再悄悄弹回关闭
+
 ## v6.8.0 新增 mihomo Smart 内核
 - 设置 → 核心 → 内核：新增「mihomo Smart」（vernesong/mihomo，只有预览版），切换时没装会自动下载到 `/usr/local/bin/mihomo-smart`，与原版 mihomo 并存
 - 策略随内核走，共用同一份设置、按内核生成配置：
