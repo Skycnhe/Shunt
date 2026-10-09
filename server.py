@@ -100,7 +100,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 8
-PANEL_VERSION = "6.7.1"
+PANEL_VERSION = "6.7.2"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -3281,20 +3281,46 @@ def proxy_opener(proxy=True):
     return urllib.request.build_opener(*hs)
 
 
+def site_rtt(url, timeout=6):
+    """经 mixed 端口建立一条连接（DNS、TCP、TLS 握手不计时），在同一连接上再请求一次，只计这一次的往返。
+    与核心 unified-delay 的测法一致，也和浏览器复用连接时的实际体验一致；第二次请求失败时退回第一次的总耗时"""
+    u = urlsplit(url)
+    https = u.scheme == "https"
+    port = u.port or (443 if https else 80)
+    path = (u.path or "/") + ("?" + u.query if u.query else "")
+    hdr = {"User-Agent": "curl/8", "Accept": "*/*"}
+    if https:
+        c = http.client.HTTPSConnection("127.0.0.1", MIXED, timeout=timeout, context=ssl.create_default_context())
+        c.set_tunnel(u.hostname, port)
+    else:  # 普通 HTTP 走代理时请求行用完整 URL
+        c = http.client.HTTPConnection("127.0.0.1", MIXED, timeout=timeout)
+        path = f"http://{u.hostname}:{port}{path}"
+    try:
+        st = time.time()
+        c.request("HEAD", path, headers=hdr)
+        r = c.getresponse()
+        r.read()
+        first = int((time.time() - st) * 1000)
+        if r.will_close:
+            return first
+        try:
+            st = time.time()
+            c.request("HEAD", path, headers=hdr)
+            c.getresponse().read()
+            return max(1, int((time.time() - st) * 1000))
+        except Exception:
+            return first
+    finally:
+        c.close()
+
+
 def delay_test():
     tests = load()["tests"] or TESTS
-    opener = proxy_opener()
     out = [None] * len(tests)
 
     def one(i, t):
-        st = time.time()
         try:
-            req = urllib.request.Request(t["url"], method="HEAD", headers={"User-Agent": "curl/8"})
-            try:
-                opener.open(req, timeout=6).close()
-            except urllib.error.HTTPError:
-                pass  # 有响应即可视为可达
-            out[i] = {"name": t["name"], "ms": int((time.time() - st) * 1000)}
+            out[i] = {"name": t["name"], "ms": site_rtt(t["url"])}
         except Exception:
             out[i] = {"name": t["name"], "ms": -1}
 
