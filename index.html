@@ -5,6 +5,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
+<meta name="referrer" content="no-referrer">
 <script>(function(){const d=document.documentElement,k=localStorage.getItem('mp_skin')||'',L={sakura:1,mint:1};
   d.dataset.theme=k&&k!=='dark'&&k!=='light'?(L[k]?'light':'dark'):(localStorage.getItem('mp_theme')||(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'));
   if(k&&k!=='dark'&&k!=='light')d.dataset.skin=k})()</script>
@@ -666,11 +667,13 @@ nav .ico{display:none}nav .more{display:none}
       <div class="row"><input id="tg-token" placeholder="Bot Token，如 123456:ABC-..." class="sp"><input id="tg-chat" placeholder="Chat ID" style="width:150px"></div>
       <div class="row mt"><span class="sp"></span><button class="btn g" onclick="tgTest()">发送测试</button><button class="btn" onclick="saveTg()">保存</button></div></div>
     <div data-sg="look" class="card"><h3>主题</h3><div class="mut small" style="margin:-4px 0 12px">只保存在当前浏览器，每台设备可以用不同主题</div><div class="skins" id="skins"></div></div>
-    <div data-sg="look" class="card"><h3>背景图</h3><div class="mut small" style="margin:-4px 0 12px">上传的图片保存在路由器上，所有设备共用；模糊和遮罩只保存在当前浏览器</div>
+    <div data-sg="look" class="card"><h3>背景图</h3><div class="mut small" style="margin:-4px 0 12px">上传的图片和图片链接都由路由器保存，所有设备共用；模糊和遮罩只保存在当前浏览器</div>
       <div class="row" style="align-items:flex-start;gap:16px;flex-wrap:wrap"><div class="bgpv" id="bg-pv">未设置</div>
         <div style="flex:1;min-width:240px">
           <div class="row" style="gap:8px;flex-wrap:wrap"><label class="btn">上传图片<input type="file" accept="image/*" id="bg-file" hidden onchange="bgUpload(this)"></label>
             <button class="btn g" onclick="bgUrl()">使用图片链接</button><button class="btn g" onclick="bgClear()">移除</button></div>
+          <div class="opt hide" id="bg-daily-row"><div class="sp"><div class="t">每天自动更新</div><div class="dsc" id="bg-url-d" style="word-break:break-all"></div></div>
+            <label class="sw"><input type="checkbox" id="bg-daily" onchange="bgDaily(this.checked)"><span></span></label></div>
           <div class="opt"><div class="sp"><div class="t">模糊</div></div><div class="rng" style="width:min(220px,60vw)"><input type="range" min="0" max="30" id="bg-blur" oninput="bgSet()"><span id="bg-blur-v"></span></div></div>
           <div class="opt"><div class="sp"><div class="t" title="越高文字越清楚">遮罩</div></div><div class="rng" style="width:min(220px,60vw)"><input type="range" min="0" max="90" id="bg-dim" oninput="bgSet()"><span id="bg-dim-v"></span></div></div>
         </div></div></div>
@@ -731,11 +734,21 @@ function bgUpload(inp){const f=inp.files&&inp.files[0];inp.value='';if(!f)return
         c.width=Math.round(img.width*s);c.height=Math.round(img.height*s);c.getContext('2d').drawImage(img,0,0,c.width,c.height);data=c.toDataURL('image/jpeg',.86)}
       try{const r=await api('/api/bg','POST',{data});BG.src='/bg?v='+r.v;bgSave();toast('背景图已更新')}catch(e){toast(e.message)}};
     img.onerror=()=>toast('无法读取这张图片');img.src=rd.result};rd.readAsDataURL(f)}
-function bgUrl(){const u=prompt('图片链接（https://…）',/^https?:/.test(BG.src)?BG.src:'');if(u===null)return;
-  if(!/^https?:\/\/\S+$/.test(u.trim())){toast('请输入 http(s) 开头的图片链接');return}BG.src=u.trim();bgSave();toast('已使用图片链接')}
-async function bgClear(){if(BG.src.startsWith('/bg'))try{await api('/api/bg','DELETE')}catch(e){}BG.src='';bgSave();toast('已移除背景图')}
-async function renderLook(){renderSkins();bgApply();
-  if(!BG.src||BG.src.startsWith('/bg'))try{const r=await api('/api/bg');const s=r.exists?'/bg?v='+r.v:'';if(s!==BG.src){BG.src=s;bgSave()}}catch(e){}}
+// 图片链接由路由器下载保存（所有设备共用、无防盗链问题）；路由器下载失败时退回由当前浏览器直接加载
+let BGM={url:'',daily:false};
+function bgMeta(r){BGM={url:r&&r.exists&&r.url||'',daily:!!(r&&r.daily)};const row=$('#bg-daily-row');if(!row)return;
+  row.classList.toggle('hide',!BGM.url);$('#bg-daily').checked=BGM.daily;$('#bg-url-d').textContent=BGM.url?'路由器每天重新下载一次这个链接（适合必应每日壁纸）：'+BGM.url:''}
+async function bgUrl(){const u=prompt('图片链接（https://…）',BGM.url||(/^https?:/.test(BG.src)?BG.src:''));if(u===null)return;const url=u.trim();
+  if(!/^https?:\/\/\S+$/.test(url)){toast('请输入 http(s) 开头的图片链接');return}
+  toast('路由器正在下载图片…');
+  try{const r=await api('/api/bg/url','POST',{url,daily:BGM.daily||/bing|daily|每日/i.test(url)});BG.src='/bg?v='+r.v;bgSave();toast(r.message);bgSync()}
+  catch(e){BG.src=url;bgSave();bgMeta(null);toast(e.message+'，改为由当前浏览器直接加载（仅本机有效）')}}
+async function bgDaily(on){try{const r=await api('/api/bg/daily','POST',{daily:on});BGM.daily=on;toast(r.message)}catch(e){toast(e.message);$('#bg-daily').checked=!on}}
+async function bgClear(){if(BG.src.startsWith('/bg'))try{await api('/api/bg','DELETE')}catch(e){}BG.src='';bgSave();bgMeta(null);toast('已移除背景图')}
+// 路由器上的图可能已被每日更新替换：用新的修改时间刷新地址，避免浏览器一直显示缓存的旧图
+async function bgSync(){if(BG.src&&!BG.src.startsWith('/bg'))return;
+  try{const r=await api('/api/bg');bgMeta(r);const s=r.exists?'/bg?v='+r.v:'';if(s!==BG.src){BG.src=s;bgSave()}}catch(e){}}
+async function renderLook(){renderSkins();bgApply();bgSync()}
 bgApply();
 
 async function api(path,method='GET',body){
@@ -1431,7 +1444,7 @@ async function start(){
   const vis=f=>()=>{if(!document.hidden)f()};
   timers.forEach(clearInterval);timers=[setInterval(tick,1000),setInterval(vis(testSites),60000),setInterval(vis(()=>loadState().catch(()=>{})),15000),setInterval(vis(loadDevs),30000),
     setInterval(vis(()=>{if(TAB==='统计')loadStats();if(TAB==='概览')loadAdStat();if(TAB==='广告拦截'&&!AB?.updating)loadAB()}),30000)];
-  loadDevs();tick();testSites()}
+  loadDevs();tick();testSites();bgSync()}
 // 切回前台时立即刷新一次
 document.addEventListener('visibilitychange',()=>{if(document.hidden||!TOKEN||$('#app').classList.contains('hide'))return;_skip=0;tick();loadState().catch(()=>{});if(TAB==='节点')loadProxies()});
 placeNav();
