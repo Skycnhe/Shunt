@@ -126,17 +126,17 @@ EXPECT = {  # 场景名: (必须存在的组 {名称: [类型, 策略]}, 必须�
                          "⚖️ 澳大利亚" + LB, "⚖️ 俄罗斯" + LB, "⚖️ 其他" + LB] + TAIL),
     "18-均衡关闭+无扩展地区": ({"🇺🇸 美国自动优选": ["url-test", None], "🇭🇰 香港自动优选": ["url-test", None]},
                           ["⚖️ 美国负载均衡", "🌐 其他自动优选", "🇰🇷 韩国自动优选"], ["🇯🇵 日本" + A, "🇭🇰 香港" + A, "🇺🇸 美国" + A] + TAIL),
-    "19-轮询策略+非懒惰": ({"⚖️ 美国负载均衡": ["load-balance", "round-robin"], "⚖️ 日本负载均衡": ["load-balance", "round-robin"]}, []),
+    "19-旧轮询策略迁移+非懒惰": ({"⚖️ 美国负载均衡": ["load-balance", "consistent-hashing"], "⚖️ 日本负载均衡": ["load-balance", "consistent-hashing"]}, []),
     "20-关闭地区分组": ({"🖐️ 手动选择": ["select", None], "⚡ 全局自动选择": ["url-test", None]}, ["🇺🇸 美国自动优选"], TAIL),
     "21-订阅节点已知": ({"⚖️ 美国负载均衡": ["load-balance", None], "🇬🇧 英国自动优选": ["url-test", None], "🌐 其他自动优选": ["url-test", None],
                     "🇯🇵 日本自动优选": ["url-test", None], "⚖️ 日本负载均衡": ["load-balance", None]}, ["🇸🇬 新加坡自动优选", "🇹🇼 台湾自动优选", "🇭🇰 香港自动优选"]),
     "22-订阅未加载(旧行为)": ({"🇭🇰 香港自动优选": ["url-test", None], "🇸🇬 新加坡自动优选": ["url-test", None], "⚖️ 美国负载均衡": ["load-balance", None]},
                         ["🇬🇧 英国自动优选"]),
-    "23-自定义策略组(全部类型)": ({"🎯 美日均衡": ["load-balance", "round-robin"], "🧷 粘性": ["load-balance", "sticky-sessions"],
+    "23-自定义策略组(全部类型)": ({"🎯 美日均衡": ["load-balance", "consistent-hashing"], "🧷 粘性": ["load-balance", "consistent-hashing"],
                             "🔗 一致性": ["load-balance", "consistent-hashing"], "🎮 游戏": ["select", None],
                             "⚡ 低延迟": ["url-test", None], "🧯 稳定优先": ["fallback", None], "🔁 跟随节点选择": ["select", None],
                             "空筛选": ["select", None], "🧭 跟随主选择": ["select", None]}, []),
-    "24-自定义组+订阅+TUN+嗅探关": ({"🎮 游戏": ["select", None], "🧷 粘性": ["load-balance", "sticky-sessions"]}, []),
+    "24-自定义组+订阅+TUN+嗅探关": ({"🎮 游戏": ["select", None], "🧷 粘性": ["load-balance", "consistent-hashing"]}, []),
     # v6：用户要求的 🚀 节点选择 结构
     "25-节点选择(日新港美各≥2)": ({}, [], ["🇯🇵 日本" + A, "🇸🇬 新加坡" + A, "🇭🇰 香港" + A, "🇺🇸 美国" + A,
                                           "⚖️ 香港" + LB, "⚖️ 日本" + LB, "⚖️ 新加坡" + LB, "⚖️ 美国" + LB] + TAIL),
@@ -152,7 +152,7 @@ EXPECT = {  # 场景名: (必须存在的组 {名称: [类型, 策略]}, 必须�
 scen.update({
     "17-地区均衡(手动节点)": {"nodes": multi},
     "18-均衡关闭+无扩展地区": {"nodes": multi, "groups_cfg": gcfg(type="select", lb=False, extra=False, other=False)},
-    "19-轮询策略+非懒惰": {"nodes": multi, "groups_cfg": gcfg(type="load-balance", strategy="round-robin", lazy=False)},
+    "19-旧轮询策略迁移+非懒惰": {"nodes": multi, "groups_cfg": gcfg(type="load-balance", strategy="round-robin", lazy=False)},
     "20-关闭地区分组": {"nodes": multi, "region_groups": False, "groups_cfg": gcfg(interval=600, tolerance=0)},
     "21-订阅节点已知": {"subs": [sub], "nodes": multi[:3], "_prov": {"机场A": ["US 05", "US 06 Pro", "JP 03", "🇬🇧 英国 02", "Mars 01"]}},
     "22-订阅未加载(旧行为)": {"subs": [sub], "nodes": multi[:3]},
@@ -328,7 +328,7 @@ for g in c["proxy-groups"]:
     for m in g.get("proxies") or []:
         assert m in names, "%s 的成员 %s 不存在" % (g["name"], m)
     if g["type"] == "load-balance":
-        assert g.get("strategy") in ("consistent-hashing", "round-robin", "sticky-sessions"), "负载均衡缺少策略"
+        assert g.get("strategy") == "consistent-hashing", "负载均衡策略应为一致性哈希"
 for r in c["rules"]:
     if r.startswith(("AND,", "OR,", "NOT,")):
         continue

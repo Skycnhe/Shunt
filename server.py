@@ -56,27 +56,13 @@ CN_DNS = re.compile(r"(?i)(?:^|[/@\[])(?:223\.5\.5\.5|223\.6\.6\.6|2400:3200|119
                     r"1\.12\.12\.12|120\.53\.53\.53|2402:4e00|114\.114\.11[45]\.11[45]|180\.76\.76\.76|180\.184\.[12]\.[12]|"
                     r"101\.226\.4\.6|218\.30\.118\.6|117\.50\.\d+\.\d+|52\.80\.\d+\.\d+|"
                     r"[\w.-]*(?:alidns\.com|doh\.pub|dot\.pub|dnspod\.(?:cn|com)|360\.cn|114dns\.com|onedns\.net|baidu\.com|volces\.com))(?:[:/#\]]|$)")
+OXI_DEFAULT = {"enabled": False, "port": 5335, "upstreams": [], "concurrent": 2, "cache": 8192, "lazy": True,
+               "webui": True, "webui_port": 9199, "user": "admin", "pass": "", "custom": False}
 AB_DEFAULT = {"enabled": False, "lists": [], "black": [], "white": [], "interval": 86400, "dns": False}
-# 内置预设：按「国内 / 国外 × 视频 / 网页 / 隐私」分组，前端按 cat 分行显示
-BM = "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/"
-AB_PRESETS = [
-    {"cat": "国内 · 视频 / App", "name": "秋风广告规则", "url": "https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/AWAvenue-Ads-Rule.txt",
-     "dsc": "国内 App 开屏、视频贴片、广告 SDK"},
-    {"cat": "国内 · 视频 / App", "name": "小米电视广告", "url": BM + "AdvertisingMiTV/AdvertisingMiTV.list", "dsc": "小米电视 / 盒子开机与界面广告"},
-    {"cat": "国内 · 网页", "name": "anti-AD", "url": "https://anti-ad.net/easylist.txt", "dsc": "国内网页、App 广告综合"},
-    {"cat": "国内 · 网页", "name": "AdGuard 中文", "url": "https://filters.adtidy.org/extension/ublock/filters/224.txt", "dsc": "中文网站广告"},
-    {"cat": "国内 · 隐私", "name": "隐私追踪 (blackmatrix7)", "url": BM + "Privacy/Privacy.list", "dsc": "统计、埋点、行为追踪"},
-    {"cat": "国外 · 视频 / 电视", "name": "Smart-TV", "url": "https://raw.githubusercontent.com/Perflyst/PiHoleBlocklist/master/SmartTV.txt",
-     "dsc": "三星 / LG / 索尼等电视界面广告与回传"},
-    {"cat": "国外 · 网页", "name": "AdGuard DNS filter", "url": "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt",
-     "dsc": "国外网站、App 广告综合"},
-    {"cat": "国外 · 网页", "name": "HaGeZi Multi", "url": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/multi.txt",
-     "dsc": "广告 + 追踪 + 恶意域名，覆盖更广"},
-    {"cat": "国外 · 隐私", "name": "EasyPrivacy", "url": "https://easylist.to/easylist/easyprivacy.txt", "dsc": "国外统计与追踪"},
-    {"cat": "国外 · 隐私", "name": "Frogeye 一方追踪", "url": "https://hostfiles.frogeye.fr/firstparty-trackers.txt",
-     "dsc": "伪装成网站子域名的追踪器"}]
+AB_PRESETS = [{"name": "AdGuard DNS filter", "url": "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt"},
+              {"name": "anti-AD", "url": "https://anti-ad.net/easylist.txt"}]
 TUN_DEFAULT = {"stack": "mixed", "device": "Meta", "auto_redirect": True, "strict_route": False}
-GROUPS_DEFAULT = {"type": "url-test", "lb": True, "auto": True, "strategy": "round-robin", "interval": 300,
+GROUPS_DEFAULT = {"type": "url-test", "lb": True, "auto": True, "strategy": "consistent-hashing", "interval": 300,
                   "tolerance": 50, "url": "https://www.gstatic.com/generate_204", "extra": True, "other": True, "lazy": True}
 SCHED_DEFAULT = {"sub_update": "", "core_restart": "", "geo_update": "", "latency": 0}
 DEFAULT = {"password": "admin", "pw_hash": "", "pw_default": False, "secret": "", "mode": "rule", "tproxy": True, "subs": [], "rules": [],
@@ -84,7 +70,7 @@ DEFAULT = {"password": "admin", "pw_hash": "", "pw_default": False, "secret": ""
            "nodes": [], "ipv6": False, "https": False, "watchdog": True, "tg_token": "", "tg_chat": "",
            "proxy_mode": "", "tun": TUN_DEFAULT, "log_limit": 5, "adblock": AB_DEFAULT, "dns": DNS_DEFAULT,
            "devices": {}, "schedule": SCHED_DEFAULT, "groups_cfg": GROUPS_DEFAULT, "custom_groups": [], "sniffer": True,
-           "gh_proxy": "", "core": "mihomo", "schema": 0, "sysopt": [], "sysopt_orig": {}, "sysopt_mods": []}
+           "gh_proxy": "", "core": "mihomo", "schema": 0, "sysopt": [], "sysopt_orig": {}, "sysopt_mods": [], "oxidns": OXI_DEFAULT}
 TESTS = [
     {"name": "Google", "url": "https://www.google.com/generate_204"},
     {"name": "YouTube", "url": "https://www.youtube.com/generate_204"},
@@ -99,8 +85,8 @@ LB_PREFIX, AUTO_TAIL, LB_TAIL = "\u2696\uFE0F ", "自动优选", "负载均衡"
 LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据时自动迁移
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
-SCHEMA = 7
-PANEL_VERSION = "6.7.0"
+SCHEMA = 6
+PANEL_VERSION = "6.7"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -130,7 +116,7 @@ PRIMARY_REGIONS = 5
 G_OTHER = "🌐 其他"
 LB_SUFFIX, AUTO_SUFFIX = "均衡", "自动"  # 旧版（v5）地区组后缀，仅用于迁移
 GROUP_TYPES = ("select", "url-test", "fallback", "load-balance")
-LB_STRATEGIES = ("consistent-hashing", "round-robin", "sticky-sessions")
+LB_STRATEGIES = ("consistent-hashing",)  # v6.7 起只保留一致性哈希；旧数据里的轮询 / 粘性会话自动改为一致性哈希
 SIDE_GROUPS = [G_YT, G_GG, G_TG, G_AI, G_NF, G_FINAL]
 BUILTIN_POLICIES = {"DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE"}
 HC = "https://www.gstatic.com/generate_204"
@@ -144,7 +130,6 @@ def load():
             d = json.load(f)
     except Exception:
         d = {}
-    old_st = (d.get("groups_cfg") or {}).get("strategy") if isinstance(d.get("groups_cfg"), dict) else None
     for k, v in DEFAULT.items():
         d.setdefault(k, copy.deepcopy(v))
         if isinstance(v, dict) and isinstance(d[k], dict) and k != "devices":
@@ -156,6 +141,10 @@ def load():
     if not d["tests"]:
         d["tests"] = [dict(t) for t in TESTS]
     dirty = False
+    for g in [d["groups_cfg"]] + [x for x in d.get("custom_groups") or [] if isinstance(x, dict)]:
+        if isinstance(g, dict) and g.get("strategy") not in (None, "consistent-hashing"):  # v6.7：轮询 / 粘性会话已移除
+            g["strategy"] = "consistent-hashing"
+            dirty = True
     if d.get("password") and not d.get("pw_hash"):  # 旧版明文密码 → PBKDF2 哈希，明文不再落盘
         d["pw_default"] = d["password"] == "admin"
         d["pw_hash"] = pw_hash(d["password"])
@@ -165,8 +154,6 @@ def load():
         d["secret"] = secrets.token_hex(16)
         dirty = True
     if int(d.get("schema") or 0) < SCHEMA:  # v5 → v6：地区组改名（如 🇺🇸 美国 → 🇺🇸 美国自动优选），同步所有引用
-        # 旧版地区负载均衡与未写策略的自定义负载均衡组用的是 groups_cfg.strategy（没保存过 = 当时默认的一致性哈希），保留下来，行为不变
-        d["groups_cfg"]["strategy"] = old_st if old_st in LB_STRATEGIES else "consistent-hashing"
         migrate_names(d)
         d["schema"] = SCHEMA
         dirty = True
@@ -187,35 +174,16 @@ def auto_name(rname):
     return f"{flag} {label}{AUTO_TAIL}"
 
 
-LB_KINDS = (("round-robin", "轮询"), ("consistent-hashing", "哈希"), ("sticky-sessions", "粘性"))  # 每个地区三个负载均衡组，第一个是默认
-
-
-def lb_name(rname, strategy="round-robin"):
-    """「⚖️ 日本轮询」/「⚖️ 日本哈希」/「⚖️ 日本粘性」"""
-    return LB_PREFIX + region_label(rname)[1] + dict(LB_KINDS)[strategy]
-
-
-def lb_names(rname):
-    return [lb_name(rname, st) for st, _ in LB_KINDS]
-
-
-def lb_old_name(rname):
-    """v6.6.8 及以前的单个「⚖️ 日本负载均衡」组"""
+def lb_name(rname):
     return LB_PREFIX + region_label(rname)[1] + LB_TAIL
 
 
-def region_lb_set():
-    return {n for r, _ in REGIONS + [(G_OTHER, None)] for n in lb_names(r)}
-
-
-def legacy_map(st=None):
-    """旧版策略组名 → 新名称。st：旧版「⚖️ X负载均衡」实际用的策略（存在 groups_cfg.strategy，没保存过就是当时的默认一致性哈希），
-    迁移到同策略的组，行为与升级前一致"""
-    st = st if st in dict(LB_KINDS) else "consistent-hashing"
+def legacy_map():
+    """旧版策略组名 → 新名称"""
     m = {LEGACY_AUTO: G_AUTO}
     for rname in [r[0] for r in REGIONS] + [G_OTHER]:
         m[rname] = m[rname + AUTO_SUFFIX] = auto_name(rname)
-        m[rname + LB_SUFFIX] = m[lb_old_name(rname)] = lb_name(rname, st)
+        m[rname + LB_SUFFIX] = lb_name(rname)
     return m
 
 
@@ -271,8 +239,8 @@ def map_refs(d, mp, drop=()):
     return n
 
 
-def migrate_names(d, st=None):
-    mp = legacy_map(st if st else (d.get("groups_cfg") or {}).get("strategy"))
+def migrate_names(d):
+    mp = legacy_map()
     return map_refs(d, {k: v for k, v in mp.items() if k != v})
 
 
@@ -301,7 +269,7 @@ def update(fn):
 
 HISTORY_FILE = os.path.join(PANEL_DIR, "history.json")
 HISTORY_MAX = 10
-HISTORY_SKIP = {"core", "password", "pw_hash", "pw_default", "secret", "devices", "https", "schema", "sysopt", "sysopt_orig", "sysopt_mods"}
+HISTORY_SKIP = {"core", "password", "pw_hash", "pw_default", "secret", "devices", "https", "schema", "sysopt", "sysopt_orig", "sysopt_mods", "oxidns"}
 KEY_LABEL = {"subs": "订阅", "nodes": "节点", "rules": "自定义规则", "rulesets": "规则集", "dns": "DNS", "adblock": "广告拦截",
              "custom_groups": "自定义策略组", "groups_cfg": "地区分组", "region_groups": "地区分组", "proxy_mode": "代理方式",
              "tun": "TUN", "ipv6": "IPv6", "bypass": "绕过设备", "mode": "代理模式", "sniffer": "域名嗅探", "schedule": "定时任务",
@@ -549,7 +517,7 @@ def reserved_names(d=None):
     regs = [r[0] for r in REGIONS] + [G_OTHER]
     out = {G_SEL, G_AUTO, G_MANUAL, G_DIRECT, LEGACY_AUTO, "GLOBAL"} | set(SIDE_GROUPS) | BUILTIN_POLICIES
     for r in regs:
-        out |= {r, r + LB_SUFFIX, r + AUTO_SUFFIX, auto_name(r), lb_old_name(r), *lb_names(r)}
+        out |= {r, r + LB_SUFFIX, r + AUTO_SUFFIX, auto_name(r), lb_name(r)}
     if d:
         out |= {g["name"] for g in d.get("custom_groups") or []}
     return out
@@ -603,7 +571,7 @@ def gcfg(d):
     gc.update({k: v for k, v in (d.get("groups_cfg") or {}).items() if k in GROUPS_DEFAULT})
     gc["type"] = "url-test"  # v6：地区「自动优选」组固定为 url-test（旧的地区主组类型设置不再使用）
     if gc["strategy"] not in LB_STRATEGIES:
-        gc["strategy"] = "round-robin"
+        gc["strategy"] = "consistent-hashing"
     return gc
 
 
@@ -718,10 +686,7 @@ def clean_custom_group(b):
             raise ValueError("容差应在 0–1000 ms 之间")
         g.update(interval=iv, tolerance=tol)
         if t == "load-balance":
-            st = b.get("strategy") or "round-robin"
-            if st not in LB_STRATEGIES:
-                raise ValueError("负载均衡策略无效")
-            g["strategy"] = st
+            g["strategy"] = "consistent-hashing"  # 只支持一致性哈希
     return g
 
 
@@ -783,15 +748,15 @@ def build_config(d, strict=False):
             g["proxies"] = ["COMPATIBLE"]
         return g
 
-    # 地区分组：「<旗> <地区>自动优选」(url-test) + 「⚖️ <地区>轮询 / 哈希 / 粘性」(load-balance，三种策略各一个)
+    # 地区分组：「<旗> <地区>自动优选」(url-test) + 「⚖️ <地区>负载均衡」(load-balance，≥2 个节点时)
     autos, lbs = [], []
     for rname, flt, exc, matched, total, unknown in region_plan(d, names, use):
         label = region_label(rname)[1]
-        variants = [(auto_name(rname), "url-test", autos, None)]
-        if gc["lb"] and (total >= 2 or unknown):  # 地区有 ≥2 个节点时生成三个负载均衡组：轮询、一致性哈希、粘性会话
-            variants += [(lb_name(rname, st), "load-balance", lbs, {"strategy": st}) for st, _ in LB_KINDS]
-        for gname, t, bucket, ex in variants:
-            g = with_src(dict({"name": gname}, **group_opts(t, gc, ex)), matched)
+        variants = [(auto_name(rname), "url-test", autos)]
+        if gc["lb"]:  # 每个有节点的地区都生成「⚖️ <地区>负载均衡」
+            variants.append((lb_name(rname), "load-balance", lbs))
+        for gname, t, bucket in variants:
+            g = with_src(dict({"name": gname}, **group_opts(t, gc)), matched)
             if use:
                 if flt:
                     g["filter"] = flt
@@ -889,7 +854,7 @@ def build_config(d, strict=False):
     ]
     v6 = bool(d.get("ipv6"))
     fx = lambda xs: [fix_dns_policy(x, policies) for x in xs]
-    direct = fx(dc["direct"] or DNS_DEFAULT["direct"])
+    direct = fx(oxi_direct(d) or dc["direct"] or DNS_DEFAULT["direct"])
     proxy_dns = fx(dc["proxy"])
     plain_direct = [x.split("#", 1)[0] for x in direct]
     mode = dc["mode"]
@@ -1280,11 +1245,16 @@ SB_REPO = os.environ.get("SB_REPO", "https://github.com/SagerNet/sing-box/releas
 SB_API = os.environ.get("SB_API", "https://api.github.com/repos/SagerNet/sing-box/releases")
 SB_UA = ("clash.meta", "v2rayN/6.45")
 SB_STATE = {"warn": [], "subs": {}}
+SB_LOCK = threading.Lock()
 
 
 def active_core(d=None):
     c = (d or load()).get("core") or "mihomo"
     return c if c in CORES else "mihomo"
+
+
+def core_bin(kind=None):
+    return SB_BIN if (kind or active_core()) == "singbox" else MIHOMO_BIN
 
 
 def core_conf_path(kind=None):
@@ -1540,10 +1510,9 @@ def sb_fetch_sub(s, gh=""):
     last = ""
     for ua in SB_UA:
         try:
+            req = urllib.request.Request(s["url"], headers={"User-Agent": ua})
             data = None
             for use_proxy in ((True, False) if core_alive() else (False,)):
-                # 每次新建 Request：走代理失败后 urllib 已把代理地址写进 Request，复用会让「直连重试」仍然连到代理
-                req = urllib.request.Request(s["url"], headers={"User-Agent": ua})
                 try:
                     with proxy_opener(use_proxy).open(req, timeout=30) as r:
                         data = r.read(20 << 20)
@@ -1992,7 +1961,7 @@ def sb_dns(d, cfg, policies, rs, alias, v6):
 
     boot_list = list(dc["default"] or DNS_DEFAULT["default"])
     servers.append(_sb_dns_server(boot_list[0], "dns-boot", None, warn))
-    direct = fx(dc["direct"] or DNS_DEFAULT["direct"])
+    direct = fx(oxi_direct(d) or dc["direct"] or DNS_DEFAULT["direct"])
     proxy = fx(dc["proxy"])
     t_direct = server(direct[0])
     t_proxy = server(proxy[0]) if proxy else None
@@ -2111,9 +2080,8 @@ def build_singbox(d):
     alias = {}
     region_lb = set()
     for r, _ in REGIONS + [(G_OTHER, None)]:
-        for n in lb_names(r) + [lb_old_name(r)]:
-            alias[n] = auto_name(r)
-            region_lb.add(n)
+        alias[lb_name(r)] = auto_name(r)
+        region_lb.add(lb_name(r))
     groups = [g for g in cfg["proxy-groups"] if g["name"] not in region_lb]
     gnames = {g["name"] for g in groups}
     alias = {k: v for k, v in alias.items() if v in gnames}
@@ -2633,6 +2601,365 @@ def sb_update_job(channel, gh, force=False):
         CORE_UPD["pct"] = 100
         _cu("完成" if CORE_UPD["ok"] else "失败", 100, CORE_UPD["message"])
         CORE_UPD["busy"] = False
+
+
+# ---------------------------------------------------------------- OxiDNS（可选的本地 DNS 加速：缓存 + 并发上游）
+# 面板负责下载、生成配置、启动；mihomo / sing-box 的「直连 DNS」改为 udp://127.0.0.1:端口，
+# 国内域名、DIRECT 连接和节点域名都经 OxiDNS 解析（带缓存与乐观缓存）；代理 DNS 不变，仍经节点发出，不影响防泄露。
+OXI_BIN = os.environ.get("OXI_BIN", "/usr/local/bin/oxidns")
+OXI_DIR = os.environ.get("OXI_DIR", "/etc/oxidns")
+OXI_CONF = os.path.join(OXI_DIR, "config.yaml")
+OXI_INIT = os.environ.get("OXI_INIT", "/etc/init.d/oxidns")
+OXI_LOG = "/var/log/oxidns.log"
+OXI_SVC = os.environ.get("OXI_SVC", "rc-service oxidns")
+OXI_REPO = os.environ.get("OXI_REPO", "https://github.com/svenshi/oxidns/releases")
+OXI_STATE = {"fallback": False, "fails": 0}
+OXI_RESERVED = {53, 80, 443, 1053, 7890, 7891, 7892, 7893, 7894, 9090}
+OXI_INIT_SCRIPT = """#!/sbin/openrc-run
+# SPDX-License-Identifier: GPL-3.0-or-later
+# OxiDNS 本地 DNS（由 Shunt 面板安装和管理：DNS → OxiDNS）
+name="oxidns"
+description="OxiDNS local DNS for Shunt"
+command="%s"
+command_args="start -c %s -d %s"
+command_background=true
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="%s"
+error_log="%s"
+depend() { need net; before mihomo; }
+start_pre() { : > %s; }
+""" % (OXI_BIN, OXI_CONF, OXI_DIR, OXI_LOG, OXI_LOG, OXI_LOG)
+
+
+def oxi_cfg(d):
+    o = dict(OXI_DEFAULT)
+    o.update(d.get("oxidns") if isinstance(d.get("oxidns"), dict) else {})
+    o["upstreams"] = [str(x).strip() for x in (o["upstreams"] if isinstance(o["upstreams"], list) else []) if str(x).strip()]
+    for k in ("port", "webui_port", "concurrent", "cache"):
+        try:
+            o[k] = int(o[k])
+        except (TypeError, ValueError):
+            o[k] = OXI_DEFAULT[k]
+    for k in ("enabled", "lazy", "webui", "custom"):
+        o[k] = bool(o[k])
+    return o
+
+
+def oxi_arch():
+    """GitHub 发布包名里的平台（全部是 musl 静态版，Alpine 可直接运行）"""
+    m = os.uname().machine
+    return {"x86_64": "standard-x86_64-unknown-linux-musl", "aarch64": "standard-aarch64-unknown-linux-musl",
+            "arm64": "standard-aarch64-unknown-linux-musl", "armv7l": "armv7-unknown-linux-musleabihf",
+            "armv8l": "armv7-unknown-linux-musleabihf", "armv6l": "arm-unknown-linux-musleabihf",
+            "i686": "i686-unknown-linux-musl", "i386": "i686-unknown-linux-musl"}.get(m, "")
+
+
+def oxi_version(path=None):
+    p = path or OXI_BIN
+    if not os.path.isfile(p):
+        return ""
+    code, out = sh(f"'{p}' --version", timeout=15)
+    m = re.search(r"oxidns\s+v?([\w.\-]+)", out) if code == 0 else None
+    return m.group(1) if m else ""
+
+
+def oxi_remote_version(gh):
+    with open_url(OXI_REPO + "/latest", gh, timeout=15) as r:  # 跟随跳转取版本号，不占 GitHub API 次数
+        m = re.search(r"/tag/v?([\w.\-]+)", r.geturl())
+    if not m:
+        raise IOError("获取 OxiDNS 最新版本号失败")
+    return m.group(1)
+
+
+def oxi_running():
+    if not os.path.isfile(OXI_BIN):
+        return False
+    try:
+        ok, _, _ = dns_probe(("127.0.0.1", oxi_cfg(load())["port"]))
+        return ok
+    except Exception:
+        return False
+
+
+def oxi_upstreams(d, o=None):
+    """OxiDNS 的上游：自己的列表，留空时沿用面板「直连 DNS」（去掉 #策略组，跳过 system / dhcp 等它不认识的写法）"""
+    o = o or oxi_cfg(d)
+    dc = dns_cfg(d)
+    src = o["upstreams"] or dc["direct"] or DNS_DEFAULT["direct"]
+    out = []
+    for x in src:
+        x = x.split("#", 1)[0].strip()
+        if re.match(r"^(?:udp|tcp|tls|https|quic|doq|doh|h3)://\S+$", x) or re.match(r"^[\d.]+(?::\d+)?$|^\[[0-9a-fA-F:]+\](?::\d+)?$", x):
+            if "127.0.0.1:%d" % o["port"] not in x and x not in out:
+                out.append(x)
+    return out or list(DNS_DEFAULT["direct"])
+
+
+def oxi_bootstrap(d):
+    for x in dns_cfg(d)["default"] or DNS_DEFAULT["default"]:
+        m = re.match(r"^(?:udp://)?(\d+\.\d+\.\d+\.\d+)(?::(\d+))?$", x.strip())
+        if m:
+            return f"{m.group(1)}:{m.group(2) or 53}"
+    return "223.5.5.5:53"
+
+
+def _yq(s):
+    return json.dumps(str(s), ensure_ascii=False)  # JSON 字符串即合法的 YAML 双引号字符串
+
+
+def oxi_build(d):
+    """生成 OxiDNS 配置（YAML 文本）：缓存（可乐观缓存）→ 并发转发 → 只监听本机"""
+    o = oxi_cfg(d)
+    if not o["pass"]:
+        o["pass"] = secrets.token_urlsafe(9)
+    boot = oxi_bootstrap(d)
+    ups = []
+    for i, a in enumerate(oxi_upstreams(d, o)):
+        host = re.sub(r"^\w+(?:\+\w+)?://", "", a).split("/")[0].split(":")[0].strip("[]")
+        ups.append(f"        - tag: {_yq('up%d' % (i + 1))}\n          addr: {_yq(a)}\n          timeout: 4s")
+        if re.search(r"[A-Za-z]", host) and "://" in a:
+            ups[-1] += f"\n          bootstrap: {_yq(boot)}"
+    conc = max(1, min(o["concurrent"], len(ups), 8))
+    cache = max(1024, min(o["cache"], 200000))
+    y = ["# 由 Shunt 面板生成（DNS → OxiDNS）。要手写配置请在面板里打开「自定义配置」，否则会被覆盖", "",
+         "log:", "  level: warn", ""]
+    if o["webui"]:
+        y += ["api:", "  http:", f"    listen: {_yq('0.0.0.0:%d' % o['webui_port'])}",
+              "    auth:", "      type: basic", f"      username: {_yq(o['user'] or 'admin')}", f"      password: {_yq(o['pass'])}"]
+        if os.path.isdir(os.path.join(OXI_DIR, "webui")):
+            y += ["    webui:", f"      root: {_yq(os.path.join(OXI_DIR, 'webui'))}"]
+        y.append("")
+    y += ["plugins:",
+          "  - tag: cache", "    type: cache", "    args:", f"      size: {cache}", "      short_circuit: true",
+          "      cache_negative: true", "      max_negative_ttl: 60", "      min_positive_ttl: 1"]
+    if o["lazy"]:
+        y += ["      lazy_cache_ttl: 86400", f"      dump_file: {_yq(os.path.join(OXI_DIR, 'cache.dump'))}", "      dump_interval: 3600"]
+    y += ["", "  - tag: forward", "    type: forward", "    args:", f"      concurrent: {conc}",
+          "      response_selection: balanced", "      upstreams:"] + ups
+    y += ["", "  - tag: main", "    type: sequence", "    args:",
+          "      - exec: $cache", "      - exec: $forward", "      - exec: accept", ""]
+    for kind in ("udp", "tcp"):
+        y += [f"  - tag: {kind}_server", f"    type: {kind}_server", "    args:", "      entry: main",
+              f"      listen: {_yq('127.0.0.1:%d' % o['port'])}", ""]
+    return "\n".join(y), o
+
+
+def oxi_check(path, binp=None):
+    code, out = sh(f"'{binp or OXI_BIN}' check -c '{path}' -d '{OXI_DIR}'", timeout=30)
+    out = re.sub(r"\x1b\[[0-9;]*m", "", out).strip()
+    first = next((l for l in out.splitlines() if "rror" in l), out)  # 只留第一条错误，后面是重复的调用栈
+    return code == 0, re.sub(r"^\s*error:\s*", "", first)[:400]
+
+
+def oxi_write(d, path=None):
+    """生成并校验配置；自定义配置模式下不覆盖用户的文件。返回 (ok, 信息)"""
+    o = oxi_cfg(d)
+    os.makedirs(OXI_DIR, exist_ok=True)
+    if o["custom"] and os.path.isfile(OXI_CONF) and path is None:
+        return oxi_check(OXI_CONF)
+    text, o2 = oxi_build(d)
+    if not o["pass"]:  # 首次生成 WebUI 密码后记下来
+        def setp(x):
+            x.setdefault("oxidns", {})["pass"] = o2["pass"]
+        update(setp)
+    final = path or OXI_CONF
+    tmp = final + ".new"
+    with open(tmp, "w") as f:
+        f.write(text)
+    if not os.path.isfile(OXI_BIN):
+        os.replace(tmp, final)
+        return True, "已生成配置（OxiDNS 尚未安装）"
+    ok, err = oxi_check(tmp)
+    if not ok:
+        os.remove(tmp)
+        return False, "OxiDNS 配置校验失败：" + err
+    os.replace(tmp, final)
+    return True, "OxiDNS 配置已生成"
+
+
+def oxi_direct(d):
+    """核心的直连 DNS 是否改用 OxiDNS：已启用、已安装，且没有因故障临时回退"""
+    o = oxi_cfg(d)
+    if not o["enabled"] or OXI_STATE["fallback"] or not os.path.isfile(OXI_BIN):
+        return None
+    return [f"udp://127.0.0.1:{o['port']}"]
+
+
+def oxi_restart(wait=8):
+    sh(OXI_SVC + " restart", timeout=40)
+    for _ in range(wait * 2):
+        time.sleep(0.5)
+        if oxi_running():
+            return True
+    return False
+
+
+def oxi_service(on):
+    if not os.path.isfile(OXI_INIT) or OXI_SVC != "rc-service oxidns":
+        return
+    sh("rc-update add oxidns default" if on else "rc-update del oxidns default", timeout=20)
+
+
+def oxi_install(gh, force=False):
+    """下载 OxiDNS 到 OXI_BIN（旧版本备份为 .bak），WebUI 放到 OXI_DIR/webui；返回 (版本, 是否变化)"""
+    import tarfile
+    arch = oxi_arch()
+    if not arch:
+        raise ValueError(f"OxiDNS 不支持当前 CPU 架构：{os.uname().machine}")
+    ver = oxi_remote_version(gh)
+    cur = oxi_version()
+    if cur == ver and not force:
+        return ver, False
+    name = f"oxidns-{arch}.tar.gz"
+    _cu("下载", 10, f"下载 OxiDNS {ver}（{name}）")
+    with open_url(f"{OXI_REPO}/download/v{ver}/{name}", gh, timeout=60) as r:
+        total = int(r.headers.get("Content-Length") or 0)
+        buf, n = io.BytesIO(), 0
+        while True:
+            chunk = r.read(1 << 16)
+            if not chunk:
+                break
+            n += len(chunk)
+            if n > 80 * 2**20:
+                raise ValueError("下载文件异常过大，已中止")
+            buf.write(chunk)
+            if total:
+                CORE_UPD["pct"] = 10 + int(50 * n / total)
+    buf.seek(0)
+    os.makedirs(OXI_DIR, exist_ok=True)
+    tmp = OXI_BIN + ".new"
+    with tarfile.open(fileobj=buf, mode="r:gz") as tf:
+        mems = tf.getmembers()
+        mem = next((m for m in mems if m.isfile() and os.path.basename(m.name) == "oxidns"), None)
+        if not mem:
+            raise ValueError("压缩包里没有 oxidns 程序")
+        with tf.extractfile(mem) as src, open(tmp, "wb") as f:
+            shutil.copyfileobj(src, f)
+        os.chmod(tmp, 0o755)
+        nv = oxi_version(tmp)
+        if not nv:
+            os.remove(tmp)
+            raise ValueError("下载的 OxiDNS 无法运行（架构不匹配或文件损坏）")
+        webs = [m for m in mems if (m.isfile() or m.isdir()) and re.match(r"^(?:\./)?webui(?:/|$)", m.name)]
+        if webs:
+            _cu("WebUI", 62, "解压 OxiDNS WebUI")
+            wd, wtmp = os.path.join(OXI_DIR, "webui"), os.path.join(OXI_DIR, "webui.new")
+            shutil.rmtree(wtmp, ignore_errors=True)
+            for m in webs:
+                rel = os.path.normpath(re.sub(r"^(?:\./)?webui/?", "", m.name))
+                if rel.startswith("..") or os.path.isabs(rel):
+                    continue
+                dst = os.path.join(wtmp, rel) if rel != "." else wtmp
+                if m.isdir():
+                    os.makedirs(dst, exist_ok=True)
+                else:
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    with tf.extractfile(m) as src, open(dst, "wb") as f:
+                        shutil.copyfileobj(src, f)
+            shutil.rmtree(wd, ignore_errors=True)
+            os.replace(wtmp, wd)
+    if os.path.isfile(OXI_BIN):
+        shutil.copy2(OXI_BIN, OXI_BIN + ".bak")
+    os.replace(tmp, OXI_BIN)
+    if OXI_SVC == "rc-service oxidns" and (not os.path.isfile(OXI_INIT) or open(OXI_INIT).read() != OXI_INIT_SCRIPT):
+        with open(OXI_INIT, "w") as f:
+            f.write(OXI_INIT_SCRIPT)
+        os.chmod(OXI_INIT, 0o755)
+    return nv, True
+
+
+def oxi_apply_core(d):
+    """直连 DNS 指向变化后重新生成核心配置（核心没在跑就只写文件）"""
+    if core_alive():
+        return reload_core()
+    write_active_config(d)
+    return True, "已写入核心配置"
+
+
+def oxi_job(action, gh):
+    """install：安装并启用；update：更新程序；所有步骤失败时恢复原状态"""
+    try:
+        cur = oxi_version()
+        _cu("获取版本", 3, "正在获取 OxiDNS 最新版本号")
+        nv, changed = oxi_install(gh, force=action == "reinstall")
+        if action in ("update", "reinstall") and not changed:
+            CORE_UPD.update(ok=True, message=f"OxiDNS 已是最新版本 {nv}")
+            return
+        _cu("生成配置", 70, "生成 OxiDNS 配置并校验")
+        d = load()
+        ok, msg = oxi_write(d)
+        if not ok:
+            if cur and os.path.isfile(OXI_BIN + ".bak"):
+                shutil.copy2(OXI_BIN + ".bak", OXI_BIN)
+            raise ValueError(msg)
+        _cu("启动", 80, "启动 OxiDNS（只监听 127.0.0.1:%d）" % oxi_cfg(d)["port"])
+        oxi_service(True)
+        if not oxi_restart(10):
+            tail = sh(f"tail -n 8 '{OXI_LOG}'")[1][-400:]
+            if cur and os.path.isfile(OXI_BIN + ".bak"):
+                shutil.copy2(OXI_BIN + ".bak", OXI_BIN)
+                oxi_restart(5)
+            raise ValueError("OxiDNS 启动后没有响应 DNS 查询" + ("：" + tail if tail else ""))
+        if action == "install":
+            update(lambda x: x.setdefault("oxidns", {}).update(enabled=True))
+            OXI_STATE.update(fallback=False, fails=0)
+            _cu("接入核心", 90, "把核心的直连 DNS 改为 OxiDNS")
+            ok, msg = oxi_apply_core(load())
+            if not ok:
+                update(lambda x: x["oxidns"].update(enabled=False))
+                oxi_apply_core(load())
+                raise ValueError("核心配置更新失败，已取消接入：" + msg)
+        CORE_UPD.update(ok=True, message=(f"OxiDNS {nv} 已安装并接入" if action == "install" else f"OxiDNS 已从 {cur or '未安装'} 更新到 {nv}"))
+        notify("🧭 " + CORE_UPD["message"])
+    except Exception as e:
+        CORE_UPD.update(ok=False, message=str(e))
+    finally:
+        CORE_UPD["pct"] = 100
+        _cu("完成" if CORE_UPD["ok"] else "失败", 100, CORE_UPD["message"])
+        CORE_UPD["busy"] = False
+
+
+def oxi_status(d=None):
+    d = d or load()
+    o = oxi_cfg(d)
+    ver = oxi_version()
+    run, ms = False, None
+    if ver:
+        try:
+            run, ms, _ = dns_probe(("127.0.0.1", o["port"]), "www.qq.com")
+        except Exception:
+            run = False
+    o2 = {k: v for k, v in o.items() if k != "pass"}
+    o2["has_pass"] = bool(o["pass"])
+    return {"cfg": o2, "version": ver, "backup": oxi_version(OXI_BIN + ".bak"), "running": run, "ms": ms,
+            "arch": oxi_arch() or os.uname().machine, "fallback": OXI_STATE["fallback"],
+            "active": bool(oxi_direct(d)) and run, "upstreams": oxi_upstreams(d, o), "follow": not o["upstreams"],
+            "webui_dir": os.path.isdir(os.path.join(OXI_DIR, "webui"))}
+
+
+def oxi_watch(d):
+    """看门狗：OxiDNS 不响应时重启；两次仍不行就让核心临时改回原直连 DNS，恢复后再切回"""
+    o = oxi_cfg(d)
+    if not o["enabled"] or not os.path.isfile(OXI_BIN):
+        return
+    if oxi_running():
+        OXI_STATE["fails"] = 0
+        if OXI_STATE["fallback"]:
+            OXI_STATE["fallback"] = False
+            oxi_apply_core(load())
+            wd_event("OxiDNS 已恢复，直连 DNS 重新交给 OxiDNS")
+        return
+    OXI_STATE["fails"] += 1
+    if OXI_STATE["fails"] <= 2:
+        wd_event(f"OxiDNS 无响应，第 {OXI_STATE['fails']} 次自动重启", push=OXI_STATE["fails"] == 1)
+        sh(OXI_SVC + " restart", timeout=40)
+        return
+    if not OXI_STATE["fallback"]:
+        OXI_STATE["fallback"] = True
+        oxi_apply_core(load())
+        wd_event("OxiDNS 重启 2 次仍无响应，核心已临时改用原直连 DNS")
+    elif OXI_STATE["fails"] % 10 == 0:
+        sh(OXI_SVC + " restart", timeout=40)
 
 
 # ---------------------------------------------------------------- 面板在线更新
@@ -3454,6 +3781,10 @@ def watchdog_tick():
     if not d.get("watchdog", True):
         WD["status"] = "off"
         return
+    try:
+        oxi_watch(d)
+    except Exception as e:
+        print("oxidns watch error", e, flush=True)
     redirecting = d["proxy_mode"] != "off"  # TProxy 或 TUN（TUN 模式下 tproxy.sh 仍负责 DNS 重定向）
     if core_alive():
         if WD["status"] in ("restarting", "direct"):
@@ -3617,61 +3948,6 @@ def bg_save(data_url):
         f.write(raw)
     os.replace(tmp, BG_FILE)
     return True, "背景图已保存"
-
-
-BG_META = BG_FILE + ".json"  # 链接背景图：{"url": 链接, "daily": 每天刷新, "t": 上次下载时间}
-
-
-def bg_meta():
-    try:
-        with open(BG_META) as f:
-            m = json.load(f)
-        return m if isinstance(m, dict) else {}
-    except Exception:
-        return {}
-
-
-def bg_meta_save(m):
-    try:
-        if m:
-            tmp = BG_META + ".tmp"
-            with open(tmp, "w") as f:
-                json.dump(m, f, ensure_ascii=False)
-            os.replace(tmp, BG_META)
-        elif os.path.exists(BG_META):
-            os.remove(BG_META)
-    except OSError as e:
-        print("bg meta save error", e, flush=True)
-
-
-def bg_fetch(url):
-    """由路由器下载图片链接保存为背景图（先走代理，失败再直连）。必应每日壁纸这类接口会 302 跳到真实图片，urllib 自动跟随"""
-    url = str(url or "").strip()
-    if not re.match(r"https?://\S+$", url):
-        return False, "请输入 http(s) 开头的图片链接"
-    raw, err = None, ""
-    for proxy in (True, False):
-        # 每次新建 Request：走代理时 urllib 会把代理地址写进 Request，复用会让直连也连到代理端口
-        req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "image/avif,image/webp,image/*,*/*;q=0.8"})
-        try:
-            with proxy_opener(proxy).open(req, timeout=20) as r:
-                raw = r.read(BG_MAX + 1)
-            break
-        except urllib.error.HTTPError as e:
-            err = f"HTTP {e.code}"
-        except Exception as e:
-            err = str(e)[:120]
-    if raw is None:
-        return False, "下载失败：" + (err or "无法连接")
-    if len(raw) > BG_MAX:
-        return False, "图片不能超过 8MB"
-    if bg_type(raw[:16]) is None:
-        return False, "链接返回的不是 JPG / PNG / WebP / GIF 图片"
-    tmp = BG_FILE + ".tmp"
-    with open(tmp, "wb") as f:
-        f.write(raw)
-    os.replace(tmp, BG_FILE)
-    return True, "背景图已下载到路由器"
 
 
 def bg_type(head):
@@ -4188,7 +4464,6 @@ def core_stream(path, sink, stop, idle=None):
 #   ||a.com^ → "+.a.com"（含子域）；hosts / 纯域名 → "a.com"（仅该域名，与 AdGuard Home 语义一致）
 # 规则：AND,((RULE-SET,ad-xxx),(NOT,((RULE-SET,ad-allow)))),REJECT  —— 白名单优先，且被放行的域名继续走正常分流
 DOMAIN_RX = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9_](?:[a-z0-9_\-]{0,61}[a-z0-9_])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9\-]{1,59})$")
-CLASH_RX = re.compile(r"^(domain|domain-suffix),([^,\s]+)(?:,.*)?$")
 ABP_RX = re.compile(r"^(@@)?\|\|([^\^/|$]+)\^\|?(?:\$(.*))?$")
 HOSTS_IPS = {"0.0.0.0", "127.0.0.1", "::", "::1", "0:0:0:0:0:0:0:0", "::0", "0", "255.255.255.255"}
 HOSTS_SKIP = {"localhost", "localhost.localdomain", "local", "broadcasthost", "ip6-localhost", "ip6-loopback",
@@ -4224,23 +4499,6 @@ def parse_filter(text, plain_suffix=False):
         if not line or line[0] in "!#[":
             continue
         low = line.lower()
-        if low.startswith("payload:"):
-            continue
-        if low.startswith("- "):  # Clash YAML payload：  - DOMAIN-SUFFIX,a.com / - '+.a.com'
-            low = low[2:].strip().strip("'\"")
-            if not low:
-                continue
-        cm = CLASH_RX.match(low)
-        if cm:  # Clash 规则列表：DOMAIN / DOMAIN-SUFFIX 可用，KEYWORD / IP 类无法用域名列表表达
-            dom = norm_domain(cm.group(2))
-            if dom:
-                (bs if cm.group(1) == "domain-suffix" else be).add(dom)
-            else:
-                skipped += 1
-            continue
-        if re.match(r"^(?:domain-keyword|domain-regex|ip-cidr6?|ip-asn|geoip|geosite|process-name|user-agent|url-regex|dst-port|src-ip-cidr),", low):
-            skipped += 1
-            continue
         if low.startswith("||") or low.startswith("@@"):
             m = ABP_RX.match(low)
             if not m:
@@ -4763,12 +5021,6 @@ def sched_loop():
                     refresh_regions()
                     if bad_:
                         sched_event("订阅自动更新：✗ " + "；".join(bad_)[:200])
-            bm = bg_meta()
-            if bm.get("daily") and bm.get("url") and time.time() - max(int(bm.get("t") or 0), SCHED["done"].get("bg", 0)) >= 86400:
-                SCHED["done"]["bg"] = time.time()  # 失败也等一天，避免反复重试
-                if bg_fetch(bm["url"])[0]:
-                    bm["t"] = int(time.time())
-                    bg_meta_save(bm)
             ab = d["adblock"]
             if ab.get("enabled") and ab.get("lists") and int(ab.get("interval") or 0):
                 if time.time() - max(AB_STATE["last"], ab_last_update()) >= int(ab["interval"]):
@@ -4829,10 +5081,13 @@ def rdns_loop():
         while RDNS_Q:
             ip = RDNS_Q.popleft()
             name = ""
-            try:  # 不再改全局 socket 超时：那会让同时建立的订阅下载、核心更新等连接也只剩 2 秒
+            try:
+                socket.setdefaulttimeout(2)
                 name = socket.gethostbyaddr(ip)[0]
             except Exception:
                 pass
+            finally:
+                socket.setdefaulttimeout(None)
             if name and (name == ip or name.endswith(".in-addr.arpa")):
                 name = ""
             RDNS[ip] = (name.split(".")[0] if name.endswith((".lan", ".local", ".home", ".localdomain")) else name, time.time() + 1800)
@@ -4955,6 +5210,15 @@ def diagnose():
                  "检查 设置 → DNS 中的直连 DNS 是否可达")
         except Exception as e:
             item("DNS 服务 (127.0.0.1:1053)", False, str(e)[:120], "确认核心 DNS 已监听 1053 端口")
+        ox = oxi_cfg(d)
+        if ox["enabled"]:
+            try:
+                ok, ms, rc = dns_probe(("127.0.0.1", ox["port"]), "www.qq.com")
+                item(f"OxiDNS (127.0.0.1:{ox['port']})", ok if not OXI_STATE["fallback"] else "warn",
+                     (f"解析 www.qq.com 用时 {ms} ms" if ok else f"返回码 {rc}") + ("；核心已临时改用原直连 DNS" if OXI_STATE["fallback"] else ""),
+                     "DNS → OxiDNS 里重启或查看日志；也可停用 OxiDNS")
+            except Exception as e:
+                item(f"OxiDNS (127.0.0.1:{ox['port']})", False, str(e)[:120], "DNS → OxiDNS 里重启或查看日志；也可停用 OxiDNS")
         for host, label in (("www.baidu.com", "国内域名解析"), ("www.google.com", "国外域名解析")):
             c2, raw = core("GET", f"/dns/query?name={host}&type=A", timeout=10)
             try:
@@ -5249,7 +5513,7 @@ def restore_selections():
     sel = read_json(SEL_FILE, None)
     if not sel:
         return 0
-    mp = legacy_map(load()["groups_cfg"].get("strategy"))
+    mp = legacy_map()
     proxies = (core_json("/proxies", timeout=5) or {}).get("proxies") or {}
     n = 0
     for g, now in sel.items():
@@ -5276,7 +5540,7 @@ def startup_migrate():
         return
     cur = {} if active_core() == "singbox" else read_json(os.path.join(CONF_DIR, "config.yaml"), None) or {}
     old = set(legacy_map())
-    if any(g.get("name") in old for g in cur.get("proxy-groups") or []):
+    if any(g.get("name") in old or g.get("strategy") in ("round-robin", "sticky-sessions") for g in cur.get("proxy-groups") or []):
         snapshot_selections()
         ok, msg = reload_core()
         print(time.strftime("%F %T"), "[upgrade] 已按新版策略组重新生成配置：", ok, msg[:120], flush=True)
@@ -5297,10 +5561,6 @@ def login_blocked(ip):
 
 
 def login_failed(ip):
-    if len(FAILS) > 256:  # 清掉已过期的记录，防止字典无限增长
-        now = time.time()
-        for k in [k for k, v in FAILS.items() if v[1] and v[1] <= now]:
-            FAILS.pop(k, None)
     e = FAILS.setdefault(ip, [0, 0])
     if e[1] and e[1] <= time.time():
         e[:] = [0, 0]
@@ -5352,7 +5612,7 @@ def group_kind(n, custom=()):
         return "direct"
     if n in SIDE_GROUPS:
         return "service"
-    if n.startswith(LB_PREFIX) and n.endswith((LB_TAIL,) + tuple(t for _, t in LB_KINDS)):
+    if n.startswith(LB_PREFIX) and n.endswith(LB_TAIL):
         return "lb"
     if n.endswith(AUTO_TAIL):
         return "region"
@@ -5411,8 +5671,6 @@ def static_file(name):
 
 # ---------------------------------------------------------------- HTTP
 class H(BaseHTTPRequestHandler):
-    timeout = 30  # 读请求/TLS 握手的超时：卡住不发数据的连接不再永久占用线程（日志流只写不读，不受影响）
-
     def log_message(self, *a):
         pass
 
@@ -5709,7 +5967,166 @@ class H(BaseHTTPRequestHandler):
             core("POST", "/cache/dns/flush")
             core("POST", "/cache/fakeip/flush") if dc["mode"] == "fake-ip" else None
         done = "已应用防泄露设置" if b.get("preset") == "antileak" else "DNS 设置已生效"
+        if ok:
+            o = oxi_cfg(load())
+            if o["enabled"] and not o["custom"] and not o["upstreams"] and os.path.isfile(OXI_BIN):
+                okx, mx = oxi_write(load())  # OxiDNS 沿用直连 DNS 作上游：跟着更新
+                if okx:
+                    threading.Thread(target=oxi_restart, daemon=True).start()
+                else:
+                    done += "；但 OxiDNS 上游未更新：" + mx
         return self.reply(ok, done if ok else msg)
+
+    def oxi_api(self, m, sub, b, q):
+        gh = load().get("gh_proxy") or ""
+        if sub == "" and m == "GET":
+            st = oxi_status()
+            st["pass"] = oxi_cfg(load())["pass"]
+            if q1(parse_qs(q), "check"):
+                try:
+                    st["remote"] = oxi_remote_version(gh)
+                except Exception as e:
+                    st["remote_err"] = str(e)[:200]
+            return self.send(200, st)
+        if sub == "/config" and m == "GET":
+            try:
+                text = open(OXI_CONF).read()
+            except OSError:
+                text = oxi_build(load())[0]
+            return self.send(200, {"text": text, "custom": oxi_cfg(load())["custom"]})
+        if sub == "/config" and m == "PUT":
+            if not b.get("custom"):
+                update(lambda x: x.setdefault("oxidns", {}).update(custom=False))
+                ok, msg = oxi_write(load())
+                if ok and oxi_cfg(load())["enabled"]:
+                    oxi_restart()
+                return self.reply(ok, "已改回面板自动生成的配置" if ok else msg)
+            text = str(b.get("text") or "")
+            if not text.strip() or len(text) > 512 * 1024:
+                return self.send(400, {"message": "配置为空或过大"})
+            if not os.path.isfile(OXI_BIN):
+                return self.send(400, {"message": "请先安装 OxiDNS"})
+            os.makedirs(OXI_DIR, exist_ok=True)
+            tmp = OXI_CONF + ".new"
+            with open(tmp, "w") as f:
+                f.write(text)
+            ok, err = oxi_check(tmp)
+            if not ok:
+                os.remove(tmp)
+                return self.send(400, {"message": "配置校验失败，未保存：" + err})
+            os.replace(tmp, OXI_CONF)
+            update(lambda x: x.setdefault("oxidns", {}).update(custom=True))
+            if oxi_cfg(load())["enabled"] and not oxi_restart():
+                return self.reply(False, f"已保存，但 OxiDNS 重启后没有在 127.0.0.1:{oxi_cfg(load())['port']} 响应，请确认配置里的监听端口与面板一致")
+            return self.reply(True, "自定义配置已保存并生效")
+        if sub != "" or m != "POST":
+            return self.send(404, {"message": "not found"})
+        act = b.get("action") or ""
+        if act in ("install", "update", "reinstall"):
+            if act != "install" and not oxi_version():
+                return self.send(400, {"message": "OxiDNS 尚未安装"})
+            ok, msg = core_job_start(oxi_job, act, gh)
+            return self.send(200 if ok else 409, {"message": msg})
+        if not oxi_version() and act not in ("save", "uninstall"):
+            return self.send(400, {"message": "OxiDNS 尚未安装"})
+        if act == "rollback":
+            if not oxi_version(OXI_BIN + ".bak"):
+                return self.send(400, {"message": "没有可回滚的旧版本"})
+            cur = OXI_BIN + ".cur"
+            shutil.copy2(OXI_BIN, cur)
+            shutil.copy2(OXI_BIN + ".bak", OXI_BIN)
+            os.replace(cur, OXI_BIN + ".bak")
+            ok = oxi_restart() if oxi_cfg(load())["enabled"] else True
+            return self.reply(ok, f"已回滚到 {oxi_version()}" if ok else "已回滚，但 OxiDNS 没有响应")
+        if act == "restart":
+            return self.reply(oxi_restart(), "OxiDNS 已重启" if oxi_running() else "OxiDNS 重启后没有响应，请查看日志")
+        if act == "enable":
+            on = bool(b.get("on"))
+            prev = update(lambda x: x.setdefault("oxidns", {}).update(enabled=on))
+            OXI_STATE.update(fallback=False, fails=0)
+            if on:
+                ok, msg = oxi_write(load())
+                if not ok:
+                    save(prev)
+                    return self.reply(False, msg)
+                oxi_service(True)
+                if not oxi_restart():
+                    save(prev)
+                    return self.reply(False, "OxiDNS 启动后没有响应，未接入核心")
+            ok, msg = oxi_apply_core(load())
+            if not ok:
+                save(prev)
+                oxi_apply_core(load())
+                return self.reply(False, msg)
+            if not on:
+                sh(OXI_SVC + " stop", timeout=30)
+                oxi_service(False)
+            core("POST", "/cache/dns/flush")
+            return self.reply(True, "已启用 OxiDNS，直连 DNS 改由它解析" if on else "已停用 OxiDNS，直连 DNS 恢复原设置")
+        if act == "save":
+            c, o0 = b.get("cfg") or {}, oxi_cfg(load())
+            o = dict(o0)
+            for k in ("port", "webui_port", "concurrent", "cache"):
+                if k in c:
+                    try:
+                        o[k] = int(c[k])
+                    except (TypeError, ValueError):
+                        return self.send(400, {"message": f"{k} 应为数字"})
+            for k in ("lazy", "webui"):
+                if k in c:
+                    o[k] = bool(c[k])
+            if "upstreams" in c:
+                if not isinstance(c["upstreams"], list):
+                    return self.send(400, {"message": "upstreams 应为列表"})
+                o["upstreams"] = [str(x).strip() for x in c["upstreams"] if str(x).strip()]
+            if "user" in c:
+                o["user"] = str(c["user"]).strip()
+            if c.get("pass"):
+                o["pass"] = str(c["pass"])
+            errs = []
+            for k, lab in (("port", "DNS 端口"), ("webui_port", "WebUI 端口")):
+                if not 1024 <= o[k] <= 65535 or o[k] in OXI_RESERVED or o[k] == PORT:
+                    errs.append(f"{lab} {o[k]} 不可用（需 1024-65535，且不能与面板 / 核心端口冲突）")
+            if o["port"] == o["webui_port"]:
+                errs.append("DNS 端口与 WebUI 端口不能相同")
+            if not 1 <= o["concurrent"] <= 8:
+                errs.append("并发数应为 1-8")
+            if not 1024 <= o["cache"] <= 200000:
+                errs.append("缓存条数应为 1024-200000")
+            for x in o["upstreams"]:
+                if not (re.match(r"^(?:udp|tcp|tls|https|quic|h3)://\S+$", x) or re.match(r"^[\d.]+(?::\d+)?$", x)):
+                    errs.append("上游格式无效：" + x[:60])
+            if not re.match(r"^[\w.\-]{1,32}$", o["user"] or ""):
+                errs.append("WebUI 用户名只能用字母、数字、._-")
+            if c.get("pass") and len(o["pass"]) < 6:
+                errs.append("WebUI 密码至少 6 位")
+            if errs:
+                return self.send(400, {"message": "；".join(errs[:4])})
+            prev = update(lambda x: x.__setitem__("oxidns", o))
+            ok, msg = oxi_write(load())
+            if not ok:
+                save(prev)
+                return self.reply(False, msg)
+            if o["enabled"] and os.path.isfile(OXI_BIN):
+                if not oxi_restart():
+                    save(prev)
+                    oxi_write(load())
+                    oxi_restart()
+                    return self.reply(False, "新配置下 OxiDNS 没有响应，已恢复原设置（端口可能被占用）")
+                if o["port"] != o0["port"]:
+                    oxi_apply_core(load())
+            return self.reply(True, "OxiDNS 设置已保存" + ("（自定义配置模式下只更新了面板记录，配置文件未改）" if o["custom"] else ""))
+        if act == "uninstall":
+            update(lambda x: x.setdefault("oxidns", {}).update(enabled=False, custom=False))
+            oxi_apply_core(load())
+            sh(OXI_SVC + " stop", timeout=30)
+            oxi_service(False)
+            for f in (OXI_BIN, OXI_BIN + ".bak", OXI_INIT if OXI_SVC == "rc-service oxidns" else ""):
+                if f and os.path.isfile(f):
+                    os.remove(f)
+            shutil.rmtree(OXI_DIR, ignore_errors=True)
+            return self.reply(True, "OxiDNS 已卸载，直连 DNS 恢复原设置")
+        return self.send(400, {"message": "未知操作"})
 
     def groups_info(self):
         d = load()
@@ -5720,7 +6137,7 @@ class H(BaseHTTPRequestHandler):
         meta = group_meta(d, cfg)
         sb = active_core(d) == "singbox"
         if sb:  # sing-box：地区负载均衡并入自动优选，自定义负载均衡 / 故障转移按自动测速运行
-            lbs = region_lb_set()
+            lbs = {lb_name(r) for r, _ in REGIONS + [(G_OTHER, None)]}
             gnames = [g for g in gnames if g not in lbs]
             for n in list(meta):
                 if n in lbs:
@@ -5728,7 +6145,7 @@ class H(BaseHTTPRequestHandler):
                 elif meta[n]["type"] in ("load-balance", "fallback"):
                     meta[n].update(sb_from=meta[n]["type"], type="url-test")
         regions = [{"name": r[0], "total": r[4], "manual": len(r[3]), "unknown": r[5],
-                    "groups": [g for g in gnames if g in [auto_name(r[0])] + lb_names(r[0])]} for r in plan]
+                    "groups": [g for g in gnames if g in (auto_name(r[0]), lb_name(r[0]))]} for r in plan]
         sel = next((g.get("proxies") or [] for g in cfg["proxy-groups"] if g["name"] == G_SEL), [])
         if sb:
             sel = [x for x in sel if x in gnames or x in BUILTIN_POLICIES]
@@ -5870,32 +6287,33 @@ class H(BaseHTTPRequestHandler):
                 version = json.loads(ver).get("version", "-") if code == 200 else "-"
             except Exception:
                 version = "-"
+            has = bool(d["subs"] or d["nodes"])
             cfg = build_config(d)
             groups = [g["name"] for g in cfg["proxy-groups"]]
             gmeta = group_meta(d, cfg)
             if active_core(d) == "singbox":  # 地区负载均衡并入自动优选；负载均衡 / 故障转移按自动测速运行
-                lbs = region_lb_set()
+                lbs = {lb_name(r) for r, _ in REGIONS + [(G_OTHER, None)]}
                 groups = [g for g in groups if g not in lbs]
                 for n, mt in list(gmeta.items()):
                     if n in lbs:
                         gmeta.pop(n)
                     elif mt["type"] in ("load-balance", "fallback"):
                         mt.update(sb_from=mt["type"], type="url-test")
-            return self.send(200, {"pw_default": bool(d.get("pw_default")), "mode": d["mode"], "subs": d["subs"], "rules": d["rules"],
+            return self.send(200, {"pw_default": bool(d.get("pw_default")), "mode": d["mode"], "tproxy": d["tproxy"], "subs": d["subs"], "rules": d["rules"],
                                    "running": "started" in st or code == 200, "version": version, "groups": groups,
-                                   "nodes": [{"name": n["proxy"]["name"], "type": n["proxy"]["type"],
+                                   "has_nodes": has, "nodes": [{"name": n["proxy"]["name"], "type": n["proxy"]["type"],
                                                                 "server": n["proxy"]["server"], "port": n["proxy"]["port"]} for n in d["nodes"]],
                                    "rulesets": d["rulesets"], "bypass": d["bypass"], "tests": d["tests"],
-                                   "sub_interval": d["sub_interval"],
-                                   "ipv6": d["ipv6"], "https": d["https"],
+                                   "sub_interval": d["sub_interval"], "region_groups": d["region_groups"],
+                                   "ipv6": d["ipv6"], "https": d["https"], "https_active": isinstance(self.connection, ssl.SSLSocket),
                                    "watchdog": d["watchdog"], "tg_token": d["tg_token"], "tg_chat": d["tg_chat"],
                                    "default_exclude": DEFAULT_EXCLUDE, "proxy_mode": d["proxy_mode"], "tun": d["tun"],
-                                   "log_limit": d["log_limit"], "dns": dns_cfg(d),
+                                   "log_limit": d["log_limit"], "dns": dns_cfg(d), "dns_default": DNS_DEFAULT,
                                    "schedule": d["schedule"], "devices": d["devices"], "adblock_on": d["adblock"]["enabled"],
                                    "sched_events": list(SCHED["events"])[:20], "group_meta": gmeta,
-                                   "sniffer": d["sniffer"],
+                                   "custom_groups": d["custom_groups"], "groups_cfg": gcfg(d), "sniffer": d["sniffer"],
                                    "gh_proxy": d["gh_proxy"], "panel_version": PANEL_VERSION, "core": active_core(d),
-                                   "wd": {"status": WD["status"], "last_check": WD["last_check"],
+                                   "wd": {"status": WD["status"], "fails": WD["fails"], "last_check": WD["last_check"],
                                           "events": list(WD["events"])[:20]}})
         if p == "/api/groups" and m == "GET":
             return self.groups_info()
@@ -5937,38 +6355,20 @@ class H(BaseHTTPRequestHandler):
             via = q1(parse_qs(q), "via", default="proxy")
             return self.send(200, speed_test(via == "proxy"))
         if p == "/api/bg" and m == "GET":
-            bm = bg_meta()
             try:
-                return self.send(200, {"exists": True, "v": int(os.path.getmtime(BG_FILE)), "size": os.path.getsize(BG_FILE),
-                                       "url": bm.get("url", ""), "daily": bool(bm.get("daily"))})
+                return self.send(200, {"exists": True, "v": int(os.path.getmtime(BG_FILE)), "size": os.path.getsize(BG_FILE)})
             except OSError:
                 return self.send(200, {"exists": False})
         if p == "/api/bg" and m == "POST":
             ok, msg = bg_save(b.get("data"))
             if not ok:
                 return self.send(400, {"message": msg})
-            bg_meta_save({})  # 改为上传的图片：不再按链接刷新
             return self.send(200, {"message": msg, "v": int(os.path.getmtime(BG_FILE))})
-        if p == "/api/bg/url" and m == "POST":
-            url = str(b.get("url") or "").strip() or bg_meta().get("url", "")
-            ok, msg = bg_fetch(url)
-            if not ok:
-                return self.send(400, {"message": msg})
-            bg_meta_save({"url": url, "daily": bool(b.get("daily")), "t": int(time.time())})
-            return self.send(200, {"message": msg, "v": int(os.path.getmtime(BG_FILE))})
-        if p == "/api/bg/daily" and m == "POST":
-            bm = bg_meta()
-            if not bm.get("url"):
-                return self.send(400, {"message": "当前背景图不是链接图片"})
-            bm["daily"] = bool(b.get("daily"))
-            bg_meta_save(bm)
-            return self.send(200, {"message": "已开启每天自动更新" if bm["daily"] else "已关闭每天自动更新"})
         if p == "/api/bg" and m == "DELETE":
             try:
                 os.remove(BG_FILE)
             except OSError:
                 pass
-            bg_meta_save({})
             return self.send(200, {"message": "已移除背景图"})
         if p == "/api/px" and m == "GET":
             px = proxies_merged()
@@ -6021,6 +6421,8 @@ class H(BaseHTTPRequestHandler):
             ok, info = core_check(ch, load().get("gh_proxy") or "")
             info["busy"] = CORE_UPD["busy"]
             return self.send(200 if ok else 502, info)
+        if p == "/api/oxidns" or p.startswith("/api/oxidns/"):
+            return self.oxi_api(m, p[len("/api/oxidns"):], b, q)
         if p == "/api/coreupdate/status" and m == "GET":
             return self.send(200, core_upd_status())
         if p == "/api/coreupdate" and m == "POST":
@@ -6123,6 +6525,8 @@ class H(BaseHTTPRequestHandler):
             if mode == "global":
                 fix_global()
             return self.send(200, {"message": "ok"})
+        if p == "/api/tproxy" and m == "PUT":  # 兼容旧接口
+            return self.set_proxy_mode({"mode": "tproxy" if b.get("enable") else "off"})
         if p == "/api/proxymode" and m == "PUT":
             return self.set_proxy_mode(b)
         if p == "/api/conns" and m == "GET":  # 精简后的连接列表：只保留前端用到的字段
@@ -6144,6 +6548,8 @@ class H(BaseHTTPRequestHandler):
                 out.update(memory_once())
             out["running"] = time.time() - LIVE["t"] < 5 or bool(out.get("inuse"))
             return self.send(200, out)
+        if p == "/api/memory" and m == "GET":
+            return self.send(200, {"inuse": LIVE["inuse"], "oslimit": LIVE["oslimit"]} if LIVE["inuse"] else memory_once())
         if p == "/api/logs/info" and m == "GET":
             return self.send(200, {"files": log_sizes(), "limit": load()["log_limit"], "last": LOG_STATE["last"]})
         if p == "/api/logs/clean" and m == "POST":

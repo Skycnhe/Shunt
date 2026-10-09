@@ -5,7 +5,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
-<meta name="referrer" content="no-referrer">
 <script>(function(){const d=document.documentElement,k=localStorage.getItem('mp_skin')||'',L={sakura:1,mint:1};
   d.dataset.theme=k&&k!=='dark'&&k!=='light'?(L[k]?'light':'dark'):(localStorage.getItem('mp_theme')||(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'));
   if(k&&k!=='dark'&&k!=='light')d.dataset.skin=k})()</script>
@@ -51,8 +50,6 @@ header{position:sticky;top:0;z-index:20;border-radius:0 0 22px 22px;border-top:0
 .ib{display:inline-flex;align-items:center;gap:4px;border:0;background:var(--b2);color:var(--txt);height:28px;padding:0 10px;border-radius:999px;cursor:pointer;font-size:12px;font-weight:600;transition:background .2s,transform .1s;white-space:nowrap}
 .ib:hover{background:var(--b2h)}.ib:active{transform:scale(.96)}.ib svg{width:14px;height:14px;flex:none}
 .ib.stop{color:var(--bad)}.ib.go{color:var(--ok)}.ib.round{width:34px;height:34px;padding:0;justify-content:center}
-a.ib{text-decoration:none}
-.ib.gh{margin-left:6px}
 .hstats{display:flex;gap:6px;margin-left:auto;align-items:stretch}
 .chip{display:flex;flex-direction:column;justify-content:center;min-width:92px;padding:3px 11px;border-radius:12px;background:var(--b2);line-height:1.25}
 .chip .k{font-size:10.5px;color:var(--sub);white-space:nowrap}.chip b{font-size:13px;font-weight:650;font-variant-numeric:tabular-nums;white-space:nowrap}
@@ -67,7 +64,8 @@ main{padding:18px;max-width:1340px;margin:auto}
 .card h3{margin:0 0 12px;font-size:15.5px;font-weight:650;letter-spacing:-.01em}
 .grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(190px,1fr))}
 .cols{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(100%,540px),1fr));align-items:start}.cols>div>.card:last-child{margin-bottom:0}
-.cols>div{display:flex;flex-direction:column;gap:16px}.cols>div>.card{margin-bottom:0}
+.cols>div{display:flex;flex-direction:column;gap:16px}
+.oxg{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}.oxg input{width:100%}#oxi-card a{color:var(--pri);text-decoration:none}.cols>div>.card{margin-bottom:0}
 .g4{grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}.stat{padding:16px 18px}.stat .v{font-size:24px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;margin-top:2px}.stat .k{color:var(--sub);font-size:12.5px;font-weight:500}
 .stat .s{font-size:12px;color:var(--sub);margin-top:2px}
 .btn{background:var(--pri);color:#fff;border:0;border-radius:11px;padding:7px 15px;cursor:pointer;font-size:13px;font-weight:600;transition:filter .2s,transform .1s,background .2s;white-space:nowrap}
@@ -82,7 +80,6 @@ input[type=file]{padding:5px 8px}input[type=checkbox]{accent-color:var(--pri)}
 textarea{width:100%;font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;resize:vertical}
 .tw{overflow-x:auto;-webkit-overflow-scrolling:touch}
 table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:8px 9px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:middle}
-td[colspan]{white-space:normal;line-height:1.5}
 tr:last-child td{border-bottom:0}th{color:var(--sub);font-weight:500;font-size:12px}td.w{white-space:normal;word-break:break-all}
 .node{border:1px solid var(--line);border-radius:14px;padding:9px 12px;cursor:pointer;background:var(--nbg);transition:transform .15s,border-color .2s,background .2s}
 .node:hover{transform:translateY(-1px);border-color:var(--b2h)}
@@ -272,32 +269,6 @@ nav .ico{display:none}nav .more{display:none}
 .skin .nm{display:block;padding:6px 10px;font-size:12.5px;font-weight:600;background:var(--b2)}
 .bgpv{width:100%;max-width:320px;aspect-ratio:16/9;border-radius:12px;background:var(--b2) center/cover no-repeat;border:1px solid var(--line);display:grid;place-items:center;color:var(--sub);font-size:12px}
 .rng{display:flex;align-items:center;gap:10px}.rng input{flex:1;accent-color:var(--pri)}.rng span{width:42px;text-align:right;font-variant-numeric:tabular-nums}
-/* 桌面网页端：按钮、标签页、输入框放大，点击区域更大（手机端 ≤720px 不变） */
-@media (min-width:721px){
-  .btn{padding:9px 18px;font-size:14px;border-radius:12px;min-height:38px}
-  .btn.sm{padding:7px 14px;font-size:13.5px;border-radius:10px;min-height:34px}
-  .ib{height:34px;padding:0 14px;font-size:13.5px}
-  nav{padding:3px;border-radius:13px}nav button{padding:8px 18px;font-size:15px}
-  .seg button{padding:7px 16px;font-size:14px}
-  .icon{padding:5px 11px;font-size:16px}
-  input,select{font-size:14px;padding-top:9px;padding-bottom:9px}
-  .row{gap:10px}
-  .mchip{font-size:13px}.mchip button{font-size:14px;padding:2px 7px}
-  .lb{width:30px;height:30px;font-size:13px}
-  .tag{font-size:12px;padding:2px 8px}
-  .opt .t{font-size:14.5px}.opt .dsc{font-size:12.5px}
-}
-@media (max-width:720px){.abhd{display:none}}
-/* 桌面布局：列表编辑器双列、设置分栏、节点工具栏 */
-@media (min-width:721px){
-  .dnsmain #dns-lists{columns:2;column-gap:28px}
-  .dnsmain #dns-lists>.lbox{break-inside:avoid;border-bottom:0}
-  .abft{display:none}
-  .sgrid>.card{display:block}.sgrid>.colbrk{break-before:column}
-  .ntool .nsearch{flex:1 1 220px;max-width:360px;margin-right:auto}
-  .nfilter:has(#nf-r:empty){margin-bottom:12px}
-}
-.abps{display:flex;flex-direction:column;gap:6px}.abpr{display:grid;grid-template-columns:112px 1fr;align-items:center;gap:8px}.abpr>.row{flex-wrap:wrap;gap:6px}@media (max-width:720px){.abpr{grid-template-columns:86px 1fr}}
 </style>
 </head>
 <body><div id="bgimg"></div><div id="bgdim"></div>
@@ -329,7 +300,7 @@ nav .ico{display:none}nav .more{display:none}
       <div class="chip down" title="核心启动以来累计下载"><span class="k">累计下载</span><b id="h-dt">-</b></div>
       <div class="chip" title="mihomo 内存占用"><span class="k">内存</span><b id="h-mem">-</b></div>
     </div>
-    <button class="ib round theme" onclick="toggleTheme()" title="切换深色 / 浅色"><svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" viewBox="0 0 24 24" fill="currentColor"><path d="M20.5 14.6A8.5 8.5 0 0 1 9.4 3.5a8.5 8.5 0 1 0 11.1 11.1z"/></svg></button><a class="ib round gh" href="https://github.com/Skycnhe/Shunt" target="_blank" rel="noopener" title="GitHub：Skycnhe/Shunt"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.04-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5z"/></svg></a>
+    <button class="ib round theme" onclick="toggleTheme()" title="切换深色 / 浅色"><svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" viewBox="0 0 24 24" fill="currentColor"><path d="M20.5 14.6A8.5 8.5 0 0 1 9.4 3.5a8.5 8.5 0 1 0 11.1 11.1z"/></svg></button>
   </div>
   <nav id="nav"></nav>
 </header>
@@ -351,6 +322,9 @@ nav .ico{display:none}nav .more{display:none}
         <div class="o4 card"><h3>设备排行（按当前连接）</h3><div class="tw" id="dev-tw"><table><thead><tr><th>设备</th><th>连接</th><th>下载</th><th>上传</th><th>最常访问</th></tr></thead><tbody id="devices"></tbody></table></div><div id="dev-empty" class="empty hide">暂无设备连接。客户端把网关指向本机后，这里会按流量列出设备</div></div>
         <div class="o5 card"><div class="row"><h3 class="sp" style="margin:0">站点延迟（每 60 秒）</h3><button class="btn g sm" onclick="testSites()">立即检测</button></div>
           <div class="grid" id="sites" style="margin-top:12px;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px"></div></div>
+        <div class="o7 card"><div class="row"><h3 class="sp" style="margin:0">网络诊断</h3><button class="btn g" id="diag-btn" onclick="runDiag()">一键诊断</button></div>
+          <div class="mut small" style="margin-top:4px">检查核心、透明代理 / TUN、IP 转发、DNS 解析与出站连通性，并给出修复建议</div>
+          <div id="diag" style="margin-top:8px"></div></div>
       </div>
       <div>
         <div class="o2 card" id="qs-card"><div class="row"><h3 class="sp" style="margin:0">🚀 节点选择</h3><button class="btn g sm" id="qs-btn" onclick="qsTest(this)">测速</button></div>
@@ -362,21 +336,18 @@ nav .ico{display:none}nav .more{display:none}
         <div class="o8 card"><div class="row"><h3 class="sp" style="margin:0">故障自动直连（看门狗）</h3><span id="wd-status"></span></div>
           <div class="mut small" style="margin:4px 0 8px">每 30 秒检查核心；无响应时自动重启，连续 2 次失败则关闭透明代理让局域网直连，核心恢复后自动重新接管</div>
           <div id="wd-events"></div></div>
-        <div class="o7 card"><div class="row"><h3 class="sp" style="margin:0">网络诊断</h3><button class="btn g" id="diag-btn" onclick="runDiag()">一键诊断</button></div>
-          <div class="mut small" style="margin-top:4px">检查核心、透明代理 / TUN、IP 转发、DNS 解析与出站连通性，并给出修复建议</div>
-          <div id="diag" style="margin-top:8px"></div></div>
       </div>
     </div>
    </div>
   </section>
   <!-- 节点 -->
   <section data-tab="节点">
-    <div class="row ntool" style="margin-bottom:12px"><input class="sp nsearch" id="nf-q" placeholder="搜索节点 / 分组" oninput="NF.q=this.value.trim().toLowerCase();renderGroups()">
+    <div class="row ntool" style="margin-bottom:12px"><span class="sp mut small">点击组标题展开 / 收起，点击节点切换；自动测速 / 故障转移组点选节点可“固定”</span>
       <div class="seg" id="nsort"><button data-v="default">默认顺序</button><button data-v="delay">按延迟</button></div>
       <button class="btn g" id="hidedead" onclick="toggleDead()" title="隐藏测速超时的节点（未测速的节点和当前选中的节点照常显示）">隐藏超时</button>
       <button class="btn g" onclick="setAllOpen(true)">全部展开</button><button class="btn g" onclick="setAllOpen(false)">全部收起</button>
       <button class="btn g" id="test-all" onclick="testAll(this)">全部测速</button><button class="btn g" onclick="loadProxies()">刷新</button></div>
-    <div class="nfilter"><span id="nf-r" class="row" style="gap:6px;flex-wrap:wrap"></span><span class="sp"></span><span class="mut small">点击组标题展开 / 收起，点击节点切换；自动测速 / 故障转移组点选节点可“固定”</span></div>
+    <div class="nfilter"><input id="nf-q" placeholder="搜索节点 / 分组" oninput="NF.q=this.value.trim().toLowerCase();renderGroups()"><span id="nf-r" class="row" style="gap:6px;flex-wrap:wrap"></span></div>
     <div class="card" id="pol-card"><div class="row"><h3 class="sp" style="margin:0">策略选择</h3><span class="mut small pdesc">各分流组当前使用的节点 / 分组，直接下拉切换</span>
       <button class="btn g sm" onclick="go('策略组')">管理策略组</button></div>
       <div id="policies" class="pgrid"></div></div>
@@ -387,10 +358,12 @@ nav .ico{display:none}nav .more{display:none}
    <div class="cols">
     <div>
     <div class="card"><div class="opt" style="padding-top:0"><div class="sp"><div class="t" style="font-size:16px">地区分组</div>
-        <div class="dsc">按节点名称识别地区，只为确实有节点的地区生成「🇯🇵 日本自动优选」（自动测速）分组，节点 ≥2 个的地区再生成「⚖️ 日本轮询 / 哈希 / 粘性」三个负载均衡组。「🚀 节点选择」只包含：各地区自动优选 → 各地区负载均衡 → 🖐️ 手动选择 → ⚡ 全局自动选择 → 🏠 直连。</div></div>
+        <div class="dsc">按节点名称识别地区，只为确实有节点的地区生成「🇯🇵 日本自动优选」（自动测速）与「⚖️ 日本负载均衡」分组。「🚀 节点选择」只包含：各地区自动优选 → 各地区负载均衡 → 🖐️ 手动选择 → ⚡ 全局自动选择 → 🏠 直连。</div></div>
         <label class="sw"><input type="checkbox" id="gc-on"><span></span></label></div>
       <div id="gc-box">
-      <div class="opt"><div class="sp"><div class="t">「负载均衡」组</div><div class="dsc">节点 ≥2 个的地区各生成三个，在「🚀 节点选择」里随时切换：<br><code>⚖️ 日本轮询</code> 每个新连接依次换节点，同一网站的连接分散到不同节点，带宽叠加效果最好（推荐）；部分网站可能因 IP 变化要求重新登录<br><code>⚖️ 日本哈希</code> 一致性哈希，同一目标域名固定走同一节点，会话稳定<br><code>⚖️ 日本粘性</code> 粘性会话，同一设备访问同一网站 10 分钟内固定节点<br>「自动优选」组始终生成（url-test）<div class="warn hide" id="gc-lb-sb">当前内核是 sing-box：没有负载均衡组，地区的轮询 / 哈希 / 粘性组都并入同地区「自动优选」</div></div></div><label class="sw sm"><input type="checkbox" id="gc-lb"><span></span></label></div>
+      <div class="opt"><div class="sp"><div class="t">「负载均衡」组</div><div class="dsc">每个有节点的地区都生成，如 <code>⚖️ 香港负载均衡</code>、<code>⚖️ 日本负载均衡</code>；「自动优选」组始终生成（url-test）<div class="warn hide" id="gc-lb-sb">当前内核是 sing-box：没有负载均衡组，地区负载均衡已并入同地区「自动优选」</div></div></div><label class="sw sm"><input type="checkbox" id="gc-lb"><span></span></label></div>
+      <div class="opt"><div class="sp"><div class="t">负载均衡策略</div><div class="dsc" id="gc-st-d"></div></div>
+        <span class="tag">一致性哈希</span></div>
       <div class="opt"><div class="sp"><div class="t">识别扩展地区</div><div class="dsc">韩国、英国、德国、法国、荷兰、加拿大、澳大利亚、俄罗斯、印度、土耳其、东南亚、南美等</div></div><label class="sw sm"><input type="checkbox" id="gc-extra"><span></span></label></div>
       <div class="opt"><div class="sp"><div class="t">「🌐 其他」分组</div><div class="dsc">收纳未识别出地区的节点（<code>🌐 其他自动优选</code>）</div></div><label class="sw sm"><input type="checkbox" id="gc-other"><span></span></label></div>
       <div class="opt"><div class="sp"><div class="t">懒惰测速（lazy）</div><div class="dsc">分组没有被使用时不做健康检查，节省流量</div></div><label class="sw sm"><input type="checkbox" id="gc-lazy"><span></span></label></div>
@@ -400,6 +373,10 @@ nav .ico{display:none}nav .more{display:none}
       <div class="opt"><div class="sp"><div class="t">测速地址</div></div><input id="gc-url" style="width:min(100%,300px)"></div>
       </div>
       <div class="row mt"><span class="sp mut small">保存前先校验配置，失败自动撤销</span><button class="btn" onclick="saveGC()">保存并应用</button></div></div>
+    <div class="card"><div class="row"><h3 class="sp" style="margin:0">已识别的地区</h3><button class="btn g sm" onclick="refreshRegions(this)">按订阅重新识别</button></div>
+      <div class="tw mt"><table><thead><tr><th>地区</th><th>节点</th><th>生成的分组</th></tr></thead><tbody id="gc-regions"></tbody></table></div>
+      <div class="lbl">🚀 节点选择 当前包含</div><div id="gc-sel" class="mchips"></div>
+      <div class="mut small mt">订阅更新后会自动重新识别（每 10 分钟检查一次）；订阅尚未下载时先生成 5 个常用地区</div></div>
     </div>
     <div>
     <div class="card"><div class="row"><h3 class="sp" style="margin:0">自定义策略组</h3><button class="btn sm" onclick="newCG()">＋ 新建策略组</button></div>
@@ -409,7 +386,7 @@ nav .ico{display:none}nav .more{display:none}
       <div class="row"><input id="cg-name" placeholder="名称，如 🎮 游戏加速" class="sp" maxlength="40"><input id="cg-icon" placeholder="图标 URL（可选）" class="sp"></div>
       <div class="lbl">类型</div>
       <div class="seg" id="cg-type"><button data-v="select">手动选择</button><button data-v="url-test">自动测速</button><button data-v="fallback">故障转移</button><button data-v="load-balance">负载均衡</button></div>
-      <div class="row mt" id="cg-adv"><select id="cg-st"><option value="consistent-hashing">一致性哈希</option><option value="round-robin">轮询</option><option value="sticky-sessions">粘性会话</option></select>
+      <div class="row mt" id="cg-adv"><select id="cg-st" class="hide"><option value="consistent-hashing">一致性哈希</option></select>
         <input id="cg-int" type="number" min="30" placeholder="测速间隔（秒，默认同地区组）" style="width:200px"><input id="cg-tol" type="number" min="0" placeholder="容差 ms" style="width:100px"></div>
       <div class="lbl">成员（按顺序，故障转移按此顺序优先）</div>
       <div id="cg-chosen" class="mchips"><span class="mut small">还没有成员</span></div>
@@ -420,10 +397,6 @@ nav .ico{display:none}nav .more{display:none}
       <div id="cg-prev" class="mut small" style="margin-top:4px"></div>
       <div class="opt mt"><div class="sp"><div class="t">加入分流组候选</div><div class="dsc">出现在 YouTube / Google / Telegram / AI / Netflix / 漏网之鱼 的下拉里；开启时不能再引用这些分流组（会循环），但可以引用「🚀 节点选择」</div></div><label class="sw sm"><input type="checkbox" id="cg-expose"><span></span></label></div>
       <div class="row mt"><span class="sp"></span><button class="btn g" onclick="closeCG()">取消</button><button class="btn" id="cg-save" onclick="saveCG()">保存并应用</button></div></div>
-    <div class="card"><div class="row"><h3 class="sp" style="margin:0">已识别的地区</h3><button class="btn g sm" onclick="refreshRegions(this)">按订阅重新识别</button></div>
-      <div class="tw mt"><table><thead><tr><th>地区</th><th>节点</th><th>生成的分组</th></tr></thead><tbody id="gc-regions"></tbody></table></div>
-      <div class="lbl">🚀 节点选择 当前包含</div><div id="gc-sel" class="mchips"></div>
-      <div class="mut small mt">订阅更新后会自动重新识别（每 10 分钟检查一次）；订阅尚未下载时先生成 5 个常用地区</div></div>
     </div>
    </div>
   </section>
@@ -474,7 +447,6 @@ nav .ico{display:none}nav .more{display:none}
   <section data-tab="广告拦截">
     <div class="card"><div class="opt" style="padding-top:0"><div class="sp"><div class="t" style="font-size:16px">广告拦截</div>
         <div class="dsc">订阅 AdGuard / ABP / hosts / 域名列表，转换为 mihomo 域名规则集，排在所有规则之前拒绝连接；白名单与列表中的 @@ 例外优先放行，被放行的域名照常分流。</div></div>
-        <button class="btn g abhd" onclick="abUpdate()">立即更新全部</button>
         <label class="sw"><input type="checkbox" id="ab-on"><span></span></label></div>
       <div class="grid mt" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr))">
         <div class="stat" style="padding:4px 0"><div class="k">已加载规则</div><div class="v" id="ab-total">-</div></div>
@@ -482,19 +454,24 @@ nav .ico{display:none}nav .more{display:none}
         <div class="stat" style="padding:4px 0"><div class="k">订阅列表</div><div class="v" id="ab-nlist">-</div></div>
         <div class="stat" style="padding:4px 0"><div class="k">上次更新</div><div class="v" id="ab-last" style="font-size:16px;margin-top:6px">-</div></div>
       </div>
-      <div class="row mt"><span id="ab-msg" class="sp mut small"></span><button class="btn abft" id="ab-upd" onclick="abUpdate()">立即更新全部</button></div></div>
+      <div class="row mt"><span id="ab-msg" class="sp mut small"></span><button class="btn" id="ab-upd" onclick="abUpdate()">立即更新全部</button></div></div>
     <div class="cols">
       <div>
         <div class="card"><h3>过滤列表</h3>
           <div class="tw"><table><thead><tr><th>启用</th><th>名称</th><th>规则数</th><th>今日拦截</th><th>更新</th><th></th></tr></thead><tbody id="ab-lists"></tbody></table></div>
-          <div class="lbl">内置规则（点击添加，已添加的显示为灰色）</div>
-          <div id="ab-presets" class="abps mb"></div>
-          <div class="lbl">添加列表（AdGuard / ABP、hosts、纯域名、Clash 规则格式）</div>
+          <div class="lbl">添加列表（AdGuard / ABP、hosts、纯域名格式）</div>
+          <div class="row mb"><span class="mut small">预设：</span><span id="ab-presets" class="row"></span></div>
           <div class="row"><input id="ab-name" placeholder="名称" style="width:130px"><input id="ab-url" placeholder="https://.../filter.txt" class="sp"><button class="btn" onclick="abAdd()">添加</button></div>
           <div class="opt mt"><div class="sp"><div class="t">自动更新</div><div class="dsc">按间隔重新下载全部列表，只刷新规则文件，不中断连接</div></div>
             <select id="ab-int" onchange="abSave({interval:+this.value},'已保存')"><option value="0">不自动更新</option><option value="21600">每 6 小时</option><option value="43200">每 12 小时</option><option value="86400">每天</option><option value="259200">每 3 天</option><option value="604800">每周</option></select></div>
           <div class="opt"><div class="sp"><div class="t">DNS 层拦截</div><div class="dsc">命中列表的域名直接返回 NXDOMAIN（nameserver-policy + rcode）。客户端不再发起连接，因此不计入“今日拦截”统计</div></div>
             <label class="sw sm"><input type="checkbox" id="ab-dns"><span></span></label></div></div>
+        <div class="card"><h3>自定义规则</h3>
+          <div class="mut small">每行一个：<code>example.com</code>（含子域）、<code>||example.com^</code>、<code>0.0.0.0 example.com</code>；白名单也接受 <code>@@||example.com^</code></div>
+          <div class="cols" style="margin-top:8px;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">
+            <div><div class="lbl" style="margin-top:0">黑名单（总是拦截）</div><textarea id="ab-black" rows="7" placeholder="ads.example.com"></textarea></div>
+            <div><div class="lbl" style="margin-top:0">白名单（总是放行，优先）</div><textarea id="ab-white" rows="7" placeholder="safe.example.com"></textarea></div></div>
+          <div class="row mt"><span class="sp"></span><button class="btn" onclick="abSaveBW()">保存并应用</button></div></div>
       </div>
       <div>
         <div class="card"><h3>检测域名</h3>
@@ -503,18 +480,14 @@ nav .ico{display:none}nav .more{display:none}
         <div class="card"><div class="row"><h3 class="sp" style="margin:0">今日拦截排行</h3><button class="btn g sm" onclick="loadAB()">刷新</button></div>
           <div class="tw mt"><table><thead><tr><th>域名</th><th style="width:40%"></th><th>次数</th></tr></thead><tbody id="ab-top"></tbody></table></div>
           <div class="mut small mt">从核心 info 日志统计被广告规则 REJECT 的连接；保留 14 天</div></div>
-        <div class="card"><h3>自定义规则</h3>
-          <div class="mut small">每行一个：<code>example.com</code>（含子域）、<code>||example.com^</code>、<code>0.0.0.0 example.com</code>；白名单也接受 <code>@@||example.com^</code></div>
-          <div class="cols" style="margin-top:8px;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">
-            <div><div class="lbl" style="margin-top:0">黑名单（总是拦截）</div><textarea id="ab-black" rows="7" placeholder="ads.example.com"></textarea></div>
-            <div><div class="lbl" style="margin-top:0">白名单（总是放行，优先）</div><textarea id="ab-white" rows="7" placeholder="safe.example.com"></textarea></div></div>
-          <div class="row mt"><span class="sp"></span><button class="btn" onclick="abSaveBW()">保存并应用</button></div></div>
       </div>
     </div>
   </section>
   <!-- DNS -->
   <section data-tab="DNS">
-    <div class="card dnsmain"><div class="row"><h3 class="sp" style="margin:0">DNS 设置</h3><span id="dns-dirty" class="tag hide" style="color:var(--warn)">● 有未保存的修改</span>
+   <div class="cols">
+    <div>
+    <div class="card"><div class="row"><h3 class="sp" style="margin:0">DNS 设置</h3><span id="dns-dirty" class="tag hide" style="color:var(--warn)">● 有未保存的修改</span>
         <button class="btn g sm" onclick="resetDNS()">恢复默认</button></div>
       <div class="opt mt"><div class="sp"><div class="t">增强模式</div><div class="dsc">fake-ip：客户端只拿到 198.18.x.x，域名交给 mihomo 按规则处理（防泄露推荐）；redir-host 返回真实 IP</div></div>
         <div class="seg" id="dns-mode"><button data-v="fake-ip">fake-ip</button><button data-v="redir-host">redir-host</button></div></div>
@@ -525,7 +498,12 @@ nav .ico{display:none}nav .more{display:none}
       <div id="dns-lists"></div>
       <div class="row mt"><span class="sp mut small">格式：IP、udp:// tcp:// tls:// https:// quic:// dhcp://、system；可加 <code>#策略组</code>。保存前先校验配置，失败自动撤销</span>
         <button class="btn" onclick="saveDNS()">保存 DNS 设置</button></div></div>
-   <div class="cols">
+    <div class="card" id="oxi-card"><div class="row"><h3 class="sp" style="margin:0">OxiDNS 本地加速</h3><span id="oxi-tag" class="tag">…</span></div>
+      <div class="mut small" style="margin-top:4px">本机运行 <a href="https://github.com/svenshi/oxidns" target="_blank" rel="noopener">OxiDNS</a>：缓存 + 乐观缓存 + 多上游并发。接入后，国内域名、直连连接和节点域名都经它解析（只监听 127.0.0.1）；国外域名仍走代理 DNS，不影响防泄露。它无响应时看门狗会重启它，仍不行就临时改回原直连 DNS。</div>
+      <div id="oxi-body" class="mt"></div>
+      <div id="oxi-prog" class="hide mt"><div style="height:6px;border-radius:3px;background:rgba(127,127,127,.2);overflow:hidden"><div id="oxi-bar" style="height:6px;width:0;background:var(--pri);transition:width .3s"></div></div>
+        <pre id="oxi-log" class="small mut" style="white-space:pre-wrap;margin:6px 0 0;max-height:150px;overflow:auto"></pre></div></div>
+    </div>
     <div>
     <div class="card"><div class="row"><h3 class="sp" style="margin:0">DNS 泄露检测</h3><button class="btn g sm" id="leak-btn" onclick="leakCheck()">开始检测</button><button class="btn sm" onclick="applyAntiLeak()">一键应用防泄露设置</button></div>
       <div class="mut small" style="margin-top:4px">检查配置中容易泄露的设置，并经代理用 bash.ws 在线测试实际使用的上游解析器（国内解析器出现即为泄露）</div>
@@ -535,8 +513,6 @@ nav .ico{display:none}nav .more{display:none}
       <div id="hosts-list" class="lrows"></div>
       <div class="row mt"><input id="hosts-dom" placeholder="nas.lan" style="flex:1 1 140px" onkeydown="if(event.key==='Enter')addHost()"><input id="hosts-val" placeholder="192.168.1.10" style="flex:1 1 140px" onkeydown="if(event.key==='Enter')addHost()"><button class="btn g" onclick="addHost()">＋ 添加</button></div>
       <div id="hosts-err" class="bad small"></div></div>
-    </div>
-    <div>
     <div class="card"><h3>DNS 分流策略（nameserver-policy）</h3>
       <div class="mut small mb">指定域名用哪组 DNS，排在内置分流之前，自上而下匹配。匹配项：<code>geosite:apple,microsoft@cn</code>、<code>+.corp.example,example.org</code>、<code>rule-set:名称</code>（一条内不能混用）</div>
       <div id="pol-list" class="lrows"></div>
@@ -601,7 +577,7 @@ nav .ico{display:none}nav .more{display:none}
         <div class="row mt"><span class="sp mut small">auto-route、auto-detect-interface 已开启，DNS 劫持 any:53</span><button class="btn sm" onclick="applyTun()">应用 TUN 设置</button></div></div>
       <div class="opt mt"><div class="sp"><div class="t">IPv6 透明代理</div><div class="dsc">核心与 DNS 启用 IPv6，并代理 IPv6 流量；需客户端以本机作为 IPv6 网关</div></div><label class="sw"><input type="checkbox" id="v6"><span></span></label></div>
       <div class="opt"><div class="sp"><div class="t">故障自动直连（看门狗）</div><div class="dsc">核心挂掉时自动重启，仍失败则关闭透明代理保证局域网能上网</div></div><label class="sw"><input type="checkbox" id="wd"><span></span></label></div></div>
-    <div data-sg="net" class="card colbrk"><h3>绕过设备（不走代理）</h3>
+    <div data-sg="net" class="card"><h3>绕过设备（不走代理）</h3>
       <div class="mut small" style="margin-bottom:6px">每行一个 IP、网段或 MAC（如 192.168.1.50、2408:xxxx::/64、AA:BB:CC:DD:EE:FF）。TUN 模式下按 IP / 网段生成直连规则（MAC 仅 TProxy 有效）。被绕过的设备请把 DNS 设为主路由。</div>
       <textarea id="bypass" rows="3"></textarea><div class="row" style="margin-top:8px"><span class="sp"></span><button class="btn" onclick="saveBypass()">保存</button></div></div>
     <div data-sg="net" class="card"><h3>设备备注</h3>
@@ -669,18 +645,16 @@ nav .ico{display:none}nav .more{display:none}
       <div class="row"><input id="tg-token" placeholder="Bot Token，如 123456:ABC-..." class="sp"><input id="tg-chat" placeholder="Chat ID" style="width:150px"></div>
       <div class="row mt"><span class="sp"></span><button class="btn g" onclick="tgTest()">发送测试</button><button class="btn" onclick="saveTg()">保存</button></div></div>
     <div data-sg="look" class="card"><h3>主题</h3><div class="mut small" style="margin:-4px 0 12px">只保存在当前浏览器，每台设备可以用不同主题</div><div class="skins" id="skins"></div></div>
-    <div data-sg="look" class="card"><h3>背景图</h3><div class="mut small" style="margin:-4px 0 12px">上传的图片和图片链接都由路由器保存，所有设备共用；模糊和遮罩只保存在当前浏览器</div>
+    <div data-sg="look" class="card"><h3>背景图</h3><div class="mut small" style="margin:-4px 0 12px">上传的图片保存在路由器上，所有设备共用；模糊和遮罩只保存在当前浏览器</div>
       <div class="row" style="align-items:flex-start;gap:16px;flex-wrap:wrap"><div class="bgpv" id="bg-pv">未设置</div>
         <div style="flex:1;min-width:240px">
           <div class="row" style="gap:8px;flex-wrap:wrap"><label class="btn">上传图片<input type="file" accept="image/*" id="bg-file" hidden onchange="bgUpload(this)"></label>
             <button class="btn g" onclick="bgUrl()">使用图片链接</button><button class="btn g" onclick="bgClear()">移除</button></div>
-          <div class="opt hide" id="bg-daily-row"><div class="sp"><div class="t">每天自动更新</div><div class="dsc" id="bg-url-d" style="word-break:break-all"></div></div>
-            <label class="sw"><input type="checkbox" id="bg-daily" onchange="bgDaily(this.checked)"><span></span></label></div>
           <div class="opt"><div class="sp"><div class="t">模糊</div></div><div class="rng" style="width:min(220px,60vw)"><input type="range" min="0" max="30" id="bg-blur" oninput="bgSet()"><span id="bg-blur-v"></span></div></div>
           <div class="opt"><div class="sp"><div class="t" title="越高文字越清楚">遮罩</div></div><div class="rng" style="width:min(220px,60vw)"><input type="range" min="0" max="90" id="bg-dim" oninput="bgSet()"><span id="bg-dim-v"></span></div></div>
         </div></div></div>
     <div data-sg="bak" class="card"><div class="row"><h3 class="sp" style="margin:0">面板更新</h3><span class="tag" id="pv"></span></div>
-      <div class="mut small" style="margin:4px 0 8px">从 GitHub 仓库 <a href="https://github.com/Skycnhe/Shunt" target="_blank" rel="noopener" style="word-break:break-all">https://github.com/Skycnhe/Shunt</a>（分支 Hk001）获取最新面板文件：先经 mihomo 代理下载，失败再直连；国内可填加速地址。更新前自动校验并备份，可一键回滚。</div>
+      <div class="mut small" style="margin:4px 0 8px">从 GitHub 仓库 <code>Skycnhe/Shunt</code>（分支 Hk001）获取最新面板文件：先经 mihomo 代理下载，失败再直连；国内可填加速地址。更新前自动校验并备份，可一键回滚。</div>
       <div class="row"><input id="gh-proxy" placeholder="GitHub 加速（可空），如 https://ghfast.top/" class="sp"><button class="btn g" onclick="checkUpdate()" id="upd-chk">检查更新</button></div>
       <div id="upd-r" class="small mt"></div>
       <div class="row mt"><span class="sp"></span><button class="btn g" onclick="rollbackPanel()">回滚上一版本</button><button class="btn" id="upd-btn" onclick="doUpdate()">立即更新</button></div></div>
@@ -736,21 +710,11 @@ function bgUpload(inp){const f=inp.files&&inp.files[0];inp.value='';if(!f)return
         c.width=Math.round(img.width*s);c.height=Math.round(img.height*s);c.getContext('2d').drawImage(img,0,0,c.width,c.height);data=c.toDataURL('image/jpeg',.86)}
       try{const r=await api('/api/bg','POST',{data});BG.src='/bg?v='+r.v;bgSave();toast('背景图已更新')}catch(e){toast(e.message)}};
     img.onerror=()=>toast('无法读取这张图片');img.src=rd.result};rd.readAsDataURL(f)}
-// 图片链接由路由器下载保存（所有设备共用、无防盗链问题）；路由器下载失败时退回由当前浏览器直接加载
-let BGM={url:'',daily:false};
-function bgMeta(r){BGM={url:r&&r.exists&&r.url||'',daily:!!(r&&r.daily)};const row=$('#bg-daily-row');if(!row)return;
-  row.classList.toggle('hide',!BGM.url);$('#bg-daily').checked=BGM.daily;$('#bg-url-d').textContent=BGM.url?'路由器每天重新下载一次这个链接（适合必应每日壁纸）：'+BGM.url:''}
-async function bgUrl(){const u=prompt('图片链接（https://…）',BGM.url||(/^https?:/.test(BG.src)?BG.src:''));if(u===null)return;const url=u.trim();
-  if(!/^https?:\/\/\S+$/.test(url)){toast('请输入 http(s) 开头的图片链接');return}
-  toast('路由器正在下载图片…');
-  try{const r=await api('/api/bg/url','POST',{url,daily:BGM.daily||/bing|daily|每日/i.test(url)});BG.src='/bg?v='+r.v;bgSave();toast(r.message);bgSync()}
-  catch(e){BG.src=url;bgSave();bgMeta(null);toast(e.message+'，改为由当前浏览器直接加载（仅本机有效）')}}
-async function bgDaily(on){try{const r=await api('/api/bg/daily','POST',{daily:on});BGM.daily=on;toast(r.message)}catch(e){toast(e.message);$('#bg-daily').checked=!on}}
-async function bgClear(){if(BG.src.startsWith('/bg'))try{await api('/api/bg','DELETE')}catch(e){}BG.src='';bgSave();bgMeta(null);toast('已移除背景图')}
-// 路由器上的图可能已被每日更新替换：用新的修改时间刷新地址，避免浏览器一直显示缓存的旧图
-async function bgSync(){if(BG.src&&!BG.src.startsWith('/bg'))return;
-  try{const r=await api('/api/bg');bgMeta(r);const s=r.exists?'/bg?v='+r.v:'';if(s!==BG.src){BG.src=s;bgSave()}}catch(e){}}
-async function renderLook(){renderSkins();bgApply();bgSync()}
+function bgUrl(){const u=prompt('图片链接（https://…）',/^https?:/.test(BG.src)?BG.src:'');if(u===null)return;
+  if(!/^https?:\/\/\S+$/.test(u.trim())){toast('请输入 http(s) 开头的图片链接');return}BG.src=u.trim();bgSave();toast('已使用图片链接')}
+async function bgClear(){if(BG.src.startsWith('/bg'))try{await api('/api/bg','DELETE')}catch(e){}BG.src='';bgSave();toast('已移除背景图')}
+async function renderLook(){renderSkins();bgApply();
+  if(!BG.src||BG.src.startsWith('/bg'))try{const r=await api('/api/bg');const s=r.exists?'/bg?v='+r.v:'';if(s!==BG.src){BG.src=s;bgSave()}}catch(e){}}
 bgApply();
 
 async function api(path,method='GET',body){
@@ -866,6 +830,7 @@ const GT={Selector:'手动选择',URLTest:'自动测速',Fallback:'故障转移'
 const GTC={Selector:'k-sel',URLTest:'k-auto',Fallback:'k-fb',LoadBalance:'k-lb'};
 const LBS={'consistent-hashing':'一致性哈希','round-robin':'轮询','sticky-sessions':'粘性会话'};
 const isGroup=n=>!!(PROXIES[n]&&PROXIES[n].all);
+const BIG=12;
 async function loadProxies(){document.querySelectorAll('#nsort button').forEach(b=>{b.classList.toggle('on',b.dataset.v===NSORT);b.onclick=()=>{NSORT=b.dataset.v;localStorage.setItem('mp_nsort',NSORT);renderGroups()}});
   try{PROXIES=await loadPX();renderGroups()}catch(e){$('#groups').innerHTML=`<div class="card bad">${esc(e.message)}</div>`;$('#policies').innerHTML=''}}
 function rawDelay(n){const p=PROXIES[n];if(!p)return undefined;if(p._d!==undefined)return p._d;
@@ -949,17 +914,19 @@ async function testAll(btn){btn.disabled=true;btn.textContent='测速中…';
 
 // 策略组管理
 let GI=null,CGF=null,GCF={},_pv=0;
+const LBD={'consistent-hashing':'同一目标域名固定走同一节点，兼顾分流与会话稳定，不会因 IP 变化被要求重新登录'};
 const TYN={'select':'手动选择','url-test':'自动测速','fallback':'故障转移','load-balance':'负载均衡'};
 const TYC={'select':'k-sel','url-test':'k-auto','fallback':'k-fb','load-balance':'k-lb'};
 async function loadGroupsPage(){try{[GI]=await Promise.all([api('/api/groups'),loadState().catch(()=>{})])}catch(e){return toast(e.message)}
   GCF=Object.assign({},GI.cfg,{on:GI.region_groups});renderGC();renderRegions();renderCGList();$('#gc-lb-sb').classList.toggle('hide',GI.core!=='singbox')}
 function renderGC(){const c=GCF;$('#gc-on').checked=c.on;$('#gc-on').onchange=e=>{GCF.on=e.target.checked;renderGC()};
   $('#gc-box').classList.toggle('dim',!c.on);$('#gc-box').style.opacity=c.on?'':'.5';
+  $('#gc-st-d').textContent=LBD['consistent-hashing'];
   [['#gc-lb','lb'],['#gc-extra','extra'],['#gc-other','other'],['#gc-lazy','lazy']].forEach(([k,f])=>{$(k).checked=!!c[f];$(k).onchange=e=>{GCF[f]=e.target.checked}});
   const iv=$('#gc-int');if(![...iv.options].some(o=>o.value===String(c.interval)))iv.insertAdjacentHTML('beforeend',`<option value="${c.interval}">${c.interval} 秒</option>`);
   iv.value=String(c.interval);iv.onchange=e=>GCF.interval=+e.target.value;$('#gc-tol').value=c.tolerance;$('#gc-tol').onchange=e=>GCF.tolerance=+e.target.value;
   $('#gc-url').value=c.url;$('#gc-url').onchange=e=>GCF.url=e.target.value.trim()}
-async function saveGC(){const c=GCF;const body={region_groups:c.on,lb:c.lb,extra:c.extra,other:c.other,lazy:c.lazy,
+async function saveGC(){const c=GCF;const body={region_groups:c.on,strategy:c.strategy,lb:c.lb,extra:c.extra,other:c.other,lazy:c.lazy,
     interval:+$('#gc-int').value,tolerance:+$('#gc-tol').value,url:$('#gc-url').value.trim()};
   try{toast('正在校验并应用…');const j=await api('/api/groups/cfg','PUT',body);toast(j.message);loadGroupsPage()}catch(e){toast(e.message)}}
 function renderRegions(){$('#gc-regions').innerHTML=GI.regions.map(r=>`<tr><td><b style="font-weight:600">${esc(r.name)}</b></td>
@@ -978,15 +945,15 @@ function renderCGList(){$('#cg-list').innerHTML=(GI.custom||[]).map((g,i)=>{cons
     <td class="w small" style="max-width:260px">${mem||''}${g.filter?`${mem?'<br>':''}<span class="mut">正则：</span><code>${esc(g.filter)}</code>${g.subs?'':' <span class="mut">（仅手动节点）</span>'}`:''}${ex?'':'<div class="warn small">未生效</div>'}</td>
     <td>${cgRefs(g.name)}</td><td style="text-align:right;white-space:nowrap"><button class="btn g sm" onclick="editCG(${i})">编辑</button> <button class="btn r sm" onclick="delCG(${i})">删除</button></td></tr>`}).join('')
     ||'<tr><td colspan="5" class="mut">还没有自定义策略组。例如：把美国和日本节点合成一个「🎯 美日均衡」负载均衡组，或建一个「🎮 游戏」组给规则引用</td></tr>'}
-function newCG(){CGF={orig:'',name:'',icon:'',type:'select',proxies:[],filter:'',subs:true,expose:true,strategy:'round-robin',interval:'',tolerance:''};openCG('新建策略组')}
-function editCG(i){const g=GI.custom[i];CGF=JSON.parse(JSON.stringify(Object.assign({strategy:'round-robin',interval:'',tolerance:''},g,{orig:g.name})));
+function newCG(){CGF={orig:'',name:'',icon:'',type:'select',proxies:[],filter:'',subs:true,expose:true,strategy:'consistent-hashing',interval:'',tolerance:''};openCG('新建策略组')}
+function editCG(i){const g=GI.custom[i];CGF=JSON.parse(JSON.stringify(Object.assign({strategy:'consistent-hashing',interval:'',tolerance:''},g,{orig:g.name})));
   if(!CGF.interval)CGF.interval='';if(!CGF.tolerance)CGF.tolerance='';openCG('编辑策略组：'+g.name)}
 function openCG(t){$('#cg-title').textContent=t;$('#cg-form').classList.remove('hide');$('#cg-name').value=CGF.name;$('#cg-icon').value=CGF.icon||'';
   $('#cg-filter').value=CGF.filter||'';$('#cg-subs').checked=CGF.subs!==false;$('#cg-expose').checked=CGF.expose!==false;$('#cg-search').value='';
-  $('#cg-st').value=CGF.strategy||'round-robin';$('#cg-int').value=CGF.interval||'';$('#cg-tol').value=CGF.tolerance||'';
+  $('#cg-st').value=CGF.strategy||'consistent-hashing';$('#cg-int').value=CGF.interval||'';$('#cg-tol').value=CGF.tolerance||'';
   cgType();renderCGChosen();previewCG();$('#cg-form').scrollIntoView({behavior:'smooth',block:'start'})}
 function cgType(){segv('#cg-type',CGF.type,v=>{CGF.type=v;cgType()});const t=CGF.type;$('#cg-adv').classList.toggle('hide',t==='select');
-  $('#cg-st').classList.toggle('hide',t!=='load-balance');$('#cg-tol').classList.toggle('hide',t!=='url-test')}
+  $('#cg-tol').classList.toggle('hide',t!=='url-test')}
 function closeCG(){$('#cg-form').classList.add('hide');CGF=null}
 function cgCands(){return GI.groups.filter(g=>g!==CGF.orig).concat(['DIRECT','REJECT']).concat(GI.manual)}
 function renderCGChosen(){$('#cg-chosen').innerHTML=CGF.proxies.map((m,i)=>`<span class="mchip ${GI.groups.includes(m)?'grp':''}" title="${esc(m)}"><span>${GI.groups.includes(m)?'📁 ':''}${esc(m)}</span>${i?`<button title="上移" onclick="cgMove(${i})">↑</button>`:''}<button title="移除" onclick="cgDel(${i})">✕</button></span>`).join('')||'<span class="mut small">还没有成员（也可以只用下方正则筛选）</span>';renderCGPick()}
@@ -1078,7 +1045,7 @@ function renderAB(){const a=AB;$('#ab-on').checked=a.enabled;$('#ab-on').onchang
   $('#ab-total').textContent=a.enabled?total.toLocaleString('zh-CN',{hour12:false}):'未开启';$('#ab-today').textContent=a.stats.today.toLocaleString('zh-CN',{hour12:false});
   $('#ab-nlist').textContent=a.lists.filter(l=>l.enabled).length+' / '+a.lists.length;
   $('#ab-last').textContent=ago(Math.max(0,...a.lists.map(l=>l.updated||0)));
-  $('#ab-msg').innerHTML=a.updating?'<span class="warn">● 正在更新…</span>':esc(a.msg||'');document.querySelectorAll('#ab-upd,.abhd').forEach(b=>b.disabled=a.updating);
+  $('#ab-msg').innerHTML=a.updating?'<span class="warn">● 正在更新…</span>':esc(a.msg||'');$('#ab-upd').disabled=a.updating;
   $('#ab-lists').innerHTML=a.lists.map((l,i)=>{const ld=a.loaded['ad-'+l.id];
     return `<tr><td><label class="sw sm"><input type="checkbox" ${l.enabled?'checked':''} onchange="abToggle(${i},this.checked)"><span></span></label></td>
     <td class="w" style="min-width:150px"><b style="font-weight:600">${esc(l.name)}</b><div class="mut" style="font-size:11px;max-width:300px">${esc(l.url)}</div></td>
@@ -1087,9 +1054,8 @@ function renderAB(){const a=AB;$('#ab-on').checked=a.enabled;$('#ab-on').onchang
     <td class="w" style="font-size:12px;min-width:90px">${l.error?`<span class="bad" title="${esc(l.error)}">失败：${esc(l.error.slice(0,40))}</span>`:ago(l.updated)}</td>
     <td style="text-align:right;white-space:nowrap"><button class="btn g sm" onclick="abUpdate('${l.id}')">更新</button> <button class="btn r sm" onclick="abDel(${i})">删除</button></td></tr>`}).join('')
     +(a.black.length?`<tr><td></td><td><b style="font-weight:600">自定义黑名单</b></td><td>${(a.loaded['ad-custom']??a.black.length).toLocaleString('zh-CN',{hour12:false})}</td><td>${(a.custom_hits||0).toLocaleString('zh-CN',{hour12:false})}</td><td></td><td></td></tr>`:'')
-    ||'<tr><td colspan="6" class="mut">还没有列表，点下方内置规则一键添加</td></tr>';
-  const cats=[...new Set(a.presets.map(p=>p.cat||'其他'))];
-  $('#ab-presets').innerHTML=cats.map(c=>`<div class="abpr"><span class="mut small abpc">${esc(c)}</span><span class="row">`+a.presets.map((p,i)=>(p.cat||'其他')!==c?'':`<button class="btn g sm" title="${esc(p.dsc||'')}" onclick="abPreset(${i})" ${a.lists.some(l=>l.url===p.url)?'disabled':''}>${esc(p.name)}</button>`).join('')+'</span></div>').join('');
+    ||'<tr><td colspan="6" class="mut">还没有列表，点上方预设一键添加</td></tr>';
+  $('#ab-presets').innerHTML=a.presets.map((p,i)=>`<button class="btn g sm" onclick="abPreset(${i})" ${a.lists.some(l=>l.url===p.url)?'disabled':''}>${esc(p.name)}</button>`).join('');
   if(document.activeElement!==$('#ab-black'))$('#ab-black').value=a.black.join('\n');
   if(document.activeElement!==$('#ab-white'))$('#ab-white').value=a.white.join('\n');
   const top=a.stats.top||[],mx=top.length?top[0][1]:1;
@@ -1215,14 +1181,14 @@ function dnsItemErr(L,v){if(L.ff)return /^(?:geosite:|rule-set:)?[\w*+.\-!@:]+$/
   if(!DNS_SRV_RX.test(v))return '格式无效：应为 IP、udp:// tcp:// tls:// https:// quic:// dhcp:// 或 system，可加 #策略组';
   if(L.ip&&!IP_RX.test(v))return '默认 DNS 必须是 IP';if((L.ip||L.nogrp)&&v.includes('#'))return '这里不能指定 #策略组';
   const g=v.includes('#')?v.split('#')[1].split('&')[0]:'';if(g&&!g.includes('=')&&STATE.groups&&!STATE.groups.concat(['DIRECT','REJECT']).includes(g))return '策略组不存在：'+g;return ''}
-async function loadDNSPage(){await loadState().catch(()=>{});if(!DNS_DIRTY||!DNSF)fillDNS();renderDNS()}
+async function loadDNSPage(){await loadState().catch(()=>{});if(!DNS_DIRTY||!DNSF)fillDNS();renderDNS();loadOxi()}
 function fillDNS(){const d=STATE.dns||{};DNSF=JSON.parse(JSON.stringify(d));DNS_DIRTY=false}
 function dirty(){DNS_DIRTY=true;$('#dns-dirty').classList.remove('hide')}
 function renderDNS(){const f=DNSF;$('#dns-dirty').classList.toggle('hide',!DNS_DIRTY);
   segv('#dns-mode',f.mode,v=>{f.mode=v;dirty();renderDNS()});segv('#dns-cache',f.cache,v=>{f.cache=v;dirty();renderDNS()});
   [['#dns-policy','policy'],['#dns-rr','respect_rules'],['#dns-bb','block_bypass']].forEach(([k,n])=>{$(k).checked=!!f[n];$(k).onchange=e=>{f[n]=e.target.checked;dirty()}});
   $('#dns-lists').innerHTML=DNS_LISTS.filter(L=>!L.ff||f.mode==='fake-ip').map(L=>{const arr=f[L.k]||[];
-    return `<div class="lbox"><div class="lhead"><b>${L.t}</b><span class="mut small">${arr.length} 项</span></div><div class="dsc">${esc(L.d)}${L.k==='pserver'&&!arr.length?' · <span class="ok">当前使用直连 DNS</span>':''}</div>
+    return `<div class="lbox"><div class="lhead"><b>${L.t}</b><span class="mut small">${arr.length} 项</span></div><div class="dsc">${esc(L.d)}${L.k==='pserver'&&!arr.length?' · <span class="ok">当前使用直连 DNS</span>':''}${L.k==='direct'&&OXI&&OXI.active?` · <span class="ok">已由 OxiDNS 接管（127.0.0.1:${OXI.cfg.port}）</span>${OXI.follow?'，这里的服务器是它的上游':''}，OxiDNS 故障时临时回退到这里`:''}</div>
     <div class="lrows" data-k="${L.k}">${arr.map((v,i)=>`<div class="lrow" draggable="true" data-i="${i}"><span class="grip" title="拖动排序">⋮⋮</span><span class="li">${i+1}</span><code class="lv">${esc(v)}</code>
       <button class="lb" title="上移" ${i?'':'disabled'} onclick="dnsMove('${L.k}',${i},-1)">↑</button><button class="lb" title="下移" ${i<arr.length-1?'':'disabled'} onclick="dnsMove('${L.k}',${i},1)">↓</button><button class="lb del" title="删除" onclick="dnsDel('${L.k}',${i})">✕</button></div>`).join('')||'<div class="mut small" style="padding:6px 2px">（空）</div>'}</div>
     <div class="row ladd"><input id="add-${L.k}" placeholder="${esc(L.ph)}" class="sp" onkeydown="if(event.key==='Enter')dnsAdd('${L.k}')"><button class="btn g sm" onclick="dnsAdd('${L.k}')">＋ 添加</button></div><div class="bad small" id="err-${L.k}"></div></div>`}).join('');
@@ -1339,6 +1305,56 @@ async function speedTest(via,b){b.disabled=true;const r=$('#sp-r'),lab=via==='pr
   catch(e){r.dataset[via]=`${lab} <span class="bad">${esc(e.message)}</span>`}
   r.innerHTML=[r.dataset.direct,r.dataset.proxy].filter(Boolean).join('<br>');b.disabled=false}
 
+// OxiDNS 本地加速
+let OXI=null,OXI_POLL=null;
+async function loadOxi(check){try{OXI=await api('/api/oxidns'+(check?'?check=1':''));renderOxi();if(DNSF)renderDNS()}
+  catch(e){$('#oxi-body').innerHTML=`<span class="bad">${esc(e.message)}</span>`}
+  if(!OXI_POLL)api('/api/coreupdate/status').then(j=>{if(j.busy&&/OxiDNS/.test((j.log||[]).join('')))oxiPoll()}).catch(()=>{})}
+function renderOxi(){const o=OXI,c=o.cfg,tag=$('#oxi-tag');
+  tag.textContent=!o.version?'未安装':o.fallback?'故障回退中':!c.enabled?'已停用':o.running?'运行中':'未响应';
+  tag.style.color=!o.version||!c.enabled?'var(--sub)':o.fallback||!o.running?'var(--bad)':'var(--ok)';
+  if(!o.version){$('#oxi-body').innerHTML=`<div class="row"><span class="sp mut small">架构 ${esc(o.arch||'-')} · 从 GitHub 下载最新版（约 5 MB，走设置里的 GitHub 加速）</span><button class="btn" id="oxi-ins" onclick="oxiJob('install')">一键安装并接入</button></div>`;return}
+  const host=location.hostname,web=`http://${host.includes(':')?'['+host+']':host}:${c.webui_port}/`;
+  const rem=o.remote?(o.remote===o.version?' · <span class="ok">已是最新</span>':` · <span class="warn">可更新到 ${esc(o.remote)}</span>`):o.remote_err?` · <span class="bad">检查失败</span>`:'';
+  $('#oxi-body').innerHTML=`
+  <div class="opt"><div class="sp"><div class="t">接入核心</div><div class="dsc">把核心的直连 DNS 换成 <code>udp://127.0.0.1:${c.port}</code>${o.running?` · 解析 www.qq.com ${o.ms} ms`:''}</div></div><label class="sw sm"><input type="checkbox" id="oxi-on" ${c.enabled?'checked':''} onchange="oxiEnable(this.checked)"><span></span></label></div>
+  <div class="opt"><div class="sp"><div class="t">版本 ${esc(o.version)}</div><div class="dsc">${esc(o.arch)}${o.backup?' · 可回滚到 '+esc(o.backup):''}${rem}</div></div>
+    <button class="btn g sm" onclick="loadOxi(1)">检查更新</button>${o.remote&&o.remote!==o.version?`<button class="btn sm" onclick="oxiJob('update')">更新</button>`:''}${o.backup?`<button class="btn g sm" onclick="oxiAct('rollback','回滚 OxiDNS 到 '+OXI.backup+'？')">回滚</button>`:''}<button class="btn g sm" onclick="oxiAct('restart')">重启</button></div>
+  <div class="oxg mt">
+    <div><div class="lbl" style="margin-top:0">DNS 端口</div><input id="oxi-port" type="number" value="${c.port}" style="width:100%"></div>
+    <div><div class="lbl" style="margin-top:0">并发上游数</div><input id="oxi-conc" type="number" min="1" max="8" value="${c.concurrent}" style="width:100%"></div>
+    <div><div class="lbl" style="margin-top:0">缓存条数</div><input id="oxi-cache" type="number" step="1024" value="${c.cache}" style="width:100%"></div></div>
+  <div class="lbl">上游 DNS（一行一个；留空 = 沿用上面的「直连 DNS」）</div>
+  <textarea id="oxi-ups" rows="3" placeholder="${esc((o.follow?o.upstreams:[]).join('\n')||'https://doh.pub/dns-query')}">${esc(c.upstreams.join('\n'))}</textarea>
+  <div class="mut small">支持 IP、udp:// tcp:// tls:// https:// quic:// h3://；域名型上游用「默认 DNS」里的第一个 IP 引导解析</div>
+  <div class="opt mt"><div class="sp"><div class="t">乐观缓存</div><div class="dsc">记录过期后先返回旧结果再后台刷新（最长 1 天），缓存定时存盘，重启后不丢</div></div><label class="sw sm"><input type="checkbox" id="oxi-lazy" ${c.lazy?'checked':''}><span></span></label></div>
+  <div class="opt"><div class="sp"><div class="t">OxiDNS WebUI</div><div class="dsc">查询记录、命中率、上游延迟；局域网可访问，需登录${c.webui&&o.running?` · <a href="${esc(web)}" target="_blank" rel="noopener">打开 ${esc(web)}</a>`:''}</div></div><label class="sw sm"><input type="checkbox" id="oxi-web" ${c.webui?'checked':''}><span></span></label></div>
+  <div class="oxg">
+    <div><div class="lbl">WebUI 端口</div><input id="oxi-wport" type="number" value="${c.webui_port}" style="width:100%"></div>
+    <div><div class="lbl">用户名</div><input id="oxi-user" value="${esc(c.user)}" style="width:100%"></div>
+    <div><div class="lbl">密码</div><input id="oxi-pass" placeholder="${o.pass?esc(o.pass):'自动生成'}" title="留空保持当前密码" style="width:100%"></div></div>
+  <div class="row mt"><button class="btn g sm" onclick="oxiCustom()">自定义配置</button><button class="btn g sm" style="color:var(--bad)" onclick="oxiAct('uninstall','卸载 OxiDNS？程序、配置和缓存都会删除，直连 DNS 恢复原设置。')">卸载</button><span class="sp"></span><button class="btn" onclick="oxiSave()">保存</button></div>
+  ${c.custom?'<div class="warn small mt">● 正在使用自定义配置：上面的表单只修改面板记录，不会改写配置文件。请保持监听 127.0.0.1:'+c.port+'</div>':''}
+  <div id="oxi-cust" class="hide mt"><div class="lbl">config.yaml（保存前用 oxidns check 校验，失败不会保存）</div><textarea id="oxi-yaml" rows="16"></textarea>
+    <div class="row mt"><span class="sp mut small">参考 <a href="https://oxidns.org/configuration" target="_blank" rel="noopener">配置文档</a></span><button class="btn g sm" onclick="oxiCustomSave(false)">恢复自动生成</button><button class="btn sm" onclick="oxiCustomSave(true)">保存自定义配置</button></div></div>`}
+async function oxiJob(action){const lab={install:'下载安装 OxiDNS 并接入核心',update:'更新 OxiDNS 到 '+(OXI.remote||'最新版')}[action];
+  if(!confirm(lab+'？\n'+(action==='install'?'接入后国内域名改由 OxiDNS 解析，核心会热重载（不断网）。':'更新后 OxiDNS 会重启几秒。')))return;
+  try{await saveGhProxy().catch(()=>{});await api('/api/oxidns','POST',{action});oxiPoll()}catch(e){toast(e.message)}}
+function oxiPoll(){$('#oxi-prog').classList.remove('hide');clearInterval(OXI_POLL);
+  const tick=async()=>{let j;try{j=await api('/api/coreupdate/status')}catch(e){return}
+    $('#oxi-bar').style.width=(j.pct||0)+'%';$('#oxi-log').textContent=(j.log||[]).join('\n');
+    if(!j.busy){clearInterval(OXI_POLL);OXI_POLL=null;toast(j.message||(j.ok?'完成':'失败'));setTimeout(()=>$('#oxi-prog').classList.add('hide'),j.ok?4000:30000);loadOxi()}};
+  tick();OXI_POLL=setInterval(tick,1500)}
+async function oxiAct(action,ask){if(ask&&!confirm(ask))return;try{const j=await api('/api/oxidns','POST',{action});toast(j.message)}catch(e){toast(e.message)}loadOxi()}
+async function oxiEnable(on){try{const j=await api('/api/oxidns','POST',{action:'enable',on});toast(j.message)}catch(e){toast(e.message)}loadOxi()}
+async function oxiSave(){const cfg={port:+$('#oxi-port').value,concurrent:+$('#oxi-conc').value,cache:+$('#oxi-cache').value,lazy:$('#oxi-lazy').checked,webui:$('#oxi-web').checked,
+    webui_port:+$('#oxi-wport').value,user:$('#oxi-user').value.trim(),upstreams:$('#oxi-ups').value.split(/\n+/).map(x=>x.trim()).filter(Boolean)};
+  if($('#oxi-pass').value)cfg.pass=$('#oxi-pass').value;
+  try{const j=await api('/api/oxidns','POST',{action:'save',cfg});toast(j.message)}catch(e){toast(e.message)}loadOxi()}
+async function oxiCustom(){const b=$('#oxi-cust');if(!b.classList.contains('hide')){b.classList.add('hide');return}
+  try{const j=await api('/api/oxidns/config');$('#oxi-yaml').value=j.text;b.classList.remove('hide')}catch(e){toast(e.message)}}
+async function oxiCustomSave(custom){if(!custom&&!confirm('丢弃自定义配置，改回面板根据表单自动生成的配置？'))return;
+  try{const j=await api('/api/oxidns/config','PUT',custom?{custom:true,text:$('#oxi-yaml').value}:{custom:false});toast(j.message);if(!custom)$('#oxi-cust').classList.add('hide')}catch(e){toast(e.message)}loadOxi()}
 // 内核更新
 let CORE_POLL=null;
 function coreCh(){return $('#core-ch').value}
@@ -1364,7 +1380,7 @@ async function loadCoreSw(){try{const j=await api('/api/coreswitch');SW_SEL=j.co
     const pick=x=>{SW_SEL=x;segv('#sw-seg',x,pick);swRender(j)};pick(j.core);if(j.busy&&!SW_POLL)swPoll()}catch(e){$('#sw-ver').textContent=e.message}}
 function swRender(j){const to=SW_SEL,diff=to!==j.core;$('#sw-btn').disabled=!diff;$('#sw-btn').textContent=diff?'切换到 '+CORE_LABEL[to]:'切换内核';
   const sbNote='<div class="warn">sing-box 与 mihomo 的差异：</div><ul style="margin:4px 0 0 18px;padding:0">'+
-    '<li>没有负载均衡 / 故障转移组：地区「⚖️ 轮询 / 哈希 / 粘性」组并入同地区「自动优选」，自定义的这两类组按自动测速运行</li>'+
+    '<li>没有负载均衡 / 故障转移组：地区「⚖️ 负载均衡」并入同地区「自动优选」，自定义的这两类组按自动测速运行</li>'+
     '<li>订阅由面板下载并解析（Clash YAML / Base64 / 分享链接），按「订阅自动更新间隔」刷新；ssr、snell、wireguard 节点会被跳过</li>'+
     '<li>GEO 与规则集改用 .srs 格式，由面板下载；mihomo 专用的 .mrs 规则集（MetaCubeX 的除外）无法使用</li>'+
     '<li>每组 DNS 只用列表里的第一个服务器；hosts 只支持精确域名 → IP</li>'+
@@ -1442,7 +1458,7 @@ async function start(){
   const vis=f=>()=>{if(!document.hidden)f()};
   timers.forEach(clearInterval);timers=[setInterval(tick,1000),setInterval(vis(testSites),60000),setInterval(vis(()=>loadState().catch(()=>{})),15000),setInterval(vis(loadDevs),30000),
     setInterval(vis(()=>{if(TAB==='统计')loadStats();if(TAB==='概览')loadAdStat();if(TAB==='广告拦截'&&!AB?.updating)loadAB()}),30000)];
-  loadDevs();tick();testSites();bgSync()}
+  loadDevs();tick();testSites()}
 // 切回前台时立即刷新一次
 document.addEventListener('visibilitychange',()=>{if(document.hidden||!TOKEN||$('#app').classList.contains('hide'))return;_skip=0;tick();loadState().catch(()=>{});if(TAB==='节点')loadProxies()});
 placeNav();
