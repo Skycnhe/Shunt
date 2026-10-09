@@ -57,8 +57,24 @@ CN_DNS = re.compile(r"(?i)(?:^|[/@\[])(?:223\.5\.5\.5|223\.6\.6\.6|2400:3200|119
                     r"101\.226\.4\.6|218\.30\.118\.6|117\.50\.\d+\.\d+|52\.80\.\d+\.\d+|"
                     r"[\w.-]*(?:alidns\.com|doh\.pub|dot\.pub|dnspod\.(?:cn|com)|360\.cn|114dns\.com|onedns\.net|baidu\.com|volces\.com))(?:[:/#\]]|$)")
 AB_DEFAULT = {"enabled": False, "lists": [], "black": [], "white": [], "interval": 86400, "dns": False}
-AB_PRESETS = [{"name": "AdGuard DNS filter", "url": "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt"},
-              {"name": "anti-AD", "url": "https://anti-ad.net/easylist.txt"}]
+# 内置预设：按「国内 / 国外 × 视频 / 网页 / 隐私」分组，前端按 cat 分行显示
+BM = "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/"
+AB_PRESETS = [
+    {"cat": "国内 · 视频 / App", "name": "秋风广告规则", "url": "https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/AWAvenue-Ads-Rule.txt",
+     "dsc": "国内 App 开屏、视频贴片、广告 SDK"},
+    {"cat": "国内 · 视频 / App", "name": "小米电视广告", "url": BM + "AdvertisingMiTV/AdvertisingMiTV.list", "dsc": "小米电视 / 盒子开机与界面广告"},
+    {"cat": "国内 · 网页", "name": "anti-AD", "url": "https://anti-ad.net/easylist.txt", "dsc": "国内网页、App 广告综合"},
+    {"cat": "国内 · 网页", "name": "AdGuard 中文", "url": "https://filters.adtidy.org/extension/ublock/filters/224.txt", "dsc": "中文网站广告"},
+    {"cat": "国内 · 隐私", "name": "隐私追踪 (blackmatrix7)", "url": BM + "Privacy/Privacy.list", "dsc": "统计、埋点、行为追踪"},
+    {"cat": "国外 · 视频 / 电视", "name": "Smart-TV", "url": "https://raw.githubusercontent.com/Perflyst/PiHoleBlocklist/master/SmartTV.txt",
+     "dsc": "三星 / LG / 索尼等电视界面广告与回传"},
+    {"cat": "国外 · 网页", "name": "AdGuard DNS filter", "url": "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt",
+     "dsc": "国外网站、App 广告综合"},
+    {"cat": "国外 · 网页", "name": "HaGeZi Multi", "url": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/multi.txt",
+     "dsc": "广告 + 追踪 + 恶意域名，覆盖更广"},
+    {"cat": "国外 · 隐私", "name": "EasyPrivacy", "url": "https://easylist.to/easylist/easyprivacy.txt", "dsc": "国外统计与追踪"},
+    {"cat": "国外 · 隐私", "name": "Frogeye 一方追踪", "url": "https://hostfiles.frogeye.fr/firstparty-trackers.txt",
+     "dsc": "伪装成网站子域名的追踪器"}]
 TUN_DEFAULT = {"stack": "mixed", "device": "Meta", "auto_redirect": True, "strict_route": False}
 GROUPS_DEFAULT = {"type": "url-test", "lb": True, "auto": True, "strategy": "round-robin", "interval": 300,
                   "tolerance": 50, "url": "https://www.gstatic.com/generate_204", "extra": True, "other": True, "lazy": True}
@@ -84,7 +100,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 7
-PANEL_VERSION = "6.6.9"
+PANEL_VERSION = "6.7.0"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -128,6 +144,7 @@ def load():
             d = json.load(f)
     except Exception:
         d = {}
+    old_st = (d.get("groups_cfg") or {}).get("strategy") if isinstance(d.get("groups_cfg"), dict) else None
     for k, v in DEFAULT.items():
         d.setdefault(k, copy.deepcopy(v))
         if isinstance(v, dict) and isinstance(d[k], dict) and k != "devices":
@@ -148,6 +165,8 @@ def load():
         d["secret"] = secrets.token_hex(16)
         dirty = True
     if int(d.get("schema") or 0) < SCHEMA:  # v5 → v6：地区组改名（如 🇺🇸 美国 → 🇺🇸 美国自动优选），同步所有引用
+        # 旧版地区负载均衡与未写策略的自定义负载均衡组用的是 groups_cfg.strategy（没保存过 = 当时默认的一致性哈希），保留下来，行为不变
+        d["groups_cfg"]["strategy"] = old_st if old_st in LB_STRATEGIES else "consistent-hashing"
         migrate_names(d)
         d["schema"] = SCHEMA
         dirty = True
@@ -189,12 +208,14 @@ def region_lb_set():
     return {n for r, _ in REGIONS + [(G_OTHER, None)] for n in lb_names(r)}
 
 
-def legacy_map():
-    """旧版策略组名 → 新名称"""
+def legacy_map(st=None):
+    """旧版策略组名 → 新名称。st：旧版「⚖️ X负载均衡」实际用的策略（存在 groups_cfg.strategy，没保存过就是当时的默认一致性哈希），
+    迁移到同策略的组，行为与升级前一致"""
+    st = st if st in dict(LB_KINDS) else "consistent-hashing"
     m = {LEGACY_AUTO: G_AUTO}
     for rname in [r[0] for r in REGIONS] + [G_OTHER]:
         m[rname] = m[rname + AUTO_SUFFIX] = auto_name(rname)
-        m[rname + LB_SUFFIX] = m[lb_old_name(rname)] = lb_name(rname)
+        m[rname + LB_SUFFIX] = m[lb_old_name(rname)] = lb_name(rname, st)
     return m
 
 
@@ -250,8 +271,8 @@ def map_refs(d, mp, drop=()):
     return n
 
 
-def migrate_names(d):
-    mp = legacy_map()
+def migrate_names(d, st=None):
+    mp = legacy_map(st if st else (d.get("groups_cfg") or {}).get("strategy"))
     return map_refs(d, {k: v for k, v in mp.items() if k != v})
 
 
@@ -4167,6 +4188,7 @@ def core_stream(path, sink, stop, idle=None):
 #   ||a.com^ → "+.a.com"（含子域）；hosts / 纯域名 → "a.com"（仅该域名，与 AdGuard Home 语义一致）
 # 规则：AND,((RULE-SET,ad-xxx),(NOT,((RULE-SET,ad-allow)))),REJECT  —— 白名单优先，且被放行的域名继续走正常分流
 DOMAIN_RX = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9_](?:[a-z0-9_\-]{0,61}[a-z0-9_])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9\-]{1,59})$")
+CLASH_RX = re.compile(r"^(domain|domain-suffix),([^,\s]+)(?:,.*)?$")
 ABP_RX = re.compile(r"^(@@)?\|\|([^\^/|$]+)\^\|?(?:\$(.*))?$")
 HOSTS_IPS = {"0.0.0.0", "127.0.0.1", "::", "::1", "0:0:0:0:0:0:0:0", "::0", "0", "255.255.255.255"}
 HOSTS_SKIP = {"localhost", "localhost.localdomain", "local", "broadcasthost", "ip6-localhost", "ip6-loopback",
@@ -4202,6 +4224,23 @@ def parse_filter(text, plain_suffix=False):
         if not line or line[0] in "!#[":
             continue
         low = line.lower()
+        if low.startswith("payload:"):
+            continue
+        if low.startswith("- "):  # Clash YAML payload：  - DOMAIN-SUFFIX,a.com / - '+.a.com'
+            low = low[2:].strip().strip("'\"")
+            if not low:
+                continue
+        cm = CLASH_RX.match(low)
+        if cm:  # Clash 规则列表：DOMAIN / DOMAIN-SUFFIX 可用，KEYWORD / IP 类无法用域名列表表达
+            dom = norm_domain(cm.group(2))
+            if dom:
+                (bs if cm.group(1) == "domain-suffix" else be).add(dom)
+            else:
+                skipped += 1
+            continue
+        if re.match(r"^(?:domain-keyword|domain-regex|ip-cidr6?|ip-asn|geoip|geosite|process-name|user-agent|url-regex|dst-port|src-ip-cidr),", low):
+            skipped += 1
+            continue
         if low.startswith("||") or low.startswith("@@"):
             m = ABP_RX.match(low)
             if not m:
@@ -5210,7 +5249,7 @@ def restore_selections():
     sel = read_json(SEL_FILE, None)
     if not sel:
         return 0
-    mp = legacy_map()
+    mp = legacy_map(load()["groups_cfg"].get("strategy"))
     proxies = (core_json("/proxies", timeout=5) or {}).get("proxies") or {}
     n = 0
     for g, now in sel.items():
