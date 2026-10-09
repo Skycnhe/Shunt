@@ -84,7 +84,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 6
-PANEL_VERSION = "6.6.7"
+PANEL_VERSION = "6.6.8"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -1242,16 +1242,11 @@ SB_REPO = os.environ.get("SB_REPO", "https://github.com/SagerNet/sing-box/releas
 SB_API = os.environ.get("SB_API", "https://api.github.com/repos/SagerNet/sing-box/releases")
 SB_UA = ("clash.meta", "v2rayN/6.45")
 SB_STATE = {"warn": [], "subs": {}}
-SB_LOCK = threading.Lock()
 
 
 def active_core(d=None):
     c = (d or load()).get("core") or "mihomo"
     return c if c in CORES else "mihomo"
-
-
-def core_bin(kind=None):
-    return SB_BIN if (kind or active_core()) == "singbox" else MIHOMO_BIN
 
 
 def core_conf_path(kind=None):
@@ -5818,7 +5813,6 @@ class H(BaseHTTPRequestHandler):
                 version = json.loads(ver).get("version", "-") if code == 200 else "-"
             except Exception:
                 version = "-"
-            has = bool(d["subs"] or d["nodes"])
             cfg = build_config(d)
             groups = [g["name"] for g in cfg["proxy-groups"]]
             gmeta = group_meta(d, cfg)
@@ -5830,21 +5824,21 @@ class H(BaseHTTPRequestHandler):
                         gmeta.pop(n)
                     elif mt["type"] in ("load-balance", "fallback"):
                         mt.update(sb_from=mt["type"], type="url-test")
-            return self.send(200, {"pw_default": bool(d.get("pw_default")), "mode": d["mode"], "tproxy": d["tproxy"], "subs": d["subs"], "rules": d["rules"],
+            return self.send(200, {"pw_default": bool(d.get("pw_default")), "mode": d["mode"], "subs": d["subs"], "rules": d["rules"],
                                    "running": "started" in st or code == 200, "version": version, "groups": groups,
-                                   "has_nodes": has, "nodes": [{"name": n["proxy"]["name"], "type": n["proxy"]["type"],
+                                   "nodes": [{"name": n["proxy"]["name"], "type": n["proxy"]["type"],
                                                                 "server": n["proxy"]["server"], "port": n["proxy"]["port"]} for n in d["nodes"]],
                                    "rulesets": d["rulesets"], "bypass": d["bypass"], "tests": d["tests"],
-                                   "sub_interval": d["sub_interval"], "region_groups": d["region_groups"],
-                                   "ipv6": d["ipv6"], "https": d["https"], "https_active": isinstance(self.connection, ssl.SSLSocket),
+                                   "sub_interval": d["sub_interval"],
+                                   "ipv6": d["ipv6"], "https": d["https"],
                                    "watchdog": d["watchdog"], "tg_token": d["tg_token"], "tg_chat": d["tg_chat"],
                                    "default_exclude": DEFAULT_EXCLUDE, "proxy_mode": d["proxy_mode"], "tun": d["tun"],
-                                   "log_limit": d["log_limit"], "dns": dns_cfg(d), "dns_default": DNS_DEFAULT,
+                                   "log_limit": d["log_limit"], "dns": dns_cfg(d),
                                    "schedule": d["schedule"], "devices": d["devices"], "adblock_on": d["adblock"]["enabled"],
                                    "sched_events": list(SCHED["events"])[:20], "group_meta": gmeta,
-                                   "custom_groups": d["custom_groups"], "groups_cfg": gcfg(d), "sniffer": d["sniffer"],
+                                   "sniffer": d["sniffer"],
                                    "gh_proxy": d["gh_proxy"], "panel_version": PANEL_VERSION, "core": active_core(d),
-                                   "wd": {"status": WD["status"], "fails": WD["fails"], "last_check": WD["last_check"],
+                                   "wd": {"status": WD["status"], "last_check": WD["last_check"],
                                           "events": list(WD["events"])[:20]}})
         if p == "/api/groups" and m == "GET":
             return self.groups_info()
@@ -6072,8 +6066,6 @@ class H(BaseHTTPRequestHandler):
             if mode == "global":
                 fix_global()
             return self.send(200, {"message": "ok"})
-        if p == "/api/tproxy" and m == "PUT":  # 兼容旧接口
-            return self.set_proxy_mode({"mode": "tproxy" if b.get("enable") else "off"})
         if p == "/api/proxymode" and m == "PUT":
             return self.set_proxy_mode(b)
         if p == "/api/conns" and m == "GET":  # 精简后的连接列表：只保留前端用到的字段
@@ -6095,8 +6087,6 @@ class H(BaseHTTPRequestHandler):
                 out.update(memory_once())
             out["running"] = time.time() - LIVE["t"] < 5 or bool(out.get("inuse"))
             return self.send(200, out)
-        if p == "/api/memory" and m == "GET":
-            return self.send(200, {"inuse": LIVE["inuse"], "oslimit": LIVE["oslimit"]} if LIVE["inuse"] else memory_once())
         if p == "/api/logs/info" and m == "GET":
             return self.send(200, {"files": log_sizes(), "limit": load()["log_limit"], "last": LOG_STATE["last"]})
         if p == "/api/logs/clean" and m == "POST":
