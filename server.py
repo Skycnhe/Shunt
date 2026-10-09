@@ -60,7 +60,7 @@ AB_DEFAULT = {"enabled": False, "lists": [], "black": [], "white": [], "interval
 AB_PRESETS = [{"name": "AdGuard DNS filter", "url": "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt"},
               {"name": "anti-AD", "url": "https://anti-ad.net/easylist.txt"}]
 TUN_DEFAULT = {"stack": "mixed", "device": "Meta", "auto_redirect": True, "strict_route": False}
-GROUPS_DEFAULT = {"type": "url-test", "lb": True, "auto": True, "strategy": "consistent-hashing", "interval": 300,
+GROUPS_DEFAULT = {"type": "url-test", "lb": True, "auto": True, "strategy": "round-robin", "interval": 300,
                   "tolerance": 50, "url": "https://www.gstatic.com/generate_204", "extra": True, "other": True, "lazy": True}
 SCHED_DEFAULT = {"sub_update": "", "core_restart": "", "geo_update": "", "latency": 0}
 DEFAULT = {"password": "admin", "pw_hash": "", "pw_default": False, "secret": "", "mode": "rule", "tproxy": True, "subs": [], "rules": [],
@@ -83,8 +83,8 @@ LB_PREFIX, AUTO_TAIL, LB_TAIL = "\u2696\uFE0F ", "自动优选", "负载均衡"
 LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据时自动迁移
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
-SCHEMA = 6
-PANEL_VERSION = "6.6.8"
+SCHEMA = 7
+PANEL_VERSION = "6.6.9"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -168,8 +168,25 @@ def auto_name(rname):
     return f"{flag} {label}{AUTO_TAIL}"
 
 
-def lb_name(rname):
+LB_KINDS = (("round-robin", "轮询"), ("consistent-hashing", "哈希"), ("sticky-sessions", "粘性"))  # 每个地区三个负载均衡组，第一个是默认
+
+
+def lb_name(rname, strategy="round-robin"):
+    """「⚖️ 日本轮询」/「⚖️ 日本哈希」/「⚖️ 日本粘性」"""
+    return LB_PREFIX + region_label(rname)[1] + dict(LB_KINDS)[strategy]
+
+
+def lb_names(rname):
+    return [lb_name(rname, st) for st, _ in LB_KINDS]
+
+
+def lb_old_name(rname):
+    """v6.6.8 及以前的单个「⚖️ 日本负载均衡」组"""
     return LB_PREFIX + region_label(rname)[1] + LB_TAIL
+
+
+def region_lb_set():
+    return {n for r, _ in REGIONS + [(G_OTHER, None)] for n in lb_names(r)}
 
 
 def legacy_map():
@@ -177,7 +194,7 @@ def legacy_map():
     m = {LEGACY_AUTO: G_AUTO}
     for rname in [r[0] for r in REGIONS] + [G_OTHER]:
         m[rname] = m[rname + AUTO_SUFFIX] = auto_name(rname)
-        m[rname + LB_SUFFIX] = lb_name(rname)
+        m[rname + LB_SUFFIX] = m[lb_old_name(rname)] = lb_name(rname)
     return m
 
 
@@ -511,7 +528,7 @@ def reserved_names(d=None):
     regs = [r[0] for r in REGIONS] + [G_OTHER]
     out = {G_SEL, G_AUTO, G_MANUAL, G_DIRECT, LEGACY_AUTO, "GLOBAL"} | set(SIDE_GROUPS) | BUILTIN_POLICIES
     for r in regs:
-        out |= {r, r + LB_SUFFIX, r + AUTO_SUFFIX, auto_name(r), lb_name(r)}
+        out |= {r, r + LB_SUFFIX, r + AUTO_SUFFIX, auto_name(r), lb_old_name(r), *lb_names(r)}
     if d:
         out |= {g["name"] for g in d.get("custom_groups") or []}
     return out
@@ -565,7 +582,7 @@ def gcfg(d):
     gc.update({k: v for k, v in (d.get("groups_cfg") or {}).items() if k in GROUPS_DEFAULT})
     gc["type"] = "url-test"  # v6：地区「自动优选」组固定为 url-test（旧的地区主组类型设置不再使用）
     if gc["strategy"] not in LB_STRATEGIES:
-        gc["strategy"] = "consistent-hashing"
+        gc["strategy"] = "round-robin"
     return gc
 
 
@@ -680,7 +697,7 @@ def clean_custom_group(b):
             raise ValueError("容差应在 0–1000 ms 之间")
         g.update(interval=iv, tolerance=tol)
         if t == "load-balance":
-            st = b.get("strategy") or "consistent-hashing"
+            st = b.get("strategy") or "round-robin"
             if st not in LB_STRATEGIES:
                 raise ValueError("负载均衡策略无效")
             g["strategy"] = st
@@ -745,15 +762,15 @@ def build_config(d, strict=False):
             g["proxies"] = ["COMPATIBLE"]
         return g
 
-    # 地区分组：「<旗> <地区>自动优选」(url-test) + 「⚖️ <地区>负载均衡」(load-balance，≥2 个节点时)
+    # 地区分组：「<旗> <地区>自动优选」(url-test) + 「⚖️ <地区>轮询 / 哈希 / 粘性」(load-balance，三种策略各一个)
     autos, lbs = [], []
     for rname, flt, exc, matched, total, unknown in region_plan(d, names, use):
         label = region_label(rname)[1]
-        variants = [(auto_name(rname), "url-test", autos)]
-        if gc["lb"]:  # 每个有节点的地区都生成「⚖️ <地区>负载均衡」
-            variants.append((lb_name(rname), "load-balance", lbs))
-        for gname, t, bucket in variants:
-            g = with_src(dict({"name": gname}, **group_opts(t, gc)), matched)
+        variants = [(auto_name(rname), "url-test", autos, None)]
+        if gc["lb"] and (total >= 2 or unknown):  # 地区有 ≥2 个节点时生成三个负载均衡组：轮询、一致性哈希、粘性会话
+            variants += [(lb_name(rname, st), "load-balance", lbs, {"strategy": st}) for st, _ in LB_KINDS]
+        for gname, t, bucket, ex in variants:
+            g = with_src(dict({"name": gname}, **group_opts(t, gc, ex)), matched)
             if use:
                 if flt:
                     g["filter"] = flt
@@ -2073,8 +2090,9 @@ def build_singbox(d):
     alias = {}
     region_lb = set()
     for r, _ in REGIONS + [(G_OTHER, None)]:
-        alias[lb_name(r)] = auto_name(r)
-        region_lb.add(lb_name(r))
+        for n in lb_names(r) + [lb_old_name(r)]:
+            alias[n] = auto_name(r)
+            region_lb.add(n)
     groups = [g for g in cfg["proxy-groups"] if g["name"] not in region_lb]
     gnames = {g["name"] for g in groups}
     alias = {k: v for k, v in alias.items() if v in gnames}
@@ -5295,7 +5313,7 @@ def group_kind(n, custom=()):
         return "direct"
     if n in SIDE_GROUPS:
         return "service"
-    if n.startswith(LB_PREFIX) and n.endswith(LB_TAIL):
+    if n.startswith(LB_PREFIX) and n.endswith((LB_TAIL,) + tuple(t for _, t in LB_KINDS)):
         return "lb"
     if n.endswith(AUTO_TAIL):
         return "region"
@@ -5663,7 +5681,7 @@ class H(BaseHTTPRequestHandler):
         meta = group_meta(d, cfg)
         sb = active_core(d) == "singbox"
         if sb:  # sing-box：地区负载均衡并入自动优选，自定义负载均衡 / 故障转移按自动测速运行
-            lbs = {lb_name(r) for r, _ in REGIONS + [(G_OTHER, None)]}
+            lbs = region_lb_set()
             gnames = [g for g in gnames if g not in lbs]
             for n in list(meta):
                 if n in lbs:
@@ -5671,7 +5689,7 @@ class H(BaseHTTPRequestHandler):
                 elif meta[n]["type"] in ("load-balance", "fallback"):
                     meta[n].update(sb_from=meta[n]["type"], type="url-test")
         regions = [{"name": r[0], "total": r[4], "manual": len(r[3]), "unknown": r[5],
-                    "groups": [g for g in gnames if g in (auto_name(r[0]), lb_name(r[0]))]} for r in plan]
+                    "groups": [g for g in gnames if g in [auto_name(r[0])] + lb_names(r[0])]} for r in plan]
         sel = next((g.get("proxies") or [] for g in cfg["proxy-groups"] if g["name"] == G_SEL), [])
         if sb:
             sel = [x for x in sel if x in gnames or x in BUILTIN_POLICIES]
@@ -5817,7 +5835,7 @@ class H(BaseHTTPRequestHandler):
             groups = [g["name"] for g in cfg["proxy-groups"]]
             gmeta = group_meta(d, cfg)
             if active_core(d) == "singbox":  # 地区负载均衡并入自动优选；负载均衡 / 故障转移按自动测速运行
-                lbs = {lb_name(r) for r, _ in REGIONS + [(G_OTHER, None)]}
+                lbs = region_lb_set()
                 groups = [g for g in groups if g not in lbs]
                 for n, mt in list(gmeta.items()):
                     if n in lbs:
