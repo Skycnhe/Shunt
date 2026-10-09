@@ -297,6 +297,7 @@ nav .ico{display:none}nav .more{display:none}
   .ntool .nsearch{flex:1 1 220px;max-width:360px;margin-right:auto}
   .nfilter:has(#nf-r:empty){margin-bottom:12px}
 }
+.abps{display:flex;flex-direction:column;gap:6px}.abpr{display:grid;grid-template-columns:112px 1fr;align-items:center;gap:8px}.abpr>.row{flex-wrap:wrap;gap:6px}@media (max-width:720px){.abpr{grid-template-columns:86px 1fr}}
 </style>
 </head>
 <body><div id="bgimg"></div><div id="bgdim"></div>
@@ -486,8 +487,9 @@ nav .ico{display:none}nav .more{display:none}
       <div>
         <div class="card"><h3>过滤列表</h3>
           <div class="tw"><table><thead><tr><th>启用</th><th>名称</th><th>规则数</th><th>今日拦截</th><th>更新</th><th></th></tr></thead><tbody id="ab-lists"></tbody></table></div>
-          <div class="lbl">添加列表（AdGuard / ABP、hosts、纯域名格式）</div>
-          <div class="row mb"><span class="mut small">预设：</span><span id="ab-presets" class="row"></span></div>
+          <div class="lbl">内置规则（点击添加，已添加的显示为灰色）</div>
+          <div id="ab-presets" class="abps mb"></div>
+          <div class="lbl">添加列表（AdGuard / ABP、hosts、纯域名、Clash 规则格式）</div>
           <div class="row"><input id="ab-name" placeholder="名称" style="width:130px"><input id="ab-url" placeholder="https://.../filter.txt" class="sp"><button class="btn" onclick="abAdd()">添加</button></div>
           <div class="opt mt"><div class="sp"><div class="t">自动更新</div><div class="dsc">按间隔重新下载全部列表，只刷新规则文件，不中断连接</div></div>
             <select id="ab-int" onchange="abSave({interval:+this.value},'已保存')"><option value="0">不自动更新</option><option value="21600">每 6 小时</option><option value="43200">每 12 小时</option><option value="86400">每天</option><option value="259200">每 3 天</option><option value="604800">每周</option></select></div>
@@ -1085,8 +1087,9 @@ function renderAB(){const a=AB;$('#ab-on').checked=a.enabled;$('#ab-on').onchang
     <td class="w" style="font-size:12px;min-width:90px">${l.error?`<span class="bad" title="${esc(l.error)}">失败：${esc(l.error.slice(0,40))}</span>`:ago(l.updated)}</td>
     <td style="text-align:right;white-space:nowrap"><button class="btn g sm" onclick="abUpdate('${l.id}')">更新</button> <button class="btn r sm" onclick="abDel(${i})">删除</button></td></tr>`}).join('')
     +(a.black.length?`<tr><td></td><td><b style="font-weight:600">自定义黑名单</b></td><td>${(a.loaded['ad-custom']??a.black.length).toLocaleString('zh-CN',{hour12:false})}</td><td>${(a.custom_hits||0).toLocaleString('zh-CN',{hour12:false})}</td><td></td><td></td></tr>`:'')
-    ||'<tr><td colspan="6" class="mut">还没有列表，点上方预设一键添加</td></tr>';
-  $('#ab-presets').innerHTML=a.presets.map((p,i)=>`<button class="btn g sm" onclick="abPreset(${i})" ${a.lists.some(l=>l.url===p.url)?'disabled':''}>${esc(p.name)}</button>`).join('');
+    ||'<tr><td colspan="6" class="mut">还没有列表，点下方内置规则一键添加</td></tr>';
+  const cats=[...new Set(a.presets.map(p=>p.cat||'其他'))];
+  $('#ab-presets').innerHTML=cats.map(c=>`<div class="abpr"><span class="mut small abpc">${esc(c)}</span><span class="row">`+a.presets.map((p,i)=>(p.cat||'其他')!==c?'':`<button class="btn g sm" title="${esc(p.dsc||'')}" onclick="abPreset(${i})" ${a.lists.some(l=>l.url===p.url)?'disabled':''}>${esc(p.name)}</button>`).join('')+'</span></div>').join('');
   if(document.activeElement!==$('#ab-black'))$('#ab-black').value=a.black.join('\n');
   if(document.activeElement!==$('#ab-white'))$('#ab-white').value=a.white.join('\n');
   const top=a.stats.top||[],mx=top.length?top[0][1]:1;
