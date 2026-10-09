@@ -386,12 +386,10 @@ nav .ico{display:none}nav .more{display:none}
    <div class="cols">
     <div>
     <div class="card"><div class="opt" style="padding-top:0"><div class="sp"><div class="t" style="font-size:16px">地区分组</div>
-        <div class="dsc">按节点名称识别地区，只为确实有节点的地区生成「🇯🇵 日本自动优选」（自动测速）与「⚖️ 日本负载均衡」分组。「🚀 节点选择」只包含：各地区自动优选 → 各地区负载均衡 → 🖐️ 手动选择 → ⚡ 全局自动选择 → 🏠 直连。</div></div>
+        <div class="dsc">按节点名称识别地区，只为确实有节点的地区生成「🇯🇵 日本自动优选」（自动测速）分组，节点 ≥2 个的地区再生成「⚖️ 日本轮询 / 哈希 / 粘性」三个负载均衡组。「🚀 节点选择」只包含：各地区自动优选 → 各地区负载均衡 → 🖐️ 手动选择 → ⚡ 全局自动选择 → 🏠 直连。</div></div>
         <label class="sw"><input type="checkbox" id="gc-on"><span></span></label></div>
       <div id="gc-box">
-      <div class="opt"><div class="sp"><div class="t">「负载均衡」组</div><div class="dsc">每个有节点的地区都生成，如 <code>⚖️ 香港负载均衡</code>、<code>⚖️ 日本负载均衡</code>；「自动优选」组始终生成（url-test）<div class="warn hide" id="gc-lb-sb">当前内核是 sing-box：没有负载均衡组，地区负载均衡已并入同地区「自动优选」</div></div></div><label class="sw sm"><input type="checkbox" id="gc-lb"><span></span></label></div>
-      <div class="opt"><div class="sp"><div class="t">负载均衡策略</div><div class="dsc" id="gc-st-d"></div></div>
-        <div class="seg" id="gc-st"><button data-v="consistent-hashing">一致性哈希</button><button data-v="round-robin">轮询</button><button data-v="sticky-sessions">粘性会话</button></div></div>
+      <div class="opt"><div class="sp"><div class="t">「负载均衡」组</div><div class="dsc">节点 ≥2 个的地区各生成三个，在「🚀 节点选择」里随时切换：<br><code>⚖️ 日本轮询</code> 每个新连接依次换节点，同一网站的连接分散到不同节点，带宽叠加效果最好（推荐）；部分网站可能因 IP 变化要求重新登录<br><code>⚖️ 日本哈希</code> 一致性哈希，同一目标域名固定走同一节点，会话稳定<br><code>⚖️ 日本粘性</code> 粘性会话，同一设备访问同一网站 10 分钟内固定节点<br>「自动优选」组始终生成（url-test）<div class="warn hide" id="gc-lb-sb">当前内核是 sing-box：没有负载均衡组，地区的轮询 / 哈希 / 粘性组都并入同地区「自动优选」</div></div></div><label class="sw sm"><input type="checkbox" id="gc-lb"><span></span></label></div>
       <div class="opt"><div class="sp"><div class="t">识别扩展地区</div><div class="dsc">韩国、英国、德国、法国、荷兰、加拿大、澳大利亚、俄罗斯、印度、土耳其、东南亚、南美等</div></div><label class="sw sm"><input type="checkbox" id="gc-extra"><span></span></label></div>
       <div class="opt"><div class="sp"><div class="t">「🌐 其他」分组</div><div class="dsc">收纳未识别出地区的节点（<code>🌐 其他自动优选</code>）</div></div><label class="sw sm"><input type="checkbox" id="gc-other"><span></span></label></div>
       <div class="opt"><div class="sp"><div class="t">懒惰测速（lazy）</div><div class="dsc">分组没有被使用时不做健康检查，节省流量</div></div><label class="sw sm"><input type="checkbox" id="gc-lazy"><span></span></label></div>
@@ -949,21 +947,17 @@ async function testAll(btn){btn.disabled=true;btn.textContent='测速中…';
 
 // 策略组管理
 let GI=null,CGF=null,GCF={},_pv=0;
-const LBD={'consistent-hashing':'一致性哈希：同一目标域名固定走同一节点，兼顾分流与会话稳定',
-  'round-robin':'轮询：每个新连接依次换节点，同一网站的不同连接分散到不同节点，带宽叠加效果最好（推荐）；部分网站可能因 IP 变化要求重新登录',
-  'sticky-sessions':'粘性会话：同一设备访问同一网站在 10 分钟内固定节点'};
 const TYN={'select':'手动选择','url-test':'自动测速','fallback':'故障转移','load-balance':'负载均衡'};
 const TYC={'select':'k-sel','url-test':'k-auto','fallback':'k-fb','load-balance':'k-lb'};
 async function loadGroupsPage(){try{[GI]=await Promise.all([api('/api/groups'),loadState().catch(()=>{})])}catch(e){return toast(e.message)}
   GCF=Object.assign({},GI.cfg,{on:GI.region_groups});renderGC();renderRegions();renderCGList();$('#gc-lb-sb').classList.toggle('hide',GI.core!=='singbox')}
 function renderGC(){const c=GCF;$('#gc-on').checked=c.on;$('#gc-on').onchange=e=>{GCF.on=e.target.checked;renderGC()};
   $('#gc-box').classList.toggle('dim',!c.on);$('#gc-box').style.opacity=c.on?'':'.5';
-  segv('#gc-st',c.strategy,v=>{GCF.strategy=v;renderGC()});$('#gc-st-d').textContent=LBD[c.strategy]||'';
   [['#gc-lb','lb'],['#gc-extra','extra'],['#gc-other','other'],['#gc-lazy','lazy']].forEach(([k,f])=>{$(k).checked=!!c[f];$(k).onchange=e=>{GCF[f]=e.target.checked}});
   const iv=$('#gc-int');if(![...iv.options].some(o=>o.value===String(c.interval)))iv.insertAdjacentHTML('beforeend',`<option value="${c.interval}">${c.interval} 秒</option>`);
   iv.value=String(c.interval);iv.onchange=e=>GCF.interval=+e.target.value;$('#gc-tol').value=c.tolerance;$('#gc-tol').onchange=e=>GCF.tolerance=+e.target.value;
   $('#gc-url').value=c.url;$('#gc-url').onchange=e=>GCF.url=e.target.value.trim()}
-async function saveGC(){const c=GCF;const body={region_groups:c.on,strategy:c.strategy,lb:c.lb,extra:c.extra,other:c.other,lazy:c.lazy,
+async function saveGC(){const c=GCF;const body={region_groups:c.on,lb:c.lb,extra:c.extra,other:c.other,lazy:c.lazy,
     interval:+$('#gc-int').value,tolerance:+$('#gc-tol').value,url:$('#gc-url').value.trim()};
   try{toast('正在校验并应用…');const j=await api('/api/groups/cfg','PUT',body);toast(j.message);loadGroupsPage()}catch(e){toast(e.message)}}
 function renderRegions(){$('#gc-regions').innerHTML=GI.regions.map(r=>`<tr><td><b style="font-weight:600">${esc(r.name)}</b></td>
@@ -1367,7 +1361,7 @@ async function loadCoreSw(){try{const j=await api('/api/coreswitch');SW_SEL=j.co
     const pick=x=>{SW_SEL=x;segv('#sw-seg',x,pick);swRender(j)};pick(j.core);if(j.busy&&!SW_POLL)swPoll()}catch(e){$('#sw-ver').textContent=e.message}}
 function swRender(j){const to=SW_SEL,diff=to!==j.core;$('#sw-btn').disabled=!diff;$('#sw-btn').textContent=diff?'切换到 '+CORE_LABEL[to]:'切换内核';
   const sbNote='<div class="warn">sing-box 与 mihomo 的差异：</div><ul style="margin:4px 0 0 18px;padding:0">'+
-    '<li>没有负载均衡 / 故障转移组：地区「⚖️ 负载均衡」并入同地区「自动优选」，自定义的这两类组按自动测速运行</li>'+
+    '<li>没有负载均衡 / 故障转移组：地区「⚖️ 轮询 / 哈希 / 粘性」组并入同地区「自动优选」，自定义的这两类组按自动测速运行</li>'+
     '<li>订阅由面板下载并解析（Clash YAML / Base64 / 分享链接），按「订阅自动更新间隔」刷新；ssr、snell、wireguard 节点会被跳过</li>'+
     '<li>GEO 与规则集改用 .srs 格式，由面板下载；mihomo 专用的 .mrs 规则集（MetaCubeX 的除外）无法使用</li>'+
     '<li>每组 DNS 只用列表里的第一个服务器；hosts 只支持精确域名 → IP</li>'+
