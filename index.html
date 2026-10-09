@@ -51,6 +51,8 @@ header{position:sticky;top:0;z-index:20;border-radius:0 0 22px 22px;border-top:0
 .ib{display:inline-flex;align-items:center;gap:4px;border:0;background:var(--b2);color:var(--txt);height:28px;padding:0 10px;border-radius:999px;cursor:pointer;font-size:12px;font-weight:600;transition:background .2s,transform .1s;white-space:nowrap}
 .ib:hover{background:var(--b2h)}.ib:active{transform:scale(.96)}.ib svg{width:14px;height:14px;flex:none}
 .ib.stop{color:var(--bad)}.ib.go{color:var(--ok)}.ib.round{width:34px;height:34px;padding:0;justify-content:center}
+a.ib{text-decoration:none}
+.ib.gh{margin-left:6px}
 .hstats{display:flex;gap:6px;margin-left:auto;align-items:stretch}
 .chip{display:flex;flex-direction:column;justify-content:center;min-width:92px;padding:3px 11px;border-radius:12px;background:var(--b2);line-height:1.25}
 .chip .k{font-size:10.5px;color:var(--sub);white-space:nowrap}.chip b{font-size:13px;font-weight:650;font-variant-numeric:tabular-nums;white-space:nowrap}
@@ -326,7 +328,7 @@ nav .ico{display:none}nav .more{display:none}
       <div class="chip down" title="核心启动以来累计下载"><span class="k">累计下载</span><b id="h-dt">-</b></div>
       <div class="chip" title="mihomo 内存占用"><span class="k">内存</span><b id="h-mem">-</b></div>
     </div>
-    <button class="ib round theme" onclick="toggleTheme()" title="切换深色 / 浅色"><svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" viewBox="0 0 24 24" fill="currentColor"><path d="M20.5 14.6A8.5 8.5 0 0 1 9.4 3.5a8.5 8.5 0 1 0 11.1 11.1z"/></svg></button>
+    <button class="ib round theme" onclick="toggleTheme()" title="切换深色 / 浅色"><svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" viewBox="0 0 24 24" fill="currentColor"><path d="M20.5 14.6A8.5 8.5 0 0 1 9.4 3.5a8.5 8.5 0 1 0 11.1 11.1z"/></svg></button><a class="ib round gh" href="https://github.com/Skycnhe/Shunt" target="_blank" rel="noopener" title="GitHub：Skycnhe/Shunt"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.04-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5z"/></svg></a>
   </div>
   <nav id="nav"></nav>
 </header>
@@ -678,7 +680,7 @@ nav .ico{display:none}nav .more{display:none}
           <div class="opt"><div class="sp"><div class="t" title="越高文字越清楚">遮罩</div></div><div class="rng" style="width:min(220px,60vw)"><input type="range" min="0" max="90" id="bg-dim" oninput="bgSet()"><span id="bg-dim-v"></span></div></div>
         </div></div></div>
     <div data-sg="bak" class="card"><div class="row"><h3 class="sp" style="margin:0">面板更新</h3><span class="tag" id="pv"></span></div>
-      <div class="mut small" style="margin:4px 0 8px">从 GitHub 仓库 <code>Skycnhe/Shunt</code>（分支 Hk001）获取最新面板文件：先经 mihomo 代理下载，失败再直连；国内可填加速地址。更新前自动校验并备份，可一键回滚。</div>
+      <div class="mut small" style="margin:4px 0 8px">从 GitHub 仓库 <a href="https://github.com/Skycnhe/Shunt" target="_blank" rel="noopener" style="word-break:break-all">https://github.com/Skycnhe/Shunt</a>（分支 Hk001）获取最新面板文件：先经 mihomo 代理下载，失败再直连；国内可填加速地址。更新前自动校验并备份，可一键回滚。</div>
       <div class="row"><input id="gh-proxy" placeholder="GitHub 加速（可空），如 https://ghfast.top/" class="sp"><button class="btn g" onclick="checkUpdate()" id="upd-chk">检查更新</button></div>
       <div id="upd-r" class="small mt"></div>
       <div class="row mt"><span class="sp"></span><button class="btn g" onclick="rollbackPanel()">回滚上一版本</button><button class="btn" id="upd-btn" onclick="doUpdate()">立即更新</button></div></div>
@@ -947,8 +949,8 @@ async function testAll(btn){btn.disabled=true;btn.textContent='测速中…';
 
 // 策略组管理
 let GI=null,CGF=null,GCF={},_pv=0;
-const LBD={'consistent-hashing':'一致性哈希：同一目标域名固定走同一节点，兼顾分流与会话稳定（推荐）',
-  'round-robin':'轮询：每个新连接依次换节点，带宽叠加效果最好，但部分网站可能因 IP 变化要求重新登录',
+const LBD={'consistent-hashing':'一致性哈希：同一目标域名固定走同一节点，兼顾分流与会话稳定',
+  'round-robin':'轮询：每个新连接依次换节点，同一网站的不同连接分散到不同节点，带宽叠加效果最好（推荐）；部分网站可能因 IP 变化要求重新登录',
   'sticky-sessions':'粘性会话：同一设备访问同一网站在 10 分钟内固定节点'};
 const TYN={'select':'手动选择','url-test':'自动测速','fallback':'故障转移','load-balance':'负载均衡'};
 const TYC={'select':'k-sel','url-test':'k-auto','fallback':'k-fb','load-balance':'k-lb'};
@@ -980,12 +982,12 @@ function renderCGList(){$('#cg-list').innerHTML=(GI.custom||[]).map((g,i)=>{cons
     <td class="w small" style="max-width:260px">${mem||''}${g.filter?`${mem?'<br>':''}<span class="mut">正则：</span><code>${esc(g.filter)}</code>${g.subs?'':' <span class="mut">（仅手动节点）</span>'}`:''}${ex?'':'<div class="warn small">未生效</div>'}</td>
     <td>${cgRefs(g.name)}</td><td style="text-align:right;white-space:nowrap"><button class="btn g sm" onclick="editCG(${i})">编辑</button> <button class="btn r sm" onclick="delCG(${i})">删除</button></td></tr>`}).join('')
     ||'<tr><td colspan="5" class="mut">还没有自定义策略组。例如：把美国和日本节点合成一个「🎯 美日均衡」负载均衡组，或建一个「🎮 游戏」组给规则引用</td></tr>'}
-function newCG(){CGF={orig:'',name:'',icon:'',type:'select',proxies:[],filter:'',subs:true,expose:true,strategy:'consistent-hashing',interval:'',tolerance:''};openCG('新建策略组')}
-function editCG(i){const g=GI.custom[i];CGF=JSON.parse(JSON.stringify(Object.assign({strategy:'consistent-hashing',interval:'',tolerance:''},g,{orig:g.name})));
+function newCG(){CGF={orig:'',name:'',icon:'',type:'select',proxies:[],filter:'',subs:true,expose:true,strategy:'round-robin',interval:'',tolerance:''};openCG('新建策略组')}
+function editCG(i){const g=GI.custom[i];CGF=JSON.parse(JSON.stringify(Object.assign({strategy:'round-robin',interval:'',tolerance:''},g,{orig:g.name})));
   if(!CGF.interval)CGF.interval='';if(!CGF.tolerance)CGF.tolerance='';openCG('编辑策略组：'+g.name)}
 function openCG(t){$('#cg-title').textContent=t;$('#cg-form').classList.remove('hide');$('#cg-name').value=CGF.name;$('#cg-icon').value=CGF.icon||'';
   $('#cg-filter').value=CGF.filter||'';$('#cg-subs').checked=CGF.subs!==false;$('#cg-expose').checked=CGF.expose!==false;$('#cg-search').value='';
-  $('#cg-st').value=CGF.strategy||'consistent-hashing';$('#cg-int').value=CGF.interval||'';$('#cg-tol').value=CGF.tolerance||'';
+  $('#cg-st').value=CGF.strategy||'round-robin';$('#cg-int').value=CGF.interval||'';$('#cg-tol').value=CGF.tolerance||'';
   cgType();renderCGChosen();previewCG();$('#cg-form').scrollIntoView({behavior:'smooth',block:'start'})}
 function cgType(){segv('#cg-type',CGF.type,v=>{CGF.type=v;cgType()});const t=CGF.type;$('#cg-adv').classList.toggle('hide',t==='select');
   $('#cg-st').classList.toggle('hide',t!=='load-balance');$('#cg-tol').classList.toggle('hide',t!=='url-test')}
