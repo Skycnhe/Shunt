@@ -76,8 +76,8 @@ AB_PRESETS = [
     {"cat": "国外 · 隐私", "name": "Frogeye 一方追踪", "url": "https://hostfiles.frogeye.fr/firstparty-trackers.txt",
      "dsc": "伪装成网站子域名的追踪器"}]
 TUN_DEFAULT = {"stack": "mixed", "device": "Meta", "auto_redirect": True, "strict_route": False}
-GROUPS_DEFAULT = {"type": "url-test", "lb": True, "auto": True, "strategy": "consistent-hashing", "interval": 300,
-                  "tolerance": 50, "url": "https://www.gstatic.com/generate_204", "extra": True, "other": True, "lazy": True}
+GROUPS_DEFAULT = {"type": "url-test", "lb": True, "auto": True, "strategy": "consistent-hashing", "interval": 60,
+                  "tolerance": 0, "url": "https://www.gstatic.com/generate_204", "extra": True, "other": True, "lazy": True}
 SCHED_DEFAULT = {"sub_update": "", "core_restart": "", "geo_update": "", "latency": 0}
 DEFAULT = {"password": "admin", "pw_hash": "", "pw_default": False, "secret": "", "mode": "rule", "tproxy": True, "subs": [], "rules": [],
            "rulesets": [], "bypass": [], "tests": None, "sub_interval": 86400, "region_groups": True,
@@ -95,12 +95,13 @@ TESTS = [
 G_SEL, G_YT, G_GG, G_TG, G_FINAL = "🚀 节点选择", "📹 YouTube", "🔍 Google", "📲 Telegram", "🐟 漏网之鱼"
 G_AI, G_NF = "🤖 AI 服务", "🎬 Netflix"
 G_MANUAL, G_AUTO, G_DIRECT = "\U0001F590\uFE0F 手动选择", "⚡ 全局自动选择", "🏠 直连"
-LB_PREFIX, AUTO_TAIL, LB_TAIL = "\u2696\uFE0F ", "自动优选", "负载均衡"
+LB_PREFIX, AUTO_TAIL, LB_TAIL = "\u2696\uFE0F ", "竞技", "负载均衡"
+AUTO_TAIL_OLD = "自动优选"  # v6–v6.7.2 的地区组后缀，v6.7.3 改为「竞技」，仅用于迁移
 LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据时自动迁移
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
-SCHEMA = 8
-PANEL_VERSION = "6.7.2"
+SCHEMA = 9
+PANEL_VERSION = "6.7.3"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -166,6 +167,12 @@ def load():
     if int(d.get("schema") or 0) < SCHEMA:  # v5 → v6：地区组改名（如 🇺🇸 美国 → 🇺🇸 美国自动优选），同步所有引用
         # 旧版地区负载均衡与未写策略的自定义负载均衡组用的是 groups_cfg.strategy（没保存过 = 当时默认的一致性哈希），保留下来，行为不变
         d["groups_cfg"]["strategy"] = "consistent-hashing"
+        gc0 = d["groups_cfg"]  # v6.7.3 竞技：仍是旧默认值（300 秒 / 50 ms）的改为 60 秒 / 0 ms，自己改过的保留
+        if int(d.get("schema") or 0) < 9:
+            if gc0.get("interval") in (None, 300):
+                gc0["interval"] = 60
+            if gc0.get("tolerance") in (None, 50):
+                gc0["tolerance"] = 0
         migrate_names(d)  # 旧「⚖️ X负载均衡」与 v6.6.9 的「⚖️ X轮询 / 粘性」都改指「⚖️ X哈希」
         for g in d.get("custom_groups") or []:  # 自定义负载均衡组的轮询 / 粘性会话也改为一致性哈希
             if isinstance(g, dict) and g.get("type") == "load-balance":
@@ -184,9 +191,10 @@ def region_label(rname):
     return flag, label
 
 
-def auto_name(rname):
+def auto_name(rname, tail=AUTO_TAIL):
+    """「🇯🇵 日本竞技」：url-test，始终选延迟最低的节点"""
     flag, label = region_label(rname)
-    return f"{flag} {label}{AUTO_TAIL}"
+    return f"{flag} {label}{tail}"
 
 
 LB_KINDS = (("consistent-hashing", "哈希"),)  # 每个地区一个负载均衡组「⚖️ 日本哈希」
@@ -221,7 +229,7 @@ def legacy_map(st=None):
     迁移到同策略的组，行为与升级前一致"""
     m = {LEGACY_AUTO: G_AUTO}
     for rname in [r[0] for r in REGIONS] + [G_OTHER]:
-        m[rname] = m[rname + AUTO_SUFFIX] = auto_name(rname)
+        m[rname] = m[rname + AUTO_SUFFIX] = m[auto_name(rname, AUTO_TAIL_OLD)] = auto_name(rname)
         m[rname + LB_SUFFIX] = m[lb_old_name(rname)] = lb_name(rname)  # 只剩一致性哈希
         for n in lb_dropped_names(rname):
             m[n] = lb_name(rname)
@@ -558,7 +566,7 @@ def reserved_names(d=None):
     regs = [r[0] for r in REGIONS] + [G_OTHER]
     out = {G_SEL, G_AUTO, G_MANUAL, G_DIRECT, LEGACY_AUTO, "GLOBAL"} | set(SIDE_GROUPS) | BUILTIN_POLICIES
     for r in regs:
-        out |= {r, r + LB_SUFFIX, r + AUTO_SUFFIX, auto_name(r), lb_old_name(r), *lb_names(r), *lb_dropped_names(r)}
+        out |= {r, r + LB_SUFFIX, r + AUTO_SUFFIX, auto_name(r), auto_name(r, AUTO_TAIL_OLD), lb_old_name(r), *lb_names(r), *lb_dropped_names(r)}
     if d:
         out |= {g["name"] for g in d.get("custom_groups") or []}
     return out
@@ -788,7 +796,7 @@ def build_config(d, strict=False):
             g["proxies"] = ["COMPATIBLE"]
         return g
 
-    # 地区分组：「<旗> <地区>自动优选」(url-test) + 「⚖️ <地区>哈希」(load-balance，一致性哈希)
+    # 地区分组：「<旗> <地区>竞技」(url-test，选延迟最低) + 「⚖️ <地区>哈希」(load-balance，一致性哈希)
     autos, lbs = [], []
     for rname, flt, exc, matched, total, unknown in region_plan(d, names, use):
         label = region_label(rname)[1]
@@ -833,7 +841,7 @@ def build_config(d, strict=False):
         if cg["expose"]:
             exposed.append(cg["name"])
 
-    # 🚀 节点选择 只包含：各地区自动优选 → 各地区负载均衡 → 🖐️ 手动选择 → ⚡ 全局自动选择 → 🏠 直连
+    # 🚀 节点选择 只包含：各地区竞技 → 各地区负载均衡 → 🖐️ 手动选择 → ⚡ 全局自动选择 → 🏠 直连
     have = bool(use or names)
     direct_g = {"name": G_DIRECT, "type": "select", "proxies": ["DIRECT"]}
     if have:

@@ -387,14 +387,14 @@ nav .ico{display:none}nav .more{display:none}
    <div class="cols">
     <div>
     <div class="card"><div class="opt" style="padding-top:0"><div class="sp"><div class="t" style="font-size:16px">地区分组</div>
-        <div class="dsc">按节点名称识别地区，只为确实有节点的地区生成「🇯🇵 日本自动优选」（自动测速）分组，节点 ≥2 个的地区再生成「⚖️ 日本哈希」负载均衡组（一致性哈希）。「🚀 节点选择」只包含：各地区自动优选 → 各地区负载均衡 → 🖐️ 手动选择 → ⚡ 全局自动选择 → 🏠 直连。</div></div>
+        <div class="dsc">按节点名称识别地区，只为确实有节点的地区生成「🇯🇵 日本竞技」分组（每分钟测速，始终用延迟最低的节点），节点 ≥2 个的地区再生成「⚖️ 日本哈希」负载均衡组（一致性哈希）。「🚀 节点选择」只包含：各地区竞技 → 各地区负载均衡 → 🖐️ 手动选择 → ⚡ 全局自动选择 → 🏠 直连。</div></div>
         <label class="sw"><input type="checkbox" id="gc-on"><span></span></label></div>
       <div id="gc-box">
-      <div class="opt"><div class="sp"><div class="t">「负载均衡」组</div><div class="dsc">节点 ≥2 个的地区各生成一个 <code>⚖️ 日本哈希</code>：一致性哈希，同一目标域名固定走同一节点，会话稳定，不会因 IP 变化被要求重新登录<br>「自动优选」组始终生成（url-test）<div class="warn hide" id="gc-lb-sb">当前内核是 sing-box：没有负载均衡组，地区的哈希组并入同地区「自动优选」</div></div></div><label class="sw sm"><input type="checkbox" id="gc-lb"><span></span></label></div>
+      <div class="opt"><div class="sp"><div class="t">「负载均衡」组</div><div class="dsc">节点 ≥2 个的地区各生成一个 <code>⚖️ 日本哈希</code>：一致性哈希，同一目标域名固定走同一节点，会话稳定，不会因 IP 变化被要求重新登录<br>「竞技」组始终生成（url-test）<div class="warn hide" id="gc-lb-sb">当前内核是 sing-box：没有负载均衡组，地区的哈希组并入同地区「竞技」</div></div></div><label class="sw sm"><input type="checkbox" id="gc-lb"><span></span></label></div>
       <div class="opt"><div class="sp"><div class="t">识别扩展地区</div><div class="dsc">韩国、英国、德国、法国、荷兰、加拿大、澳大利亚、俄罗斯、印度、土耳其、东南亚、南美等</div></div><label class="sw sm"><input type="checkbox" id="gc-extra"><span></span></label></div>
-      <div class="opt"><div class="sp"><div class="t">「🌐 其他」分组</div><div class="dsc">收纳未识别出地区的节点（<code>🌐 其他自动优选</code>）</div></div><label class="sw sm"><input type="checkbox" id="gc-other"><span></span></label></div>
+      <div class="opt"><div class="sp"><div class="t">「🌐 其他」分组</div><div class="dsc">收纳未识别出地区的节点（<code>🌐 其他竞技</code>）</div></div><label class="sw sm"><input type="checkbox" id="gc-other"><span></span></label></div>
       <div class="opt"><div class="sp"><div class="t">懒惰测速（lazy）</div><div class="dsc">分组没有被使用时不做健康检查，节省流量</div></div><label class="sw sm"><input type="checkbox" id="gc-lazy"><span></span></label></div>
-      <div class="opt"><div class="sp"><div class="t">测速间隔 / 容差</div><div class="dsc">容差：新节点比当前节点快超过该值才切换（自动优选 / 全局自动选择）</div></div>
+      <div class="opt"><div class="sp"><div class="t">测速间隔 / 容差</div><div class="dsc">容差：新节点比当前节点快超过该值才切换（竞技 / 全局自动选择）；0 = 谁最快就用谁</div></div>
         <select id="gc-int"><option value="60">1 分钟</option><option value="180">3 分钟</option><option value="300">5 分钟</option><option value="600">10 分钟</option><option value="1800">30 分钟</option><option value="3600">1 小时</option></select>
         <input id="gc-tol" type="number" min="0" max="1000" style="width:86px" title="容差 ms"><span class="mut small">ms</span></div>
       <div class="opt"><div class="sp"><div class="t">测速地址</div></div><input id="gc-url" style="width:min(100%,300px)"></div>
@@ -437,7 +437,7 @@ nav .ico{display:none}nav .more{display:none}
         <button class="btn g hide" id="sub-cancel" onclick="resetSubForm()">取消</button><button class="btn" id="sub-btn" onclick="addSub()">添加并应用</button></div></div>
     <div class="card"><h3>订阅列表</h3><div class="tw"><table><thead><tr><th>名称</th><th>节点数</th><th>过滤</th><th>流量</th><th>到期</th><th>更新时间</th><th></th></tr></thead><tbody id="subs"></tbody></table></div></div>
     <div class="card"><h3>手动导入单个节点</h3>
-      <div class="mut small" style="margin-bottom:6px">每行一个链接，支持 vless:// vmess:// ss:// trojan:// hysteria2:// (hy2://) tuic://；导入的节点会加入「🖐️ 手动选择」「⚡ 全局自动选择」与对应地区的自动优选 / 负载均衡组</div>
+      <div class="mut small" style="margin-bottom:6px">每行一个链接，支持 vless:// vmess:// ss:// trojan:// hysteria2:// (hy2://) tuic://；导入的节点会加入「🖐️ 手动选择」「⚡ 全局自动选择」与对应地区的竞技 / 负载均衡组</div>
       <textarea id="node-links" rows="4" placeholder="vless://uuid@host:443?security=reality&...#香港 01"></textarea>
       <div class="row" style="margin-top:8px"><span class="sp"></span><button class="btn" onclick="importNodes()">导入并应用</button></div>
       <div class="tw" style="margin-top:10px"><table><thead><tr><th>名称</th><th>类型</th><th>服务器</th><th>延迟</th><th></th></tr></thead><tbody id="mynodes"></tbody></table></div></div>
@@ -883,9 +883,9 @@ function groupOrder(){const order=(PROXIES.GLOBAL&&PROXIES.GLOBAL.all)||Object.k
 function nowChain(g){const out=[];let n=PROXIES[g]?.now,k=0;while(n&&k++<5){out.push(n);n=isGroup(n)?PROXIES[n].now:''}return out}
 // 默认只展开「🚀 节点选择」和「🖐️ 手动选择」，其他组收成一行；展开 / 收起会被记住
 function gOpen(g){if(NF.q||NF.r)return true;return g in GOPEN?GOPEN[g]:(g===SEL||g===G_MANUAL)}
-// 筛选：关键词 + 地区（地区 = 「xx自动优选」组的成员）
+// 筛选：关键词 + 地区（地区 = 「xx竞技」组的成员）
 let NF={q:'',r:''};
-const AUTO_TAIL='自动优选';
+const AUTO_TAIL='竞技';
 function regionGroups(){return Object.keys(PROXIES).filter(n=>isGroup(n)&&n.endsWith(AUTO_TAIL)&&PROXIES[n].type==='URLTest')}
 function nfVisible(n){const q=NF.q,r=NF.r;
   if(q&&!n.toLowerCase().includes(q))return false;
@@ -1364,7 +1364,7 @@ async function loadCoreSw(){try{const j=await api('/api/coreswitch');SW_SEL=j.co
     const pick=x=>{SW_SEL=x;segv('#sw-seg',x,pick);swRender(j)};pick(j.core);if(j.busy&&!SW_POLL)swPoll()}catch(e){$('#sw-ver').textContent=e.message}}
 function swRender(j){const to=SW_SEL,diff=to!==j.core;$('#sw-btn').disabled=!diff;$('#sw-btn').textContent=diff?'切换到 '+CORE_LABEL[to]:'切换内核';
   const sbNote='<div class="warn">sing-box 与 mihomo 的差异：</div><ul style="margin:4px 0 0 18px;padding:0">'+
-    '<li>没有负载均衡 / 故障转移组：地区「⚖️ 哈希」组并入同地区「自动优选」，自定义的这两类组按自动测速运行</li>'+
+    '<li>没有负载均衡 / 故障转移组：地区「⚖️ 哈希」组并入同地区「竞技」，自定义的这两类组按自动测速运行</li>'+
     '<li>订阅由面板下载并解析（Clash YAML / Base64 / 分享链接），按「订阅自动更新间隔」刷新；ssr、snell、wireguard 节点会被跳过</li>'+
     '<li>GEO 与规则集改用 .srs 格式，由面板下载；mihomo 专用的 .mrs 规则集（MetaCubeX 的除外）无法使用</li>'+
     '<li>每组 DNS 只用列表里的第一个服务器；hosts 只支持精确域名 → IP</li>'+
