@@ -84,7 +84,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 6
-PANEL_VERSION = "6.6.6"
+PANEL_VERSION = "6.6.7"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -1507,9 +1507,10 @@ def sb_fetch_sub(s, gh=""):
     last = ""
     for ua in SB_UA:
         try:
-            req = urllib.request.Request(s["url"], headers={"User-Agent": ua})
             data = None
             for use_proxy in ((True, False) if core_alive() else (False,)):
+                # 每次新建 Request：走代理失败后 urllib 已把代理地址写进 Request，复用会让「直连重试」仍然连到代理
+                req = urllib.request.Request(s["url"], headers={"User-Agent": ua})
                 try:
                     with proxy_opener(use_proxy).open(req, timeout=30) as r:
                         data = r.read(20 << 20)
@@ -3584,6 +3585,61 @@ def bg_save(data_url):
     return True, "背景图已保存"
 
 
+BG_META = BG_FILE + ".json"  # 链接背景图：{"url": 链接, "daily": 每天刷新, "t": 上次下载时间}
+
+
+def bg_meta():
+    try:
+        with open(BG_META) as f:
+            m = json.load(f)
+        return m if isinstance(m, dict) else {}
+    except Exception:
+        return {}
+
+
+def bg_meta_save(m):
+    try:
+        if m:
+            tmp = BG_META + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(m, f, ensure_ascii=False)
+            os.replace(tmp, BG_META)
+        elif os.path.exists(BG_META):
+            os.remove(BG_META)
+    except OSError as e:
+        print("bg meta save error", e, flush=True)
+
+
+def bg_fetch(url):
+    """由路由器下载图片链接保存为背景图（先走代理，失败再直连）。必应每日壁纸这类接口会 302 跳到真实图片，urllib 自动跟随"""
+    url = str(url or "").strip()
+    if not re.match(r"https?://\S+$", url):
+        return False, "请输入 http(s) 开头的图片链接"
+    raw, err = None, ""
+    for proxy in (True, False):
+        # 每次新建 Request：走代理时 urllib 会把代理地址写进 Request，复用会让直连也连到代理端口
+        req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "image/avif,image/webp,image/*,*/*;q=0.8"})
+        try:
+            with proxy_opener(proxy).open(req, timeout=20) as r:
+                raw = r.read(BG_MAX + 1)
+            break
+        except urllib.error.HTTPError as e:
+            err = f"HTTP {e.code}"
+        except Exception as e:
+            err = str(e)[:120]
+    if raw is None:
+        return False, "下载失败：" + (err or "无法连接")
+    if len(raw) > BG_MAX:
+        return False, "图片不能超过 8MB"
+    if bg_type(raw[:16]) is None:
+        return False, "链接返回的不是 JPG / PNG / WebP / GIF 图片"
+    tmp = BG_FILE + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(raw)
+    os.replace(tmp, BG_FILE)
+    return True, "背景图已下载到路由器"
+
+
 def bg_type(head):
     if head[:3] == b"\xff\xd8\xff":
         return "image/jpeg"
@@ -4655,6 +4711,12 @@ def sched_loop():
                     refresh_regions()
                     if bad_:
                         sched_event("订阅自动更新：✗ " + "；".join(bad_)[:200])
+            bm = bg_meta()
+            if bm.get("daily") and bm.get("url") and time.time() - max(int(bm.get("t") or 0), SCHED["done"].get("bg", 0)) >= 86400:
+                SCHED["done"]["bg"] = time.time()  # 失败也等一天，避免反复重试
+                if bg_fetch(bm["url"])[0]:
+                    bm["t"] = int(time.time())
+                    bg_meta_save(bm)
             ab = d["adblock"]
             if ab.get("enabled") and ab.get("lists") and int(ab.get("interval") or 0):
                 if time.time() - max(AB_STATE["last"], ab_last_update()) >= int(ab["interval"]):
@@ -5824,20 +5886,38 @@ class H(BaseHTTPRequestHandler):
             via = q1(parse_qs(q), "via", default="proxy")
             return self.send(200, speed_test(via == "proxy"))
         if p == "/api/bg" and m == "GET":
+            bm = bg_meta()
             try:
-                return self.send(200, {"exists": True, "v": int(os.path.getmtime(BG_FILE)), "size": os.path.getsize(BG_FILE)})
+                return self.send(200, {"exists": True, "v": int(os.path.getmtime(BG_FILE)), "size": os.path.getsize(BG_FILE),
+                                       "url": bm.get("url", ""), "daily": bool(bm.get("daily"))})
             except OSError:
                 return self.send(200, {"exists": False})
         if p == "/api/bg" and m == "POST":
             ok, msg = bg_save(b.get("data"))
             if not ok:
                 return self.send(400, {"message": msg})
+            bg_meta_save({})  # 改为上传的图片：不再按链接刷新
             return self.send(200, {"message": msg, "v": int(os.path.getmtime(BG_FILE))})
+        if p == "/api/bg/url" and m == "POST":
+            url = str(b.get("url") or "").strip() or bg_meta().get("url", "")
+            ok, msg = bg_fetch(url)
+            if not ok:
+                return self.send(400, {"message": msg})
+            bg_meta_save({"url": url, "daily": bool(b.get("daily")), "t": int(time.time())})
+            return self.send(200, {"message": msg, "v": int(os.path.getmtime(BG_FILE))})
+        if p == "/api/bg/daily" and m == "POST":
+            bm = bg_meta()
+            if not bm.get("url"):
+                return self.send(400, {"message": "当前背景图不是链接图片"})
+            bm["daily"] = bool(b.get("daily"))
+            bg_meta_save(bm)
+            return self.send(200, {"message": "已开启每天自动更新" if bm["daily"] else "已关闭每天自动更新"})
         if p == "/api/bg" and m == "DELETE":
             try:
                 os.remove(BG_FILE)
             except OSError:
                 pass
+            bg_meta_save({})
             return self.send(200, {"message": "已移除背景图"})
         if p == "/api/px" and m == "GET":
             px = proxies_merged()
