@@ -1,12 +1,16 @@
 #!/sbin/openrc-run
 # SPDX-License-Identifier: GPL-3.0-or-later
-# 代理核心：按 /etc/mihomo-panel/core 选择 mihomo 或 sing-box（面板「设置 → 核心 → 内核」切换）
+# 代理核心：按 /etc/mihomo-panel/core 选择 mihomo、mihomo Smart 或 sing-box（面板「设置 → 核心 → 内核」切换）
 CORE=$(cat /etc/mihomo-panel/core 2>/dev/null)
 name="mihomo"
 if [ "$CORE" = "singbox" ] && [ -x /usr/local/bin/sing-box ]; then
   description="sing-box proxy core"
   command="/usr/local/bin/sing-box"
   command_args="run --disable-color -c /etc/sing-box/config.json -D /etc/sing-box"
+elif [ "$CORE" = "smart" ] && [ -x /usr/local/bin/mihomo-smart ]; then
+  description="mihomo Smart proxy core"
+  command="/usr/local/bin/mihomo-smart"
+  command_args="-d /etc/mihomo"
 else
   description="mihomo proxy core"
   command="/usr/local/bin/mihomo"
