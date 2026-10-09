@@ -283,6 +283,16 @@ nav .ico{display:none}nav .more{display:none}
   .tag{font-size:12px;padding:2px 8px}
   .opt .t{font-size:14.5px}.opt .dsc{font-size:12.5px}
 }
+@media (max-width:720px){.abhd{display:none}}
+/* 桌面布局：列表编辑器双列、设置分栏、节点工具栏 */
+@media (min-width:721px){
+  .dnsmain #dns-lists{columns:2;column-gap:28px}
+  .dnsmain #dns-lists>.lbox{break-inside:avoid;border-bottom:0}
+  .abft{display:none}
+  .sgrid>.card{display:block}.sgrid>.colbrk{break-before:column}
+  .ntool .nsearch{flex:1 1 220px;max-width:360px;margin-right:auto}
+  .nfilter:has(#nf-r:empty){margin-bottom:12px}
+}
 </style>
 </head>
 <body><div id="bgimg"></div><div id="bgdim"></div>
@@ -336,9 +346,6 @@ nav .ico{display:none}nav .more{display:none}
         <div class="o4 card"><h3>设备排行（按当前连接）</h3><div class="tw" id="dev-tw"><table><thead><tr><th>设备</th><th>连接</th><th>下载</th><th>上传</th><th>最常访问</th></tr></thead><tbody id="devices"></tbody></table></div><div id="dev-empty" class="empty hide">暂无设备连接。客户端把网关指向本机后，这里会按流量列出设备</div></div>
         <div class="o5 card"><div class="row"><h3 class="sp" style="margin:0">站点延迟（每 60 秒）</h3><button class="btn g sm" onclick="testSites()">立即检测</button></div>
           <div class="grid" id="sites" style="margin-top:12px;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px"></div></div>
-        <div class="o7 card"><div class="row"><h3 class="sp" style="margin:0">网络诊断</h3><button class="btn g" id="diag-btn" onclick="runDiag()">一键诊断</button></div>
-          <div class="mut small" style="margin-top:4px">检查核心、透明代理 / TUN、IP 转发、DNS 解析与出站连通性，并给出修复建议</div>
-          <div id="diag" style="margin-top:8px"></div></div>
       </div>
       <div>
         <div class="o2 card" id="qs-card"><div class="row"><h3 class="sp" style="margin:0">🚀 节点选择</h3><button class="btn g sm" id="qs-btn" onclick="qsTest(this)">测速</button></div>
@@ -350,18 +357,21 @@ nav .ico{display:none}nav .more{display:none}
         <div class="o8 card"><div class="row"><h3 class="sp" style="margin:0">故障自动直连（看门狗）</h3><span id="wd-status"></span></div>
           <div class="mut small" style="margin:4px 0 8px">每 30 秒检查核心；无响应时自动重启，连续 2 次失败则关闭透明代理让局域网直连，核心恢复后自动重新接管</div>
           <div id="wd-events"></div></div>
+        <div class="o7 card"><div class="row"><h3 class="sp" style="margin:0">网络诊断</h3><button class="btn g" id="diag-btn" onclick="runDiag()">一键诊断</button></div>
+          <div class="mut small" style="margin-top:4px">检查核心、透明代理 / TUN、IP 转发、DNS 解析与出站连通性，并给出修复建议</div>
+          <div id="diag" style="margin-top:8px"></div></div>
       </div>
     </div>
    </div>
   </section>
   <!-- 节点 -->
   <section data-tab="节点">
-    <div class="row ntool" style="margin-bottom:12px"><span class="sp mut small">点击组标题展开 / 收起，点击节点切换；自动测速 / 故障转移组点选节点可“固定”</span>
+    <div class="row ntool" style="margin-bottom:12px"><input class="sp nsearch" id="nf-q" placeholder="搜索节点 / 分组" oninput="NF.q=this.value.trim().toLowerCase();renderGroups()">
       <div class="seg" id="nsort"><button data-v="default">默认顺序</button><button data-v="delay">按延迟</button></div>
       <button class="btn g" id="hidedead" onclick="toggleDead()" title="隐藏测速超时的节点（未测速的节点和当前选中的节点照常显示）">隐藏超时</button>
       <button class="btn g" onclick="setAllOpen(true)">全部展开</button><button class="btn g" onclick="setAllOpen(false)">全部收起</button>
       <button class="btn g" id="test-all" onclick="testAll(this)">全部测速</button><button class="btn g" onclick="loadProxies()">刷新</button></div>
-    <div class="nfilter"><input id="nf-q" placeholder="搜索节点 / 分组" oninput="NF.q=this.value.trim().toLowerCase();renderGroups()"><span id="nf-r" class="row" style="gap:6px;flex-wrap:wrap"></span></div>
+    <div class="nfilter"><span id="nf-r" class="row" style="gap:6px;flex-wrap:wrap"></span><span class="sp"></span><span class="mut small">点击组标题展开 / 收起，点击节点切换；自动测速 / 故障转移组点选节点可“固定”</span></div>
     <div class="card" id="pol-card"><div class="row"><h3 class="sp" style="margin:0">策略选择</h3><span class="mut small pdesc">各分流组当前使用的节点 / 分组，直接下拉切换</span>
       <button class="btn g sm" onclick="go('策略组')">管理策略组</button></div>
       <div id="policies" class="pgrid"></div></div>
@@ -387,10 +397,6 @@ nav .ico{display:none}nav .more{display:none}
       <div class="opt"><div class="sp"><div class="t">测速地址</div></div><input id="gc-url" style="width:min(100%,300px)"></div>
       </div>
       <div class="row mt"><span class="sp mut small">保存前先校验配置，失败自动撤销</span><button class="btn" onclick="saveGC()">保存并应用</button></div></div>
-    <div class="card"><div class="row"><h3 class="sp" style="margin:0">已识别的地区</h3><button class="btn g sm" onclick="refreshRegions(this)">按订阅重新识别</button></div>
-      <div class="tw mt"><table><thead><tr><th>地区</th><th>节点</th><th>生成的分组</th></tr></thead><tbody id="gc-regions"></tbody></table></div>
-      <div class="lbl">🚀 节点选择 当前包含</div><div id="gc-sel" class="mchips"></div>
-      <div class="mut small mt">订阅更新后会自动重新识别（每 10 分钟检查一次）；订阅尚未下载时先生成 5 个常用地区</div></div>
     </div>
     <div>
     <div class="card"><div class="row"><h3 class="sp" style="margin:0">自定义策略组</h3><button class="btn sm" onclick="newCG()">＋ 新建策略组</button></div>
@@ -411,6 +417,10 @@ nav .ico{display:none}nav .more{display:none}
       <div id="cg-prev" class="mut small" style="margin-top:4px"></div>
       <div class="opt mt"><div class="sp"><div class="t">加入分流组候选</div><div class="dsc">出现在 YouTube / Google / Telegram / AI / Netflix / 漏网之鱼 的下拉里；开启时不能再引用这些分流组（会循环），但可以引用「🚀 节点选择」</div></div><label class="sw sm"><input type="checkbox" id="cg-expose"><span></span></label></div>
       <div class="row mt"><span class="sp"></span><button class="btn g" onclick="closeCG()">取消</button><button class="btn" id="cg-save" onclick="saveCG()">保存并应用</button></div></div>
+    <div class="card"><div class="row"><h3 class="sp" style="margin:0">已识别的地区</h3><button class="btn g sm" onclick="refreshRegions(this)">按订阅重新识别</button></div>
+      <div class="tw mt"><table><thead><tr><th>地区</th><th>节点</th><th>生成的分组</th></tr></thead><tbody id="gc-regions"></tbody></table></div>
+      <div class="lbl">🚀 节点选择 当前包含</div><div id="gc-sel" class="mchips"></div>
+      <div class="mut small mt">订阅更新后会自动重新识别（每 10 分钟检查一次）；订阅尚未下载时先生成 5 个常用地区</div></div>
     </div>
    </div>
   </section>
@@ -461,6 +471,7 @@ nav .ico{display:none}nav .more{display:none}
   <section data-tab="广告拦截">
     <div class="card"><div class="opt" style="padding-top:0"><div class="sp"><div class="t" style="font-size:16px">广告拦截</div>
         <div class="dsc">订阅 AdGuard / ABP / hosts / 域名列表，转换为 mihomo 域名规则集，排在所有规则之前拒绝连接；白名单与列表中的 @@ 例外优先放行，被放行的域名照常分流。</div></div>
+        <button class="btn g abhd" onclick="abUpdate()">立即更新全部</button>
         <label class="sw"><input type="checkbox" id="ab-on"><span></span></label></div>
       <div class="grid mt" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr))">
         <div class="stat" style="padding:4px 0"><div class="k">已加载规则</div><div class="v" id="ab-total">-</div></div>
@@ -468,7 +479,7 @@ nav .ico{display:none}nav .more{display:none}
         <div class="stat" style="padding:4px 0"><div class="k">订阅列表</div><div class="v" id="ab-nlist">-</div></div>
         <div class="stat" style="padding:4px 0"><div class="k">上次更新</div><div class="v" id="ab-last" style="font-size:16px;margin-top:6px">-</div></div>
       </div>
-      <div class="row mt"><span id="ab-msg" class="sp mut small"></span><button class="btn" id="ab-upd" onclick="abUpdate()">立即更新全部</button></div></div>
+      <div class="row mt"><span id="ab-msg" class="sp mut small"></span><button class="btn abft" id="ab-upd" onclick="abUpdate()">立即更新全部</button></div></div>
     <div class="cols">
       <div>
         <div class="card"><h3>过滤列表</h3>
@@ -480,12 +491,6 @@ nav .ico{display:none}nav .more{display:none}
             <select id="ab-int" onchange="abSave({interval:+this.value},'已保存')"><option value="0">不自动更新</option><option value="21600">每 6 小时</option><option value="43200">每 12 小时</option><option value="86400">每天</option><option value="259200">每 3 天</option><option value="604800">每周</option></select></div>
           <div class="opt"><div class="sp"><div class="t">DNS 层拦截</div><div class="dsc">命中列表的域名直接返回 NXDOMAIN（nameserver-policy + rcode）。客户端不再发起连接，因此不计入“今日拦截”统计</div></div>
             <label class="sw sm"><input type="checkbox" id="ab-dns"><span></span></label></div></div>
-        <div class="card"><h3>自定义规则</h3>
-          <div class="mut small">每行一个：<code>example.com</code>（含子域）、<code>||example.com^</code>、<code>0.0.0.0 example.com</code>；白名单也接受 <code>@@||example.com^</code></div>
-          <div class="cols" style="margin-top:8px;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">
-            <div><div class="lbl" style="margin-top:0">黑名单（总是拦截）</div><textarea id="ab-black" rows="7" placeholder="ads.example.com"></textarea></div>
-            <div><div class="lbl" style="margin-top:0">白名单（总是放行，优先）</div><textarea id="ab-white" rows="7" placeholder="safe.example.com"></textarea></div></div>
-          <div class="row mt"><span class="sp"></span><button class="btn" onclick="abSaveBW()">保存并应用</button></div></div>
       </div>
       <div>
         <div class="card"><h3>检测域名</h3>
@@ -494,14 +499,18 @@ nav .ico{display:none}nav .more{display:none}
         <div class="card"><div class="row"><h3 class="sp" style="margin:0">今日拦截排行</h3><button class="btn g sm" onclick="loadAB()">刷新</button></div>
           <div class="tw mt"><table><thead><tr><th>域名</th><th style="width:40%"></th><th>次数</th></tr></thead><tbody id="ab-top"></tbody></table></div>
           <div class="mut small mt">从核心 info 日志统计被广告规则 REJECT 的连接；保留 14 天</div></div>
+        <div class="card"><h3>自定义规则</h3>
+          <div class="mut small">每行一个：<code>example.com</code>（含子域）、<code>||example.com^</code>、<code>0.0.0.0 example.com</code>；白名单也接受 <code>@@||example.com^</code></div>
+          <div class="cols" style="margin-top:8px;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">
+            <div><div class="lbl" style="margin-top:0">黑名单（总是拦截）</div><textarea id="ab-black" rows="7" placeholder="ads.example.com"></textarea></div>
+            <div><div class="lbl" style="margin-top:0">白名单（总是放行，优先）</div><textarea id="ab-white" rows="7" placeholder="safe.example.com"></textarea></div></div>
+          <div class="row mt"><span class="sp"></span><button class="btn" onclick="abSaveBW()">保存并应用</button></div></div>
       </div>
     </div>
   </section>
   <!-- DNS -->
   <section data-tab="DNS">
-   <div class="cols">
-    <div>
-    <div class="card"><div class="row"><h3 class="sp" style="margin:0">DNS 设置</h3><span id="dns-dirty" class="tag hide" style="color:var(--warn)">● 有未保存的修改</span>
+    <div class="card dnsmain"><div class="row"><h3 class="sp" style="margin:0">DNS 设置</h3><span id="dns-dirty" class="tag hide" style="color:var(--warn)">● 有未保存的修改</span>
         <button class="btn g sm" onclick="resetDNS()">恢复默认</button></div>
       <div class="opt mt"><div class="sp"><div class="t">增强模式</div><div class="dsc">fake-ip：客户端只拿到 198.18.x.x，域名交给 mihomo 按规则处理（防泄露推荐）；redir-host 返回真实 IP</div></div>
         <div class="seg" id="dns-mode"><button data-v="fake-ip">fake-ip</button><button data-v="redir-host">redir-host</button></div></div>
@@ -512,7 +521,7 @@ nav .ico{display:none}nav .more{display:none}
       <div id="dns-lists"></div>
       <div class="row mt"><span class="sp mut small">格式：IP、udp:// tcp:// tls:// https:// quic:// dhcp://、system；可加 <code>#策略组</code>。保存前先校验配置，失败自动撤销</span>
         <button class="btn" onclick="saveDNS()">保存 DNS 设置</button></div></div>
-    </div>
+   <div class="cols">
     <div>
     <div class="card"><div class="row"><h3 class="sp" style="margin:0">DNS 泄露检测</h3><button class="btn g sm" id="leak-btn" onclick="leakCheck()">开始检测</button><button class="btn sm" onclick="applyAntiLeak()">一键应用防泄露设置</button></div>
       <div class="mut small" style="margin-top:4px">检查配置中容易泄露的设置，并经代理用 bash.ws 在线测试实际使用的上游解析器（国内解析器出现即为泄露）</div>
@@ -522,6 +531,8 @@ nav .ico{display:none}nav .more{display:none}
       <div id="hosts-list" class="lrows"></div>
       <div class="row mt"><input id="hosts-dom" placeholder="nas.lan" style="flex:1 1 140px" onkeydown="if(event.key==='Enter')addHost()"><input id="hosts-val" placeholder="192.168.1.10" style="flex:1 1 140px" onkeydown="if(event.key==='Enter')addHost()"><button class="btn g" onclick="addHost()">＋ 添加</button></div>
       <div id="hosts-err" class="bad small"></div></div>
+    </div>
+    <div>
     <div class="card"><h3>DNS 分流策略（nameserver-policy）</h3>
       <div class="mut small mb">指定域名用哪组 DNS，排在内置分流之前，自上而下匹配。匹配项：<code>geosite:apple,microsoft@cn</code>、<code>+.corp.example,example.org</code>、<code>rule-set:名称</code>（一条内不能混用）</div>
       <div id="pol-list" class="lrows"></div>
@@ -586,7 +597,7 @@ nav .ico{display:none}nav .more{display:none}
         <div class="row mt"><span class="sp mut small">auto-route、auto-detect-interface 已开启，DNS 劫持 any:53</span><button class="btn sm" onclick="applyTun()">应用 TUN 设置</button></div></div>
       <div class="opt mt"><div class="sp"><div class="t">IPv6 透明代理</div><div class="dsc">核心与 DNS 启用 IPv6，并代理 IPv6 流量；需客户端以本机作为 IPv6 网关</div></div><label class="sw"><input type="checkbox" id="v6"><span></span></label></div>
       <div class="opt"><div class="sp"><div class="t">故障自动直连（看门狗）</div><div class="dsc">核心挂掉时自动重启，仍失败则关闭透明代理保证局域网能上网</div></div><label class="sw"><input type="checkbox" id="wd"><span></span></label></div></div>
-    <div data-sg="net" class="card"><h3>绕过设备（不走代理）</h3>
+    <div data-sg="net" class="card colbrk"><h3>绕过设备（不走代理）</h3>
       <div class="mut small" style="margin-bottom:6px">每行一个 IP、网段或 MAC（如 192.168.1.50、2408:xxxx::/64、AA:BB:CC:DD:EE:FF）。TUN 模式下按 IP / 网段生成直连规则（MAC 仅 TProxy 有效）。被绕过的设备请把 DNS 设为主路由。</div>
       <textarea id="bypass" rows="3"></textarea><div class="row" style="margin-top:8px"><span class="sp"></span><button class="btn" onclick="saveBypass()">保存</button></div></div>
     <div data-sg="net" class="card"><h3>设备备注</h3>
@@ -1056,7 +1067,7 @@ function renderAB(){const a=AB;$('#ab-on').checked=a.enabled;$('#ab-on').onchang
   $('#ab-total').textContent=a.enabled?total.toLocaleString('zh-CN',{hour12:false}):'未开启';$('#ab-today').textContent=a.stats.today.toLocaleString('zh-CN',{hour12:false});
   $('#ab-nlist').textContent=a.lists.filter(l=>l.enabled).length+' / '+a.lists.length;
   $('#ab-last').textContent=ago(Math.max(0,...a.lists.map(l=>l.updated||0)));
-  $('#ab-msg').innerHTML=a.updating?'<span class="warn">● 正在更新…</span>':esc(a.msg||'');$('#ab-upd').disabled=a.updating;
+  $('#ab-msg').innerHTML=a.updating?'<span class="warn">● 正在更新…</span>':esc(a.msg||'');document.querySelectorAll('#ab-upd,.abhd').forEach(b=>b.disabled=a.updating);
   $('#ab-lists').innerHTML=a.lists.map((l,i)=>{const ld=a.loaded['ad-'+l.id];
     return `<tr><td><label class="sw sm"><input type="checkbox" ${l.enabled?'checked':''} onchange="abToggle(${i},this.checked)"><span></span></label></td>
     <td class="w" style="min-width:150px"><b style="font-weight:600">${esc(l.name)}</b><div class="mut" style="font-size:11px;max-width:300px">${esc(l.url)}</div></td>
