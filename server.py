@@ -84,7 +84,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 6
-PANEL_VERSION = "6.6.5"
+PANEL_VERSION = "6.6.6"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -4715,13 +4715,10 @@ def rdns_loop():
         while RDNS_Q:
             ip = RDNS_Q.popleft()
             name = ""
-            try:
-                socket.setdefaulttimeout(2)
+            try:  # 不再改全局 socket 超时：那会让同时建立的订阅下载、核心更新等连接也只剩 2 秒
                 name = socket.gethostbyaddr(ip)[0]
             except Exception:
                 pass
-            finally:
-                socket.setdefaulttimeout(None)
             if name and (name == ip or name.endswith(".in-addr.arpa")):
                 name = ""
             RDNS[ip] = (name.split(".")[0] if name.endswith((".lan", ".local", ".home", ".localdomain")) else name, time.time() + 1800)
@@ -5186,6 +5183,10 @@ def login_blocked(ip):
 
 
 def login_failed(ip):
+    if len(FAILS) > 256:  # 清掉已过期的记录，防止字典无限增长
+        now = time.time()
+        for k in [k for k, v in FAILS.items() if v[1] and v[1] <= now]:
+            FAILS.pop(k, None)
     e = FAILS.setdefault(ip, [0, 0])
     if e[1] and e[1] <= time.time():
         e[:] = [0, 0]
@@ -5296,6 +5297,8 @@ def static_file(name):
 
 # ---------------------------------------------------------------- HTTP
 class H(BaseHTTPRequestHandler):
+    timeout = 30  # 读请求/TLS 握手的超时：卡住不发数据的连接不再永久占用线程（日志流只写不读，不受影响）
+
     def log_message(self, *a):
         pass
 
