@@ -103,7 +103,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "6.9.0"
+PANEL_VERSION = "6.9.1"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -3411,20 +3411,78 @@ def site_rtt(url, timeout=6):
         c.close()
 
 
-def delay_test():
-    tests = load()["tests"] or TESTS
-    out = [None] * len(tests)
+SITE_HIST, SITE_LOCK, SITE_LAST = {}, threading.Lock(), {"t": 0, "r": None}
+SITE_HIST_N = 30  # 每个站点保留最近 30 次（约 30 分钟）
 
-    def one(i, t):
+
+def delay_test(force=False):
+    """多个浏览器同时打开概览时 20 秒内复用同一次结果，历史只记一次"""
+    with SITE_LOCK:
+        if not force and SITE_LAST["r"] is not None and time.time() - SITE_LAST["t"] < 20:
+            return SITE_LAST["r"]
+        tests = load()["tests"] or TESTS
+        out = [None] * len(tests)
+
+        def one(i, t):
+            try:
+                out[i] = {"name": t["name"], "url": t["url"], "ms": site_rtt(t["url"])}
+            except Exception:
+                out[i] = {"name": t["name"], "url": t["url"], "ms": -1}
+
+        ths = [threading.Thread(target=one, args=(i, t)) for i, t in enumerate(tests)]
+        [t.start() for t in ths]
+        [t.join() for t in ths]
+        names = {o["name"] for o in out}
+        for k in list(SITE_HIST):
+            if k not in names:
+                del SITE_HIST[k]
+        for o in out:
+            h = SITE_HIST.setdefault(o["name"], deque(maxlen=SITE_HIST_N))
+            h.append(o["ms"])
+            o["hist"] = list(h)
+        SITE_LAST.update(t=time.time(), r=out)
+        return out
+
+
+# 站点图标：经代理下载 https://<host>/favicon.ico，失败再试 Google favicon 服务；缓存 7 天，失败的 1 小时内不重试
+FAV_DIR = os.path.join(PANEL_DIR, "favicons")
+FAV_FAIL = {}
+
+
+def _is_img(b):
+    return b[:4] in (b"\x00\x00\x01\x00", b"\x89PNG") or b[:3] == b"GIF" or b[:2] == b"\xff\xd8" or b[:4] == b"RIFF" or b.lstrip()[:4] == b"<svg"
+
+
+def favicon(url):
+    host = (urlsplit(url).hostname or "").lower()
+    if not re.fullmatch(r"[a-z0-9.-]{1,253}", host):
+        return None, None
+    path = os.path.join(FAV_DIR, host)
+    try:
+        if time.time() - os.path.getmtime(path) < 7 * 86400:
+            with open(path, "rb") as f:
+                b = f.read()
+            return b, ("image/svg+xml" if b.lstrip()[:4] == b"<svg" else "image/x-icon" if b[:4] == b"\x00\x00\x01\x00" else "image/png")
+    except OSError:
+        pass
+    if time.time() - FAV_FAIL.get(host, 0) < 3600:
+        return None, None
+    op = proxy_opener()
+    root = ".".join(host.split(".")[-2:])  # api.telegram.org 没有图标时用 telegram.org 的
+    tries = [f"https://{host}/favicon.ico"] + ([f"https://{root}/favicon.ico", f"https://www.{root}/favicon.ico"] if root != host else [])
+    for u in tries + [f"https://www.google.com/s2/favicons?domain={host}&sz=64"]:
         try:
-            out[i] = {"name": t["name"], "ms": site_rtt(t["url"])}
+            with op.open(urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"}), timeout=8) as r:
+                b = r.read(256 * 1024)
+            if len(b) > 60 and _is_img(b):
+                os.makedirs(FAV_DIR, exist_ok=True)
+                with open(path, "wb") as f:
+                    f.write(b)
+                return favicon(url)
         except Exception:
-            out[i] = {"name": t["name"], "ms": -1}
-
-    ths = [threading.Thread(target=one, args=(i, t)) for i, t in enumerate(tests)]
-    [t.start() for t in ths]
-    [t.join() for t in ths]
-    return out
+            pass
+    FAV_FAIL[host] = time.time()
+    return None, None
 
 
 # ---------------------------------------------------------------- 认证：PBKDF2 密码 + 随机会话
@@ -3936,6 +3994,8 @@ class Stats:
         with self.lock:
             keep = sorted(self.data["days"])[-60:]
             self.data["days"] = {k: self.data["days"][k] for k in keep}
+            hk = sorted(self.data["hours"])[-48:]
+            self.data["hours"] = {k: self.data["hours"][k] for k in hk}
             write_json(STATS_FILE, self.data)
         self.saved = time.time()
 
@@ -4642,14 +4702,25 @@ def ab_check(target):
 
 
 class AdStats:
-    """订阅 mihomo info 日志，统计命中广告规则 (REJECT) 的连接"""
+    """订阅 mihomo info 日志，统计命中广告规则 (REJECT) 的连接；另按小时统计全部连接请求数、拦截数和 DNS 解析耗时（概览「域名过滤」）"""
     RX = re.compile(r"--> (\S+?):\d+ match .*?RuleSet[,(](ad-[0-9a-z]+)\).* using REJECT")
+    RX_ALL = re.compile(r"--> \S+ (?:match|doesn't match)")
 
     def __init__(self):
         self.lock = threading.Lock()
         self.data = read_json(AB_STATS_FILE, {"days": {}})
         self.data.setdefault("days", {})
+        self.data.setdefault("hours", {})
         self.saved = time.time()
+
+    def hour(self):
+        return self.data["hours"].setdefault(time.strftime("%Y-%m-%d %H"), {"req": 0, "blk": 0, "dns": [0, 0]})
+
+    def dns_sample(self, ms):
+        with self.lock:
+            h = self.hour()
+            h["dns"][0] += ms
+            h["dns"][1] += 1
 
     def hit(self, host, prov):
         if host.startswith("["):
@@ -4660,6 +4731,7 @@ class AdStats:
             b["top"][host] = b["top"].get(host, 0) + 1
             key = prov[3:]
             b["lists"][key] = b["lists"].get(key, 0) + 1
+            self.hour()["blk"] += 1
             if len(b["top"]) > 5000:  # 防止长尾域名无限增长
                 b["top"] = dict(sorted(b["top"].items(), key=lambda x: -x[1])[:2000])
 
@@ -4668,11 +4740,13 @@ class AdStats:
             msg = json.loads(line).get("payload", "")
         except Exception:
             return
-        if "REJECT" not in msg:
-            return
-        m = self.RX.search(msg)
-        if m:
-            self.hit(m.group(1), m.group(2))
+        if self.RX_ALL.search(msg):
+            with self.lock:
+                self.hour()["req"] += 1
+        if "REJECT" in msg:
+            m = self.RX.search(msg)
+            if m:
+                self.hit(m.group(1), m.group(2))
         if time.time() - self.saved > 60:
             self.flush()
 
@@ -4680,6 +4754,8 @@ class AdStats:
         with self.lock:
             keep = sorted(self.data["days"])[-14:]
             self.data["days"] = {k: self.data["days"][k] for k in keep}
+            hk = sorted(self.data["hours"])[-48:]
+            self.data["hours"] = {k: self.data["hours"][k] for k in hk}
             for b in self.data["days"].values():
                 b["top"] = dict(sorted(b["top"].items(), key=lambda x: -x[1])[:500])
             write_json(AB_STATS_FILE, self.data)
@@ -4688,9 +4764,32 @@ class AdStats:
     def report(self):
         with self.lock:
             days = copy.deepcopy(self.data["days"])
+            hours = copy.deepcopy(self.data["hours"])
         b = days.get(time.strftime("%Y-%m-%d"), {"count": 0, "top": {}, "lists": {}})
+        now = int(time.time() // 3600 * 3600)
+        h24 = []
+        for i in range(23, -1, -1):  # 最近 24 个小时段，缺的补 0
+            k = time.strftime("%Y-%m-%d %H", time.localtime(now - i * 3600))
+            e = hours.get(k) or {"req": 0, "blk": 0, "dns": [0, 0]}
+            h24.append({"h": k[-2:], "req": e["req"], "blk": e["blk"], "dns": round(e["dns"][0] / e["dns"][1], 1) if e["dns"][1] else None})
         return {"today": b["count"], "top": sorted(b["top"].items(), key=lambda x: -x[1])[:20], "lists": b["lists"],
-                "days": [{"date": k, "count": days[k]["count"]} for k in sorted(days)]}
+                "days": [{"date": k, "count": days[k]["count"]} for k in sorted(days)], "hours": h24}
+
+    def dns_loop(self):
+        """每分钟经核心解析器查一次随机子域名（绕过缓存）：国内域名走直连 DNS、国外域名走代理 DNS，记录耗时"""
+        while True:
+            time.sleep(60)
+            try:
+                if active_core() == "singbox":
+                    continue
+                for base in ("baidu.com", "google.com"):
+                    name = "shunt-%s.%s" % (secrets.token_hex(4), base)
+                    st = time.time()
+                    code, _ = core("GET", f"/dns/query?name={name}&type=A", timeout=8)
+                    if code == 200:
+                        self.dns_sample(max(1, int((time.time() - st) * 1000)))
+            except Exception:
+                pass
 
     def loop(self):
         while True:
@@ -6195,7 +6294,17 @@ class H(BaseHTTPRequestHandler):
             msg = ("已更新" if not bad else "更新失败：" + "；".join(bad)) + ("；" + msg2 if msg2 and "无变化" not in msg2 else "")
             return self.reply(not bad, msg)
         if p == "/api/delay":
-            return self.send(200, delay_test())
+            return self.send(200, delay_test(force=q1(parse_qs(q), "force") == "1"))
+        if p == "/api/favicon":
+            b, ct = favicon(q1(parse_qs(q), "u", default=""))
+            if not b:
+                return self.send(404, {"message": "无图标"})
+            self.send_response(200)
+            self.send_header("Content-Type", ct)
+            self.send_header("Content-Length", str(len(b)))
+            self.send_header("Cache-Control", "max-age=86400")
+            self.end_headers()
+            return self.wfile.write(b)
         if p == "/api/unlock":
             return self.send(200, unlock_test())
         if p == "/api/stats" and m == "GET":
@@ -6532,7 +6641,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))  # 让 finally 有机会保存统计
     STATS = Stats()
     AD_STATS = AdStats()
-    for target, args in ((STATS.loop, ()), (monitor_loop, ()), (AD_STATS.loop, ()), (live_loop, ("/traffic",)),
+    for target, args in ((STATS.loop, ()), (monitor_loop, ()), (AD_STATS.loop, ()), (AD_STATS.dns_loop, ()), (live_loop, ("/traffic",)),
                          (live_loop, ("/memory",)), (log_loop, ()), (sched_loop, ()), (rdns_loop, ()), (startup_migrate, ())):
         threading.Thread(target=target, args=args, daemon=True).start()
     srv = Server(("0.0.0.0", PORT), H)

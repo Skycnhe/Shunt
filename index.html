@@ -185,19 +185,20 @@ pre{background:var(--pre);padding:12px;border-radius:14px;max-height:65vh;overfl
 
 /* v6.3 布局 */
 .monly{display:none}
-.lchart{display:flex;gap:8px;align-items:stretch;height:170px;margin-top:12px;overflow-x:auto;padding-bottom:2px}
-.lc{flex:1 0 46px;display:flex;flex-direction:column;align-items:center;min-width:46px}
-.lc .lv{font-size:12px;font-weight:650;font-variant-numeric:tabular-nums;height:18px}
-.lc .lt{flex:1;width:100%;max-width:38px;display:flex;align-items:flex-end;border-radius:8px;background:var(--b2)}
-.lc .lb{width:100%;border-radius:8px;transition:height .5s ease;background:currentColor;opacity:.85}
-.lc .lb.to{background:repeating-linear-gradient(45deg,currentColor 0 5px,transparent 5px 9px);opacity:.6}
-.lc .ln{font-size:11.5px;color:var(--sub);margin-top:6px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.abk{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px}.abk .k{color:var(--sub);font-size:12px}.abk .v{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}.abk .s{color:var(--sub);font-size:11.5px}
-.abd{display:flex;gap:4px;align-items:flex-end;height:56px;margin-top:12px}.abc{flex:1;height:100%;display:flex;align-items:flex-end;border-radius:4px;background:var(--b2)}
-.abc i{display:block;width:100%;border-radius:4px;background:var(--pri);opacity:.55}.abc.td i{opacity:1}
-.abdl{display:flex;justify-content:space-between;font-size:11px;color:var(--sub);margin-top:4px}
-.abt{display:grid;grid-template-columns:minmax(0,1.3fr) 1fr auto;gap:10px;align-items:center;font-size:12.5px;padding:3px 0}.abt b{font-weight:600;font-variant-numeric:tabular-nums}
-.abtb{height:6px;border-radius:3px;background:var(--b2)}
+.stiles{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));margin-bottom:16px}
+.stile{margin:0;padding:14px 16px;display:flex;align-items:center;gap:12px;cursor:pointer;min-width:0}
+.stile .fv{flex:none;width:46px;height:46px;border-radius:14px;background:var(--b2);display:grid;place-items:center;overflow:hidden;font-weight:700;font-size:19px;color:var(--pri)}
+.stile .fv img{width:28px;height:28px;object-fit:contain}
+.stile .sb{flex:1;min-width:0;height:40px;display:flex;align-items:flex-end;gap:2px}
+.stile .sb i{flex:1;min-width:2px;border-radius:2px;background:currentColor;opacity:.55}.stile .sb i:last-child{opacity:.9}.stile .sb i.e{height:3px;background:var(--b2);opacity:1}
+.stile .sb i.mut{height:3px}
+.stile .si{flex:none;text-align:right;min-width:64px}.stile .sn{font-size:12.5px;color:var(--sub);max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-left:auto}
+.stile .sv{font-size:22px;font-weight:650;font-variant-numeric:tabular-nums;line-height:1.2;margin-top:2px}.stile .sv small{font-size:12px;font-weight:500;color:var(--sub);margin-left:3px}
+.dft{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));margin-top:12px}
+.dfc{margin:0;padding:14px 16px;min-width:0}.dfc .k{color:var(--sub);font-size:12.5px}.dfc .v{font-size:24px;font-weight:650;font-variant-numeric:tabular-nums;margin:4px 0 6px}.dfc .v small{font-size:12px;font-weight:500;color:var(--sub);margin-left:3px}
+.spk{display:block;width:100%;height:64px}
+.dtop{margin-top:6px}.dti{padding:4px 0;font-size:12.5px}.dti b{font-weight:600;font-variant-numeric:tabular-nums;margin-left:8px}
+.dtb{height:4px;border-radius:2px;background:var(--b2);margin-top:4px}.dtb i{display:block;height:100%;border-radius:2px;background:#ff9f0a;opacity:.75}
 .ovcols{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(100%,540px),1fr));align-items:start}.ovcols>div>.card:last-child{margin-bottom:0}
 .qs-now{margin-top:4px}
 .spd{display:flex;gap:18px;align-items:baseline;margin-top:6px;flex-wrap:wrap}.spd b{font-size:22px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
@@ -227,6 +228,8 @@ nav .ico{display:none}nav .more{display:none}
   #ov .card,#ov .g4{margin:0 0 10px}
   #ov .o1{order:1}#ov .o2{order:2}#ov .o3{order:3}#ov .o4{order:4}#ov .o5{order:5}#ov .o6{order:6}#ov .o7{order:7}#ov .o8{order:8}
   .spd b{font-size:19px}
+  .stiles{grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}.stile{flex-wrap:wrap;padding:10px 12px;gap:8px}.stile .fv{width:34px;height:34px;border-radius:10px;font-size:15px}.stile .fv img{width:20px;height:20px}
+  .stile .si{flex:1;min-width:0}.stile .sv{font-size:18px}.stile .sb{order:3;flex-basis:100%;height:26px}.dft{grid-template-columns:1fr 1fr;gap:10px}.dfc{padding:12px}.dfc .v{font-size:19px}
   nav#nav.bottom{position:fixed;left:8px;right:8px;bottom:calc(8px + env(safe-area-inset-bottom));z-index:50;margin:0;width:auto;max-width:none;display:grid;grid-template-columns:repeat(5,1fr);
     border-radius:20px;padding:5px;background:var(--card);border:1px solid var(--card-b);box-shadow:0 10px 30px rgba(0,0,0,.25);-webkit-backdrop-filter:blur(28px) saturate(180%);backdrop-filter:blur(28px) saturate(180%)}
   nav#nav.bottom button{display:flex;flex-direction:column;align-items:center;gap:1px;padding:6px 0 4px;font-size:11px;border-radius:14px}
@@ -350,6 +353,7 @@ nav .ico{display:none}nav .more{display:none}
   <!-- 概览 -->
   <section data-tab="概览">
    <div id="ov">
+    <div class="o1 stiles" id="sites"></div>
     <div class="o1 grid g4" style="margin-bottom:16px">
       <div class="card stat" style="margin:0"><div class="k">代理模式</div><div class="seg" id="mode" style="margin-top:8px"><button data-m="rule">规则</button><button data-m="global">全局</button><button data-m="direct">直连</button></div></div>
       <div class="card stat" style="margin:0"><div class="k">代理方式</div><div class="v" id="s-pm">-</div><div class="s" id="s-pm2"></div></div>
@@ -359,17 +363,15 @@ nav .ico{display:none}nav .more{display:none}
     <div class="o3 card"><div class="row"><h3 class="sp" style="margin:0">实时流量（近 2 分钟）</h3><span class="small" style="color:var(--pri)">● 下载</span><span class="small" style="color:var(--ok)">● 上传</span></div>
       <div class="spd"><span class="dn"><span class="k">↓</span><b id="ov-down">-</b></span><span class="upx"><span class="k">↑</span><b id="ov-up">-</b></span><span class="monly mut small" id="ov-tot" style="margin-left:auto"></span></div>
       <canvas id="chart" height="110" style="width:100%;margin-top:8px;display:block"></canvas></div>
+    <div class="o5 card" id="ovab"><div class="row"><div class="sp"><h3 style="margin:0">域名过滤</h3><div class="mut small" style="margin-top:2px">最近 24 个小时段 · 核心日志统计的连接请求与广告拦截</div></div><a class="btn g sm" onclick="go('广告拦截')">管理</a><label class="sw sm"><input type="checkbox" id="ovab-on"><span></span></label></div>
+      <div id="ovab-body"></div></div>
     <div class="ovcols">
-      <div>
-        <div class="o4 card"><div class="row"><h3 class="sp" style="margin:0">站点延迟（每 60 秒）</h3><button class="btn g sm" onclick="testSites()">立即检测</button></div>
-          <div class="lchart" id="sites"></div></div>
-        <div class="o5 card" id="ovab"><div class="row"><h3 class="sp" style="margin:0">🛡️ 广告拦截</h3><a class="btn g sm" onclick="go('广告拦截')">管理</a><label class="sw sm"><input type="checkbox" id="ovab-on"><span></span></label></div>
-          <div id="ovab-body"></div></div>
-      </div>
       <div>
         <div class="o2 card" id="qs-card"><div class="row"><h3 class="sp" style="margin:0">🚀 节点选择</h3><button class="btn g sm" id="qs-btn" onclick="qsTest(this)">测速</button></div>
           <div id="qs-now" class="mut small w qs-now"></div>
           <div id="qs" class="qs"></div></div>
+      </div>
+      <div>
         <div class="o8 card"><div class="row"><h3 class="sp" style="margin:0">故障自动直连（看门狗）</h3><span id="wd-status"></span></div>
           <div class="mut small" style="margin:4px 0 8px">每 30 秒检查核心；无响应时自动重启，连续 2 次失败则关闭透明代理让局域网直连，核心恢复后自动重新接管</div>
           <div id="wd-events"></div></div>
@@ -838,24 +840,28 @@ async function qsTest(b){b.disabled=true;b.textContent='测速中…';
   b.disabled=false;b.textContent='测速';loadQS()}
 function renderPMStat(){$('#s-pm').textContent=PM_TXT[STATE.proxy_mode]||'-';
   $('#s-pm2').textContent=STATE.proxy_mode==='tun'?`${STATE.tun.stack} · ${STATE.tun.device}`:STATE.proxy_mode==='tproxy'?('nftables'+(STATE.ipv6?' · IPv4+IPv6':' · IPv4')):'仅 7890 端口可用'}
+// 迷你曲线：平滑折线 + 渐变填充，null 视为缺数据跳过
+function spark(vals,col){const pts=vals.map((v,i)=>[i,v]).filter(p=>p[1]!=null);if(pts.length<2)return '<div class="spk mut small" style="display:grid;place-items:center">数据不足</div>';
+  const n=vals.length-1||1,mx=Math.max(...pts.map(p=>p[1]))||1,mn=Math.min(0,...pts.map(p=>p[1])),W=200,H=60,
+    xy=pts.map(([i,v])=>[i/n*W,H-4-(v-mn)/(mx-mn||1)*(H-10)]);
+  let d='M'+xy[0][0].toFixed(1)+','+xy[0][1].toFixed(1);for(let k=1;k<xy.length;k++){const [x0,y0]=xy[k-1],[x1,y1]=xy[k],cx=(x0+x1)/2;d+=` C${cx.toFixed(1)},${y0.toFixed(1)} ${cx.toFixed(1)},${y1.toFixed(1)} ${x1.toFixed(1)},${y1.toFixed(1)}`}
+  const id='g'+Math.random().toString(36).slice(2,8);
+  return `<svg class="spk" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${col}" stop-opacity=".28"/><stop offset="1" stop-color="${col}" stop-opacity=".02"/></linearGradient></defs>
+    <path d="${d} L${xy[xy.length-1][0].toFixed(1)},${H} L${xy[0][0].toFixed(1)},${H} Z" fill="url(#${id})"/><path d="${d}" fill="none" stroke="${col}" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`}
 async function loadAdStat(){let a;try{a=await api('/api/adblock')}catch(e){return}
   const n=v=>(+v||0).toLocaleString('zh-CN'),rules=Object.entries(a.loaded||{}).filter(([k])=>k!=='ad-allow').reduce((s,[,v])=>s+(v||0),0);
   $('#s-ad').textContent=a.enabled?n(a.stats.today):'未开启';$('#s-ad2').textContent=a.enabled?'规则 '+n(rules)+' 条':'在“广告拦截”中开启';
   const on=$('#ovab-on');on.checked=a.enabled;on.disabled=!!a.updating;
   on.onchange=async e=>{const v=e.target.checked;try{toast('正在应用…');const j=await api('/api/adblock','PUT',{enabled:v});toast(/下载/.test(j.message||'')?j.message:'广告拦截已'+(v?'开启':'关闭'))}catch(x){toast(x.message)}loadAdStat()};
-  if(!a.enabled){$('#ovab-body').innerHTML=`<div class="empty" style="padding:18px 8px">广告拦截未开启。打开右上角开关即可按已添加的列表拦截${a.lists.length?'':'（还没有列表，点「管理」添加内置规则）'}</div>`;return}
-  // 近 14 天：缺的日期补 0
-  const map=Object.fromEntries((a.stats.days||[]).map(d=>[d.date,d.count])),days=[];
-  for(let k=13;k>=0;k--){const t=new Date(Date.now()-k*864e5),key=t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0');days.push([key,map[key]||0])}
-  days[13][1]=a.stats.today||days[13][1];
-  const mx=Math.max(1,...days.map(d=>d[1])),sum7=days.slice(7).reduce((s,d)=>s+d[1],0);
-  const top=(a.stats.top||[]).slice(0,5),tmx=top.length?top[0][1]:1,act=a.lists.filter(l=>l.enabled).length;
-  $('#ovab-body').innerHTML=`<div class="abk"><div><div class="k">今日拦截</div><div class="v">${n(a.stats.today)}</div></div><div><div class="k">近 7 天</div><div class="v">${n(sum7)}</div></div><div><div class="k">规则</div><div class="v">${n(rules)}</div><div class="s">${act} 个列表${a.dns?' · DNS 层':''}</div></div></div>
-    <div class="abd">${days.map(([d,c],i)=>`<div class="abc${i===13?' td':''}" title="${d.slice(5)}：${n(c)} 次"><i style="height:${c?Math.max(4,c/mx*100):0}%"></i></div>`).join('')}</div>
-    <div class="abdl"><span>${days[0][0].slice(5)}</span><span>今天</span></div>
-    <div class="lbl" style="margin-top:12px">今日拦截最多</div>
-    ${top.length?top.map(([d,c])=>`<div class="abt"><span class="w">${esc(d)}</span><div class="abtb"><div class="bar" style="width:${Math.max(3,c/tmx*100)}%"></div></div><b>${n(c)}</b></div>`).join(''):'<div class="mut small">今天还没有拦截记录</div>'}
-    ${a.dns?'<div class="mut small" style="margin-top:8px">已开启 DNS 层拦截：直接返回 NXDOMAIN 的请求不计入次数</div>':''}`}
+  const H=a.stats.hours||[],req=H.reduce((s,h)=>s+h.req,0),blk=H.reduce((s,h)=>s+h.blk,0),dv=H.filter(h=>h.dns!=null),
+    dns=dv.length?Math.round(dv.reduce((s,h)=>s+h.dns,0)/dv.length):null,pct=req?(blk/req*100).toFixed(1)+'%':'',
+    top=(a.stats.top||[]).slice(0,5),tmx=top.length?top[0][1]:1,O='#ff9f0a';
+  $('#ovab-body').innerHTML=`<div class="dft">
+    <div class="card dfc"><div class="k">平均解析耗时</div><div class="v">${dns==null?'-':dns+'<small>ms</small>'}</div>${spark(H.map(h=>h.dns),cssv('--ok'))}</div>
+    <div class="card dfc"><div class="k">连接请求</div><div class="v">${n(req)}</div>${spark(H.map(h=>h.req),cssv('--pri'))}</div>
+    <div class="card dfc"><div class="k row"><span class="sp">已拦截</span><span style="color:${O}">${a.enabled?pct:'未开启'}</span></div><div class="v" style="color:${O}">${n(blk)}</div>${spark(H.map(h=>h.blk),O)}</div>
+    <div class="card dfc"><div class="k">被拦截域名排行</div><div class="dtop">${top.length?top.map(([d,c])=>`<div class="dti" title="${esc(d)}：${n(c)} 次"><div class="row"><span class="sp w">${esc(d)}</span><b>${n(c)}</b></div><div class="dtb"><i style="width:${Math.max(3,c/tmx*100)}%"></i></div></div>`).join(''):'<div class="mut small" style="margin-top:8px">'+(a.enabled?'今天还没有拦截记录':'广告拦截未开启')+'</div>'}</div></div>
+  </div>${a.dns&&a.enabled?'<div class="mut small" style="margin-top:8px">已开启 DNS 层拦截：直接返回 NXDOMAIN 的请求不经过连接，不计入拦截次数</div>':''}`}
 function renderMode(){document.querySelectorAll('#mode button').forEach(b=>{b.classList.toggle('on',b.dataset.m===STATE.mode);
   b.onclick=async()=>{try{await api('/api/mode','PUT',{mode:b.dataset.m});STATE.mode=b.dataset.m;renderMode();toast('已切换模式')}catch(e){toast(e.message)}}})}
 const WDS={ok:['ok','正常'],restarting:['warn','正在重启核心'],direct:['bad','已切换直连'],stopped:['mut','核心已手动停止'],off:['mut','已关闭']};
@@ -877,12 +883,17 @@ async function tickOnce(){
     try{const c=await api('/api/conns');CONNS=c.connections||[];$('#s-conn').textContent=CONNS.length;
       $('#s-devs').textContent=new Set(CONNS.map(x=>x.metadata?.sourceIP).filter(Boolean)).size+' 台设备';
       if(TAB==='连接'&&!$('#c-pause').checked)renderConns(CONNS)}catch(e){$('#s-conn').textContent='-'}}}
-// 站点延迟柱状图：柱高按 1000 ms 封顶的平方根刻度，低延迟之间也能看出差别；超时显示满高红柱
-async function testSites(){const el=$('#sites');if(!el.children.length)el.innerHTML='<span class="mut">检测中…</span>';
-  try{const r=await api('/api/delay');if(!r.length){el.innerHTML='<span class="mut">没有检测站点，在 设置 → 测试站点 中添加</span>';return}
-    el.innerHTML=r.map(s=>{const ok=s.ms>0,h=ok?Math.max(6,Math.sqrt(Math.min(s.ms,1000)/1000)*100):100;
-      return `<div class="lc" title="${esc(s.name)}：${dtxt(s.ms)}"><div class="lv ${dcls(s.ms)}">${ok?s.ms:'超时'}</div><div class="lt"><div class="lb ${dcls(s.ms)}${ok?'':' to'}" style="height:${h}%"></div></div><div class="ln">${esc(s.name)}</div></div>`}).join('')}
-  catch(e){el.innerHTML=`<span class="bad">${esc(e.message)}</span>`}}
+// 站点延迟：每个站点一张卡片，图标 + 最近 30 次延迟柱状图 + 当前值；柱高按 max(300ms, 近期最大值) 缩放，超时为满高红柱
+const SITE_SVG='<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.8 3.2 2.8 14.8 0 18M12 3c-2.8 3.2-2.8 14.8 0 18"/></svg>';
+function favFail(im){const p=im.parentNode;p.classList.add('nf');p.innerHTML=esc(p.dataset.l)||SITE_SVG}
+async function testSites(force){const el=$('#sites');if(!el.children.length)el.innerHTML='<div class="card mut" style="margin:0;padding:16px">站点延迟检测中…</div>';
+  try{const r=await api('/api/delay'+(force?'?force=1':''));if(!r.length){el.innerHTML='<div class="card mut" style="margin:0;padding:16px">没有检测站点，在 设置 → 测试站点 中添加</div>';return}
+    el.innerHTML=r.map(s=>{const h=(s.hist&&s.hist.length?s.hist:[s.ms]).slice(-30),mx=Math.max(300,...h.filter(v=>v>0)),ok=s.ms>0;
+      const bars=Array(30-h.length).fill('<i class="e"></i>').join('')+h.map(v=>`<i class="${dcls(v)}" style="height:${v>0?Math.max(8,v/mx*100):100}%" title="${dtxt(v)}"></i>`).join('');
+      const l=(s.name||'?').trim().charAt(0).toUpperCase();
+      return `<div class="card stile" title="${esc(s.name)}：${dtxt(s.ms)}" onclick="testSites(1)"><div class="fv" data-l="${esc(l)}"><img src="/api/favicon?u=${encodeURIComponent(s.url||'')}" alt="" onerror="favFail(this)"></div>
+        <div class="sb">${bars}</div><div class="si"><div class="sn">${esc(s.name)}</div><div class="sv ${dcls(s.ms)}">${ok?s.ms+'<small>ms</small>':'超时'}</div></div></div>`}).join('')}
+  catch(e){el.innerHTML=`<div class="card bad" style="margin:0;padding:16px">${esc(e.message)}</div>`}}
 async function testUnlock(){const b=$('#unlock-btn');b.disabled=true;b.textContent='检测中…';$('#unlock').innerHTML='<span class="mut" style="grid-column:1/-1">检测中，约需 10 秒…</span>';
   try{const r=await api('/api/unlock');$('#unlock').innerHTML=r.map(s=>{const c=s.ok===true?'ok':s.ok==='partial'?'warn':'bad';
     return `<div class="node"><div class="n">${esc(s.name)}</div><div class="d ${c}" style="font-size:14px;font-weight:600;justify-content:flex-start">${esc(s.text)}${s.region?` <span class="tag">${esc(s.region)}</span>`:''}</div></div>`}).join('')}
@@ -1474,7 +1485,7 @@ function fillSettings(){$('#bypass').value=(STATE.bypass||[]).join('\n');$('#tes
 async function saveSettings(o,msg){try{toast('保存中…');const j=await api('/api/settings','PUT',o);toast(msg||j.message);await loadState();fillSettings()}catch(e){toast(e.message);throw e}}
 function saveBypass(){saveSettings({bypass:$('#bypass').value.split('\n').map(s=>s.trim()).filter(Boolean)},'绕过设备已生效').catch(()=>{})}
 function saveTests(){const t=$('#tests').value.split('\n').map(l=>l.split('|')).filter(a=>a.length>=2&&a[1].trim().startsWith('http')).map(a=>({name:a[0].trim(),url:a.slice(1).join('|').trim()}));
-  if(!t.length)return toast('格式：名称|网址');saveSettings({tests:t},'已保存').then(testSites).catch(()=>{})}
+  if(!t.length)return toast('格式：名称|网址');saveSettings({tests:t},'已保存').then(()=>testSites(1)).catch(()=>{})}
 function saveGroupOpts(){saveSettings({sub_interval:+$('#sub-int').value},'已应用').catch(()=>{})}
 async function backup(){try{const j=await api('/api/backup');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(j,null,2)],{type:'application/json'}));
   a.download='shunt-backup-'+new Date().toISOString().slice(0,10)+'.json';a.click()}catch(e){toast(e.message)}}
