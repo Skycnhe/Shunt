@@ -185,6 +185,19 @@ pre{background:var(--pre);padding:12px;border-radius:14px;max-height:65vh;overfl
 
 /* v6.3 布局 */
 .monly{display:none}
+.lchart{display:flex;gap:8px;align-items:stretch;height:170px;margin-top:12px;overflow-x:auto;padding-bottom:2px}
+.lc{flex:1 0 46px;display:flex;flex-direction:column;align-items:center;min-width:46px}
+.lc .lv{font-size:12px;font-weight:650;font-variant-numeric:tabular-nums;height:18px}
+.lc .lt{flex:1;width:100%;max-width:38px;display:flex;align-items:flex-end;border-radius:8px;background:var(--b2)}
+.lc .lb{width:100%;border-radius:8px;transition:height .5s ease;background:currentColor;opacity:.85}
+.lc .lb.to{background:repeating-linear-gradient(45deg,currentColor 0 5px,transparent 5px 9px);opacity:.6}
+.lc .ln{font-size:11.5px;color:var(--sub);margin-top:6px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.abk{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px}.abk .k{color:var(--sub);font-size:12px}.abk .v{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}.abk .s{color:var(--sub);font-size:11.5px}
+.abd{display:flex;gap:4px;align-items:flex-end;height:56px;margin-top:12px}.abc{flex:1;height:100%;display:flex;align-items:flex-end;border-radius:4px;background:var(--b2)}
+.abc i{display:block;width:100%;border-radius:4px;background:var(--pri);opacity:.55}.abc.td i{opacity:1}
+.abdl{display:flex;justify-content:space-between;font-size:11px;color:var(--sub);margin-top:4px}
+.abt{display:grid;grid-template-columns:minmax(0,1.3fr) 1fr auto;gap:10px;align-items:center;font-size:12.5px;padding:3px 0}.abt b{font-weight:600;font-variant-numeric:tabular-nums}
+.abtb{height:6px;border-radius:3px;background:var(--b2)}
 .ovcols{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(100%,540px),1fr));align-items:start}.ovcols>div>.card:last-child{margin-bottom:0}
 .qs-now{margin-top:4px}
 .spd{display:flex;gap:18px;align-items:baseline;margin-top:6px;flex-wrap:wrap}.spd b{font-size:22px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
@@ -348,26 +361,36 @@ nav .ico{display:none}nav .more{display:none}
       <canvas id="chart" height="110" style="width:100%;margin-top:8px;display:block"></canvas></div>
     <div class="ovcols">
       <div>
-        <div class="o4 card"><h3>设备排行（按当前连接）</h3><div class="tw" id="dev-tw"><table><thead><tr><th>设备</th><th>连接</th><th>下载</th><th>上传</th><th>最常访问</th></tr></thead><tbody id="devices"></tbody></table></div><div id="dev-empty" class="empty hide">暂无设备连接。客户端把网关指向本机后，这里会按流量列出设备</div></div>
-        <div class="o5 card"><div class="row"><h3 class="sp" style="margin:0">站点延迟（每 60 秒）</h3><button class="btn g sm" onclick="testSites()">立即检测</button></div>
-          <div class="grid" id="sites" style="margin-top:12px;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px"></div></div>
+        <div class="o4 card"><div class="row"><h3 class="sp" style="margin:0">站点延迟（每 60 秒）</h3><button class="btn g sm" onclick="testSites()">立即检测</button></div>
+          <div class="lchart" id="sites"></div></div>
+        <div class="o5 card" id="ovab"><div class="row"><h3 class="sp" style="margin:0">🛡️ 广告拦截</h3><a class="btn g sm" onclick="go('广告拦截')">管理</a><label class="sw sm"><input type="checkbox" id="ovab-on"><span></span></label></div>
+          <div id="ovab-body"></div></div>
       </div>
       <div>
         <div class="o2 card" id="qs-card"><div class="row"><h3 class="sp" style="margin:0">🚀 节点选择</h3><button class="btn g sm" id="qs-btn" onclick="qsTest(this)">测速</button></div>
           <div id="qs-now" class="mut small w qs-now"></div>
           <div id="qs" class="qs"></div></div>
-        <div class="o6 card"><div class="row"><h3 class="sp" style="margin:0">流媒体 / AI 解锁检测</h3><button class="btn g sm" id="unlock-btn" onclick="testUnlock()">检测</button></div>
-          <div class="mut small" style="margin-top:4px">经由 mixed 端口按当前规则分流检测，结果反映各服务实际走的节点</div>
-          <div class="grid" id="unlock" style="margin-top:12px;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px"><span class="mut" style="grid-column:1/-1">点击“检测”开始（约 10 秒）</span></div></div>
         <div class="o8 card"><div class="row"><h3 class="sp" style="margin:0">故障自动直连（看门狗）</h3><span id="wd-status"></span></div>
           <div class="mut small" style="margin:4px 0 8px">每 30 秒检查核心；无响应时自动重启，连续 2 次失败则关闭透明代理让局域网直连，核心恢复后自动重新接管</div>
           <div id="wd-events"></div></div>
-        <div class="o7 card"><div class="row"><h3 class="sp" style="margin:0">网络诊断</h3><button class="btn g" id="diag-btn" onclick="runDiag()">一键诊断</button></div>
+      </div>
+    </div>
+   </div>
+  </section>
+  <!-- 检测 -->
+  <section data-tab="检测">
+    <div class="cols">
+      <div>
+        <div class="card"><div class="row"><h3 class="sp" style="margin:0">流媒体 / AI 解锁检测</h3><button class="btn g sm" id="unlock-btn" onclick="testUnlock()">检测</button></div>
+          <div class="mut small" style="margin-top:4px">经由 mixed 端口按当前规则分流检测，结果反映各服务实际走的节点</div>
+          <div class="grid" id="unlock" style="margin-top:12px;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px"><span class="mut" style="grid-column:1/-1">点击“检测”开始（约 10 秒）</span></div></div>
+      </div>
+      <div>
+        <div class="card"><div class="row"><h3 class="sp" style="margin:0">网络诊断</h3><button class="btn g" id="diag-btn" onclick="runDiag()">一键诊断</button></div>
           <div class="mut small" style="margin-top:4px">检查核心、透明代理 / TUN、IP 转发、DNS 解析与出站连通性，并给出修复建议</div>
           <div id="diag" style="margin-top:8px"></div></div>
       </div>
     </div>
-   </div>
   </section>
   <!-- 节点 -->
   <section data-tab="节点">
@@ -697,7 +720,7 @@ nav .ico{display:none}nav .more{display:none}
 <script>
 const $=s=>document.querySelector(s);
 let TOKEN=localStorage.getItem('mp_token')||'',STATE={},TAB='概览',ACTIVE_RULES=[],timers=[],DEVS={},LIVE={},CONNS=[];
-const TABS=['概览','节点','策略组','订阅','规则','DNS','广告拦截','连接','统计','日志','设置'];
+const TABS=['概览','节点','策略组','订阅','规则','DNS','广告拦截','连接','统计','检测','日志','设置'];
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=b=>{b=+b||0;const u=['B','KB','MB','GB','TB'];let i=0;while(b>=1024&&i<4){b/=1024;i++}return b.toFixed(i?(b<10?2:1):0)+' '+u[i]};
 const dcls=ms=>ms===undefined?'mut':ms<=0?'bad':ms<300?'ok':ms<800?'warn':'bad';
@@ -815,8 +838,24 @@ async function qsTest(b){b.disabled=true;b.textContent='测速中…';
   b.disabled=false;b.textContent='测速';loadQS()}
 function renderPMStat(){$('#s-pm').textContent=PM_TXT[STATE.proxy_mode]||'-';
   $('#s-pm2').textContent=STATE.proxy_mode==='tun'?`${STATE.tun.stack} · ${STATE.tun.device}`:STATE.proxy_mode==='tproxy'?('nftables'+(STATE.ipv6?' · IPv4+IPv6':' · IPv4')):'仅 7890 端口可用'}
-async function loadAdStat(){try{const a=await api('/api/adblock');$('#s-ad').textContent=a.enabled?a.stats.today:'未开启';
-  $('#s-ad2').textContent=a.enabled?('规则 '+Object.entries(a.loaded).filter(([k])=>k!=='ad-allow').reduce((s,[,v])=>s+(v||0),0).toLocaleString('zh-CN',{hour12:false})+' 条'):'在“广告拦截”中开启'}catch(e){}}
+async function loadAdStat(){let a;try{a=await api('/api/adblock')}catch(e){return}
+  const n=v=>(+v||0).toLocaleString('zh-CN'),rules=Object.entries(a.loaded||{}).filter(([k])=>k!=='ad-allow').reduce((s,[,v])=>s+(v||0),0);
+  $('#s-ad').textContent=a.enabled?n(a.stats.today):'未开启';$('#s-ad2').textContent=a.enabled?'规则 '+n(rules)+' 条':'在“广告拦截”中开启';
+  const on=$('#ovab-on');on.checked=a.enabled;on.disabled=!!a.updating;
+  on.onchange=async e=>{const v=e.target.checked;try{toast('正在应用…');const j=await api('/api/adblock','PUT',{enabled:v});toast(/下载/.test(j.message||'')?j.message:'广告拦截已'+(v?'开启':'关闭'))}catch(x){toast(x.message)}loadAdStat()};
+  if(!a.enabled){$('#ovab-body').innerHTML=`<div class="empty" style="padding:18px 8px">广告拦截未开启。打开右上角开关即可按已添加的列表拦截${a.lists.length?'':'（还没有列表，点「管理」添加内置规则）'}</div>`;return}
+  // 近 14 天：缺的日期补 0
+  const map=Object.fromEntries((a.stats.days||[]).map(d=>[d.date,d.count])),days=[];
+  for(let k=13;k>=0;k--){const t=new Date(Date.now()-k*864e5),key=t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0');days.push([key,map[key]||0])}
+  days[13][1]=a.stats.today||days[13][1];
+  const mx=Math.max(1,...days.map(d=>d[1])),sum7=days.slice(7).reduce((s,d)=>s+d[1],0);
+  const top=(a.stats.top||[]).slice(0,5),tmx=top.length?top[0][1]:1,act=a.lists.filter(l=>l.enabled).length;
+  $('#ovab-body').innerHTML=`<div class="abk"><div><div class="k">今日拦截</div><div class="v">${n(a.stats.today)}</div></div><div><div class="k">近 7 天</div><div class="v">${n(sum7)}</div></div><div><div class="k">规则</div><div class="v">${n(rules)}</div><div class="s">${act} 个列表${a.dns?' · DNS 层':''}</div></div></div>
+    <div class="abd">${days.map(([d,c],i)=>`<div class="abc${i===13?' td':''}" title="${d.slice(5)}：${n(c)} 次"><i style="height:${c?Math.max(4,c/mx*100):0}%"></i></div>`).join('')}</div>
+    <div class="abdl"><span>${days[0][0].slice(5)}</span><span>今天</span></div>
+    <div class="lbl" style="margin-top:12px">今日拦截最多</div>
+    ${top.length?top.map(([d,c])=>`<div class="abt"><span class="w">${esc(d)}</span><div class="abtb"><div class="bar" style="width:${Math.max(3,c/tmx*100)}%"></div></div><b>${n(c)}</b></div>`).join(''):'<div class="mut small">今天还没有拦截记录</div>'}
+    ${a.dns?'<div class="mut small" style="margin-top:8px">已开启 DNS 层拦截：直接返回 NXDOMAIN 的请求不计入次数</div>':''}`}
 function renderMode(){document.querySelectorAll('#mode button').forEach(b=>{b.classList.toggle('on',b.dataset.m===STATE.mode);
   b.onclick=async()=>{try{await api('/api/mode','PUT',{mode:b.dataset.m});STATE.mode=b.dataset.m;renderMode();toast('已切换模式')}catch(e){toast(e.message)}}})}
 const WDS={ok:['ok','正常'],restarting:['warn','正在重启核心'],direct:['bad','已切换直连'],stopped:['mut','核心已手动停止'],off:['mut','已关闭']};
@@ -837,10 +876,13 @@ async function tickOnce(){
   if((TAB==='连接'&&!$('#c-pause').checked)||(TAB==='概览'&&_cn%3===0)){
     try{const c=await api('/api/conns');CONNS=c.connections||[];$('#s-conn').textContent=CONNS.length;
       $('#s-devs').textContent=new Set(CONNS.map(x=>x.metadata?.sourceIP).filter(Boolean)).size+' 台设备';
-      if(TAB==='概览')renderDevices(CONNS);
       if(TAB==='连接'&&!$('#c-pause').checked)renderConns(CONNS)}catch(e){$('#s-conn').textContent='-'}}}
-async function testSites(){if(!$('#sites').children.length)$('#sites').innerHTML='<span class="mut">检测中…</span>';
-  try{const r=await api('/api/delay');$('#sites').innerHTML=r.map(s=>`<div class="node"><div class="n">${esc(s.name)}</div><div class="d ${dcls(s.ms)}" style="font-size:17px;font-weight:650">${dtxt(s.ms)}</div></div>`).join('')}catch(e){$('#sites').innerHTML=`<span class="bad">${esc(e.message)}</span>`}}
+// 站点延迟柱状图：柱高按 1000 ms 封顶的平方根刻度，低延迟之间也能看出差别；超时显示满高红柱
+async function testSites(){const el=$('#sites');if(!el.children.length)el.innerHTML='<span class="mut">检测中…</span>';
+  try{const r=await api('/api/delay');if(!r.length){el.innerHTML='<span class="mut">没有检测站点，在 设置 → 测试站点 中添加</span>';return}
+    el.innerHTML=r.map(s=>{const ok=s.ms>0,h=ok?Math.max(6,Math.sqrt(Math.min(s.ms,1000)/1000)*100):100;
+      return `<div class="lc" title="${esc(s.name)}：${dtxt(s.ms)}"><div class="lv ${dcls(s.ms)}">${ok?s.ms:'超时'}</div><div class="lt"><div class="lb ${dcls(s.ms)}${ok?'':' to'}" style="height:${h}%"></div></div><div class="ln">${esc(s.name)}</div></div>`}).join('')}
+  catch(e){el.innerHTML=`<span class="bad">${esc(e.message)}</span>`}}
 async function testUnlock(){const b=$('#unlock-btn');b.disabled=true;b.textContent='检测中…';$('#unlock').innerHTML='<span class="mut" style="grid-column:1/-1">检测中，约需 10 秒…</span>';
   try{const r=await api('/api/unlock');$('#unlock').innerHTML=r.map(s=>{const c=s.ok===true?'ok':s.ok==='partial'?'warn':'bad';
     return `<div class="node"><div class="n">${esc(s.name)}</div><div class="d ${c}" style="font-size:14px;font-weight:600;justify-content:flex-start">${esc(s.text)}${s.region?` <span class="tag">${esc(s.region)}</span>`:''}</div></div>`}).join('')}
@@ -1403,7 +1445,7 @@ async function runDiag(){const b=$('#diag-btn');b.disabled=true;b.textContent='�
       return `<div class="diag"><span class="ic ${c}">${c==='ok'?'✓':c==='warn'?'!':'✕'}</span><div class="sp"><div class="row"><b class="sp" style="font-weight:600">${esc(x.name)}</b><span class="mut small w" style="text-align:right">${esc(x.detail)}</span></div>${x.fix?`<div class="small ${c}" style="margin-top:2px">${esc(x.fix)}</div>`:''}</div></div>`}).join('')}
   catch(e){$('#diag').innerHTML=`<span class="bad">${esc(e.message)}</span>`}b.disabled=false;b.textContent='一键诊断'}
 
-// 流量曲线 & 设备排行
+// 流量曲线
 const HIST={up:[],down:[]};
 function pushHist(u,d){HIST.up.push(u);HIST.down.push(d);if(HIST.up.length>120){HIST.up.shift();HIST.down.shift()}if(TAB==='概览')drawChart()}
 function drawChart(){const c=$('#chart');if(!c||c.offsetParent===null)return;const r=devicePixelRatio,w=c.width=c.clientWidth*r,h=c.height=110*r,x=c.getContext('2d');
@@ -1413,11 +1455,6 @@ function drawChart(){const c=$('#chart');if(!c||c.offsetParent===null)return;con
   [[HIST.down,cssv('--pri')],[HIST.up,cssv('--ok')]].forEach(([a,col])=>{if(a.length<2)return;const pts=a.map((v,i)=>[w-(a.length-1-i)*(w/119),h-3*r-(v/max)*(h-22*r)]);
     const g=x.createLinearGradient(0,0,0,h);g.addColorStop(0,col+'55');g.addColorStop(1,col+'00');x.beginPath();x.moveTo(pts[0][0],h);pts.forEach(p=>x.lineTo(p[0],p[1]));x.lineTo(pts[pts.length-1][0],h);x.closePath();x.fillStyle=g;x.fill();
     x.strokeStyle=col;x.lineWidth=2*r;x.lineJoin='round';x.beginPath();pts.forEach((p,i)=>i?x.lineTo(p[0],p[1]):x.moveTo(p[0],p[1]));x.stroke()})}
-function renderDevices(list){$('#dev-tw').classList.toggle('hide',!list.length);$('#dev-empty').classList.toggle('hide',!!list.length);const m={};list.forEach(c=>{const ip=c.metadata?.sourceIP||'';const e=m[ip]||(m[ip]={n:0,d:0,u:0,h:{}});e.n++;e.d+=c.download;e.u+=c.upload;
-  const host=c.metadata?.host||c.metadata?.destinationIP;e.h[host]=(e.h[host]||0)+c.download});
-  $('#devices').innerHTML=Object.entries(m).sort((a,b)=>b[1].d-a[1].d).slice(0,10).map(([ip,e])=>{const top=Object.entries(e.h).sort((a,b)=>b[1]-a[1])[0]?.[0]||'';
-    return `<tr><td>${devCell(ip)}</td><td>${e.n}</td><td>${fmt(e.d)}</td><td>${fmt(e.u)}</td><td class="w" style="max-width:200px;min-width:120px">${esc(top)}</td></tr>`}).join('')||'<tr><td class="mut" colspan="5">暂无连接</td></tr>'}
-
 // 规则集
 const RS_BASE='https://github.com/MetaCubeX/meta-rules-dat/raw/meta/geo/geosite/';
 function presetRS(name,site,target){saveRS(STATE.rulesets.filter(r=>r.name!==name).concat([{name,url:RS_BASE+site+'.mrs',behavior:'domain',format:'mrs',target}]))}
