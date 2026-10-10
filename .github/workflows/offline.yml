@@ -1,0 +1,99 @@
+# 离线安装包：面板 + mihomo / mihomo Smart / sing-box 内核 + geo 数据 + sing-box 规则集 + apk 依赖
+# 推送面板文件、每周一次（拉取最新内核和数据）或手动触发时，重新打包并发布到 Releases 的 offline 标签
+name: Offline bundle
+
+on:
+  push:
+    branches: [Hk001]
+    paths:
+      - server.py
+      - index.html
+      - install.sh
+      - offline.sh
+      - tproxy.sh
+      - selftest.sh
+      - init.d/**
+      - .github/offline/**
+      - .github/workflows/offline.yml
+  schedule:
+    - cron: "0 20 * * 0"   # 每周一 04:00（北京时间）
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: offline-bundle
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        alpine: ["3.22", "3.23", "3.24"]
+        runner: [ubuntu-24.04-arm, ubuntu-24.04]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 打包（Alpine ${{ matrix.alpine }} 容器，与 runner 同架构）
+        run: |
+          mkdir -p out
+          docker run --rm -v "$PWD:/src:ro" -v "$PWD/out:/out" alpine:${{ matrix.alpine }} \
+            sh /src/.github/offline/build.sh /src /out
+          ls -lh out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.runner }}-${{ matrix.alpine }}
+          path: out/*.tar.gz
+          retention-days: 3
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: 发布到 Releases「offline」
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          cd dist
+          sha256sum *.tar.gz > SHA256SUMS
+          cp ../offline.sh .
+          F=$(ls shunt-offline-aarch64-alpine3.24.tar.gz 2>/dev/null || ls *.tar.gz | head -n1)
+          V=$(tar -xzOf "$F" shunt-offline/offline/VERSION)
+          PANEL=$(echo "$V" | sed -n 's/^panel=//p')
+          {
+            echo "面板 v$PANEL ｜ mihomo $(echo "$V" | sed -n 's/^mihomo=//p') ｜ mihomo Smart $(echo "$V" | sed -n 's/^mihomo-smart=//p') ｜ sing-box $(echo "$V" | sed -n 's/^sing-box=//p') ｜ 打包 $(echo "$V" | sed -n 's/^built=//p')"
+            echo
+            echo "包含面板、三个内核、geo 数据、LightGBM 模型、sing-box 默认规则集和全部 apk 依赖，安装全程不需要联网。"
+            echo
+            echo "**一键安装（设备能联网）**"
+            echo '```sh'
+            echo "wget -qO- https://raw.githubusercontent.com/${{ github.repository }}/Hk001/offline.sh | sh"
+            echo "# 国内"
+            echo "wget -qO- https://ghfast.top/https://raw.githubusercontent.com/${{ github.repository }}/Hk001/offline.sh | sh -s -- --cn"
+            echo '```'
+            echo
+            echo "**本地安装（设备不联网）**：按 \`uname -m\` 和 \`cat /etc/alpine-release\` 下载对应的包，传到设备后："
+            echo '```sh'
+            echo "tar xzf shunt-offline-aarch64-alpine3.24.tar.gz && sh shunt-offline/install.sh"
+            echo '```'
+            echo
+            echo "已安装的设备用离线包升级内核：\`sh shunt-offline/install.sh --update-core\`"
+          } > notes.md
+          if gh release view offline >/dev/null 2>&1; then
+            gh release edit offline --title "离线安装包 · 面板 v$PANEL" --notes-file notes.md
+            for a in $(gh release view offline --json assets -q '.assets[].name'); do
+              case " $(ls | tr '\n' ' ') " in *" $a "*) ;; *) gh release delete-asset offline "$a" -y ;; esac
+            done
+          else
+            gh release create offline --title "离线安装包 · 面板 v$PANEL" --notes-file notes.md --target "${{ github.sha }}"
+          fi
+          git tag -f offline "${{ github.sha }}" && git push -f origin refs/tags/offline
+          gh release upload offline *.tar.gz SHA256SUMS offline.sh --clobber
