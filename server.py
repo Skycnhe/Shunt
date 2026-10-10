@@ -103,7 +103,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "6.9.1"
+PANEL_VERSION = "6.9.2"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -3996,6 +3996,9 @@ class Stats:
             self.data["days"] = {k: self.data["days"][k] for k in keep}
             hk = sorted(self.data["hours"])[-48:]
             self.data["hours"] = {k: self.data["hours"][k] for k in hk}
+            dk = sorted(self.data["dns5"])[-288:]
+            self.data["dns5"] = {k: self.data["dns5"][k] for k in dk}
+            self.data["dns_recent"] = list(self.dns_recent)
             write_json(STATS_FILE, self.data)
         self.saved = time.time()
 
@@ -4711,6 +4714,8 @@ class AdStats:
         self.data = read_json(AB_STATS_FILE, {"days": {}})
         self.data.setdefault("days", {})
         self.data.setdefault("hours", {})
+        self.data.setdefault("dns5", {})
+        self.dns_recent = deque(self.data.get("dns_recent") or [], maxlen=60)  # 最近 60 次原始耗时，刚启动时画曲线用
         self.saved = time.time()
 
     def hour(self):
@@ -4721,6 +4726,12 @@ class AdStats:
             h = self.hour()
             h["dns"][0] += ms
             h["dns"][1] += 1
+            t = time.localtime()
+            k = time.strftime("%Y-%m-%d %H:", t) + "%02d" % (t.tm_min // 5 * 5)  # 5 分钟一段，24 小时 288 段
+            b = self.data["dns5"].setdefault(k, [0, 0])
+            b[0] += ms
+            b[1] += 1
+            self.dns_recent.append(ms)
 
     def hit(self, host, prov):
         if host.startswith("["):
@@ -4756,6 +4767,9 @@ class AdStats:
             self.data["days"] = {k: self.data["days"][k] for k in keep}
             hk = sorted(self.data["hours"])[-48:]
             self.data["hours"] = {k: self.data["hours"][k] for k in hk}
+            dk = sorted(self.data["dns5"])[-288:]
+            self.data["dns5"] = {k: self.data["dns5"][k] for k in dk}
+            self.data["dns_recent"] = list(self.dns_recent)
             for b in self.data["days"].values():
                 b["top"] = dict(sorted(b["top"].items(), key=lambda x: -x[1])[:500])
             write_json(AB_STATS_FILE, self.data)
@@ -4765,6 +4779,8 @@ class AdStats:
         with self.lock:
             days = copy.deepcopy(self.data["days"])
             hours = copy.deepcopy(self.data["hours"])
+            d5 = dict(self.data["dns5"])
+            recent = list(self.dns_recent)
         b = days.get(time.strftime("%Y-%m-%d"), {"count": 0, "top": {}, "lists": {}})
         now = int(time.time() // 3600 * 3600)
         h24 = []
@@ -4773,31 +4789,50 @@ class AdStats:
             e = hours.get(k) or {"req": 0, "blk": 0, "dns": [0, 0]}
             h24.append({"h": k[-2:], "req": e["req"], "blk": e["blk"], "dns": round(e["dns"][0] / e["dns"][1], 1) if e["dns"][1] else None})
         return {"today": b["count"], "top": sorted(b["top"].items(), key=lambda x: -x[1])[:20], "lists": b["lists"],
-                "days": [{"date": k, "count": days[k]["count"]} for k in sorted(days)], "hours": h24}
+                "days": [{"date": k, "count": days[k]["count"]} for k in sorted(days)], "hours": h24,
+                "dns": self.dns_report(d5, recent)}
+
+    @staticmethod
+    def dns_report(d5, recent):
+        """解析耗时：24 小时 288 个 5 分钟段（null = 该段没采样）；有效段不足 2 个时（刚安装 / 刚重启）用最近的原始采样画曲线"""
+        now = int(time.time() // 300 * 300)
+        seg = []
+        for i in range(287, -1, -1):
+            t = time.localtime(now - i * 300)
+            b = d5.get(time.strftime("%Y-%m-%d %H:", t) + "%02d" % (t.tm_min // 5 * 5))
+            seg.append(round(b[0] / b[1], 1) if b and b[1] else None)
+        vals = [v for v in seg if v is not None]
+        tot = sum(b[0] for b in d5.values() if b[1])
+        cnt = sum(b[1] for b in d5.values() if b[1])
+        return {"avg": round(tot / cnt, 1) if cnt else None, "last": recent[-1] if recent else None, "samples": cnt,
+                "series": seg if len(vals) >= 2 else recent[-30:], "mode": "5min" if len(vals) >= 2 else "recent",
+                "core": active_core()}
+
+    def dns_probe(self):
+        """经核心解析器查随机子域名（绕过缓存）：国内域名走直连 DNS、国外域名走代理 DNS，记录平均耗时"""
+        if active_core() == "singbox":  # sing-box 的 Clash API 没有 /dns/query
+            return
+        ms = []
+        for base in ("baidu.com", "google.com"):
+            name = "shunt-%s.%s" % (secrets.token_hex(4), base)
+            st = time.time()
+            code, _ = core("GET", f"/dns/query?name={name}&type=A", timeout=8)
+            if code == 200:
+                ms.append(max(1, int((time.time() - st) * 1000)))
+        if ms:
+            self.dns_sample(round(sum(ms) / len(ms)))
 
     def dns_loop(self):
-        """每分钟经核心解析器查一次随机子域名（绕过缓存）：国内域名走直连 DNS、国外域名走代理 DNS，记录耗时"""
-        while True:
-            time.sleep(60)
-            try:
-                if active_core() == "singbox":
-                    continue
-                for base in ("baidu.com", "google.com"):
-                    name = "shunt-%s.%s" % (secrets.token_hex(4), base)
-                    st = time.time()
-                    code, _ = core("GET", f"/dns/query?name={name}&type=A", timeout=8)
-                    if code == 200:
-                        self.dns_sample(max(1, int((time.time() - st) * 1000)))
-            except Exception:
-                pass
-
-    def loop(self):
+        """启动后先连测 3 次（每 10 秒）让曲线马上有数据，之后每 60 秒一次"""
+        time.sleep(8)
+        n = 0
         while True:
             try:
-                core_stream("/logs?level=info", self.sink, {})
+                self.dns_probe()
             except Exception:
                 pass
-            time.sleep(3)
+            n += 1
+            time.sleep(10 if n < 3 else 60)
 
 
 AD_STATS = None

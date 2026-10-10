@@ -841,7 +841,9 @@ async function qsTest(b){b.disabled=true;b.textContent='测速中…';
 function renderPMStat(){$('#s-pm').textContent=PM_TXT[STATE.proxy_mode]||'-';
   $('#s-pm2').textContent=STATE.proxy_mode==='tun'?`${STATE.tun.stack} · ${STATE.tun.device}`:STATE.proxy_mode==='tproxy'?('nftables'+(STATE.ipv6?' · IPv4+IPv6':' · IPv4')):'仅 7890 端口可用'}
 // 迷你曲线：平滑折线 + 渐变填充，null 视为缺数据跳过
-function spark(vals,col){const pts=vals.map((v,i)=>[i,v]).filter(p=>p[1]!=null);if(pts.length<2)return '<div class="spk mut small" style="display:grid;place-items:center">数据不足</div>';
+function spark(vals,col,empty){let pts=vals.map((v,i)=>[i,v]).filter(p=>p[1]!=null);
+  if(!pts.length)return `<div class="spk mut small" style="display:grid;place-items:center">${empty||'暂无数据'}</div>`;
+  if(pts.length===1){vals=[pts[0][1],pts[0][1]];pts=[[0,pts[0][1]],[1,pts[0][1]]]}  // 只有一个点时画一条平线
   const n=vals.length-1||1,mx=Math.max(...pts.map(p=>p[1]))||1,mn=Math.min(0,...pts.map(p=>p[1])),W=200,H=60,
     xy=pts.map(([i,v])=>[i/n*W,H-4-(v-mn)/(mx-mn||1)*(H-10)]);
   let d='M'+xy[0][0].toFixed(1)+','+xy[0][1].toFixed(1);for(let k=1;k<xy.length;k++){const [x0,y0]=xy[k-1],[x1,y1]=xy[k],cx=(x0+x1)/2;d+=` C${cx.toFixed(1)},${y0.toFixed(1)} ${cx.toFixed(1)},${y1.toFixed(1)} ${x1.toFixed(1)},${y1.toFixed(1)}`}
@@ -854,10 +856,11 @@ async function loadAdStat(){let a;try{a=await api('/api/adblock')}catch(e){retur
   const on=$('#ovab-on');on.checked=a.enabled;on.disabled=!!a.updating;
   on.onchange=async e=>{const v=e.target.checked;try{toast('正在应用…');const j=await api('/api/adblock','PUT',{enabled:v});toast(/下载/.test(j.message||'')?j.message:'广告拦截已'+(v?'开启':'关闭'))}catch(x){toast(x.message)}loadAdStat()};
   const H=a.stats.hours||[],req=H.reduce((s,h)=>s+h.req,0),blk=H.reduce((s,h)=>s+h.blk,0),dv=H.filter(h=>h.dns!=null),
-    dns=dv.length?Math.round(dv.reduce((s,h)=>s+h.dns,0)/dv.length):null,pct=req?(blk/req*100).toFixed(1)+'%':'',
+    D=a.stats.dns||{},dns=D.avg!=null?Math.round(D.avg):dv.length?Math.round(dv.reduce((s,h)=>s+h.dns,0)/dv.length):null,
+    dser=D.series||H.map(h=>h.dns),dsub=D.core==='singbox'?'sing-box 内核不支持':D.samples?(D.mode==='recent'?'最近 '+D.series.length+' 次':'24 小时 · '+D.samples+' 次')+(D.last!=null?' · 最新 '+D.last+' ms':''):'',pct=req?(blk/req*100).toFixed(1)+'%':'',
     top=(a.stats.top||[]).slice(0,5),tmx=top.length?top[0][1]:1,O='#ff9f0a';
   $('#ovab-body').innerHTML=`<div class="dft">
-    <div class="card dfc"><div class="k">平均解析耗时</div><div class="v">${dns==null?'-':dns+'<small>ms</small>'}</div>${spark(H.map(h=>h.dns),cssv('--ok'))}</div>
+    <div class="card dfc"><div class="k row"><span class="sp">平均解析耗时</span><span class="mut" style="font-size:11.5px">${esc(dsub)}</span></div><div class="v">${dns==null?'-':dns+'<small>ms</small>'}</div>${spark(dser,cssv('--ok'),D.core==='singbox'?'sing-box 内核不支持':'等待首次检测（约 10 秒）')}</div>
     <div class="card dfc"><div class="k">连接请求</div><div class="v">${n(req)}</div>${spark(H.map(h=>h.req),cssv('--pri'))}</div>
     <div class="card dfc"><div class="k row"><span class="sp">已拦截</span><span style="color:${O}">${a.enabled?pct:'未开启'}</span></div><div class="v" style="color:${O}">${n(blk)}</div>${spark(H.map(h=>h.blk),O)}</div>
     <div class="card dfc"><div class="k">被拦截域名排行</div><div class="dtop">${top.length?top.map(([d,c])=>`<div class="dti" title="${esc(d)}：${n(c)} 次"><div class="row"><span class="sp w">${esc(d)}</span><b>${n(c)}</b></div><div class="dtb"><i style="width:${Math.max(3,c/tmx*100)}%"></i></div></div>`).join(''):'<div class="mut small" style="margin-top:8px">'+(a.enabled?'今天还没有拦截记录':'广告拦截未开启')+'</div>'}</div></div>
