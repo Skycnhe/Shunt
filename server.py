@@ -103,7 +103,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "6.9.6"
+PANEL_VERSION = "6.9.7"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -1256,6 +1256,12 @@ def reload_core(prev=None):
         sb = active_core(d) == "singbox"
         if sb:
             final = SB_CONF
+            try:  # 广告 / 白名单列表改动后，先把对应的 sing-box 规则集文件转换好，否则这些规则会被跳过
+                need = {k: v for k, v in build_singbox(d)[2].items() if v.get("kind") == "adblock"}
+                if need:
+                    sb_sync_assets(d, need=need)
+            except Exception as e:
+                print("sb adblock sync", e, flush=True)
             tmp = write_sb_config(d, final + ".new")
             ok, err = check_sb_config(tmp)
         else:
@@ -4936,6 +4942,51 @@ class AdStats:
         if time.time() - self.saved > 60:
             self.flush()
 
+    SB_LINE = re.compile(r"^\[(\d+) \d+ms\] (.*)$")
+    SB_TO = re.compile(r"inbound/(\w+)\[([^\]]+)\]: inbound (?:packet )?connection to (\S+?):\d+$")
+    SB_SNIFF = re.compile(r"router: sniffed (?:packet )?protocol: \w+, domain: (\S+)")
+    SB_REJ = re.compile(r"router: match\[\d+\] .*?\brule_set=(ad-[0-9a-z]+).*=> reject")
+    SB_QN = re.compile(r"dns: exchange (\S+?)\.? IN ")
+    SB_DREJ = re.compile(r"dns: match\[\d+\] .*?\brule_set=(ad-[0-9a-z]+).*=> (?:predefined|reject)")
+
+    def sink_sb(self, line):
+        """sing-box debug 日志：按连接 ID 记住目标域名，命中 ad- 规则集的 reject / DNS 拦截记为一次拦截"""
+        try:
+            msg = json.loads(line).get("payload", "")
+        except Exception:
+            return
+        m = self.SB_LINE.match(msg)
+        if not m:
+            return
+        cid, body = m.group(1), m.group(2)
+        hosts = self.__dict__.setdefault("_sb_hosts", {})
+        if len(hosts) > 5000:
+            hosts.clear()
+        m = self.SB_TO.search(body)
+        if m:
+            if m.group(2) != "dns-in":
+                hosts[cid] = m.group(3)
+                with self.lock:
+                    self.hour()["req"] += 1
+        elif "sniffed" in body:
+            m = self.SB_SNIFF.search(body)
+            if m:
+                hosts[cid] = m.group(1)
+        elif "=> reject" in body:
+            m = self.SB_REJ.search(body)
+            if m:
+                self.hit(hosts.pop(cid, "?"), m.group(1))
+        elif body.startswith("dns: "):
+            m = self.SB_QN.search(body)
+            if m:
+                hosts["q" + cid] = m.group(1)
+            else:
+                m = self.SB_DREJ.search(body)
+                if m:
+                    self.hit(hosts.pop("q" + cid, "?"), m.group(1))
+        if time.time() - self.saved > 60:
+            self.flush()
+
     def flush(self):
         with self.lock:
             keep = sorted(self.data["days"])[-14:]
@@ -5012,7 +5063,8 @@ class AdStats:
     def loop(self):
         while True:
             try:
-                core_stream("/logs?level=info", self.sink, {})
+                sb = active_core() == "singbox"  # sing-box 的规则命中只在 debug 级别日志里
+                core_stream("/logs?level=debug" if sb else "/logs?level=info", self.sink_sb if sb else self.sink, {})
             except Exception:
                 pass
             time.sleep(3)
