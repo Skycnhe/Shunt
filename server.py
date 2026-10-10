@@ -103,7 +103,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "6.9.3"
+PANEL_VERSION = "6.9.4"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -2519,19 +2519,12 @@ def sb_remote_version(channel, gh):
     return m.group(1)
 
 
-def sb_install(channel, gh, force=False):
-    """下载 sing-box 到 SB_BIN（旧版本备份为 .bak）；返回版本号"""
-    import tarfile
-    arch = sb_arch()
-    if not arch:
-        raise ValueError(f"sing-box 不支持当前 CPU 架构：{os.uname().machine}")
-    ver = sb_remote_version(channel, gh)
-    cur = sb_version()
-    if cur == ver and not force:
-        return ver, False
-    url = f"{SB_REPO}/download/v{ver}/sing-box-{ver}-linux-{arch}.tar.gz"
-    _cu("下载", 10, f"下载 sing-box-{ver}-linux-{arch}.tar.gz")
-    tmp = SB_BIN + ".new"
+def is_musl():
+    import glob
+    return bool(glob.glob("/lib/ld-musl-*")) or os.path.isfile("/etc/alpine-release")
+
+
+def sb_fetch(url, gh):
     with open_url(url, gh, timeout=60) as r:
         total = int(r.headers.get("Content-Length") or 0)
         buf, n = io.BytesIO(), 0
@@ -2545,18 +2538,48 @@ def sb_install(channel, gh, force=False):
             buf.write(chunk)
             if total:
                 CORE_UPD["pct"] = 10 + int(50 * n / total)
+    if total and n < total:
+        raise ValueError(f"下载不完整 {n}/{total}")
     buf.seek(0)
-    with tarfile.open(fileobj=buf, mode="r:gz") as tf:
-        mem = next((m for m in tf.getmembers() if m.isfile() and os.path.basename(m.name) == "sing-box"), None)
-        if not mem:
-            raise ValueError("压缩包里没有 sing-box 程序")
-        with tf.extractfile(mem) as src, open(tmp, "wb") as f:
-            shutil.copyfileobj(src, f)
-    os.chmod(tmp, 0o755)
-    nv = sb_version(tmp)
-    if not nv:
+    return buf
+
+
+def sb_install(channel, gh, force=False):
+    """下载 sing-box 到 SB_BIN（旧版本备份为 .bak）；返回版本号"""
+    import tarfile
+    arch = sb_arch()
+    if not arch:
+        raise ValueError(f"sing-box 不支持当前 CPU 架构：{os.uname().machine}")
+    ver = sb_remote_version(channel, gh)
+    cur = sb_version()
+    if cur == ver and not force:
+        return ver, False
+    # 1.14 起普通 linux 包依赖 glibc，Alpine(musl) 上跑不起来，优先下 -musl 版
+    variants = ["-musl", "", "-glibc"] if is_musl() else ["", "-glibc", "-musl"]
+    tmp, errs, nv = SB_BIN + ".new", [], ""
+    for v in variants:
+        name = f"sing-box-{ver}-linux-{arch}{v}.tar.gz"
+        _cu("下载", 10, f"下载 {name}")
+        try:
+            buf = sb_fetch(f"{SB_REPO}/download/v{ver}/{name}", gh)
+            with tarfile.open(fileobj=buf, mode="r:gz") as tf:
+                mem = next((m for m in tf.getmembers() if m.isfile() and os.path.basename(m.name) == "sing-box"), None)
+                if not mem:
+                    raise ValueError("压缩包里没有 sing-box 程序")
+                with tf.extractfile(mem) as src, open(tmp, "wb") as f:
+                    shutil.copyfileobj(src, f)
+        except Exception as e:
+            errs.append(f"{name}: {str(e)[:100]}")
+            continue
+        os.chmod(tmp, 0o755)
+        nv = sb_version(tmp)
+        if nv:
+            break
+        _, out = sh(f"'{tmp}' version", timeout=15)
+        errs.append(f"{name}: 无法运行 {out.strip()[:100]}")
         os.remove(tmp)
-        raise ValueError("下载的 sing-box 无法运行（架构不匹配或文件损坏）")
+    if not nv:
+        raise ValueError("下载的 sing-box 无法运行（架构不匹配或文件损坏）：" + "；".join(errs))
     if os.path.isfile(SB_BIN):
         shutil.copy2(SB_BIN, SB_BIN + ".bak")
     os.replace(tmp, SB_BIN)
@@ -3994,11 +4017,6 @@ class Stats:
         with self.lock:
             keep = sorted(self.data["days"])[-60:]
             self.data["days"] = {k: self.data["days"][k] for k in keep}
-            hk = sorted(self.data["hours"])[-48:]
-            self.data["hours"] = {k: self.data["hours"][k] for k in hk}
-            dk = sorted(self.data["dns5"])[-288:]
-            self.data["dns5"] = {k: self.data["dns5"][k] for k in dk}
-            self.data["dns_recent"] = list(self.dns_recent)
             write_json(STATS_FILE, self.data)
         self.saved = time.time()
 
