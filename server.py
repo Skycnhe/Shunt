@@ -103,7 +103,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "6.9.8"
+PANEL_VERSION = "6.9.9"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -5036,14 +5036,17 @@ class AdStats:
 
     def dns_probe(self):
         """经核心解析器查随机子域名（绕过缓存）：国内域名走直连 DNS、国外域名走代理 DNS，记录平均耗时"""
-        if active_core() == "singbox":  # sing-box 的 Clash API 没有 /dns/query
-            return
+        sb = active_core() == "singbox"  # sing-box 的 Clash API 没有 /dns/query，改为直接向 dns-in(1053) 发 UDP 查询
         ms = []
         for base in ("baidu.com", "google.com"):
             name = "shunt-%s.%s" % (secrets.token_hex(4), base)
             st = time.time()
-            code, _ = core("GET", f"/dns/query?name={name}&type=A", timeout=8)
-            if code == 200:
+            if sb:
+                ok = udp_dns_query(name, 1053, timeout=8)
+            else:
+                code, _ = core("GET", f"/dns/query?name={name}&type=A", timeout=8)
+                ok = code == 200
+            if ok:
                 ms.append(max(1, int((time.time() - st) * 1000)))
         if ms:
             self.dns_sample(round(sum(ms) / len(ms)))
@@ -5074,6 +5077,30 @@ AD_STATS = None
 
 
 # ---------------------------------------------------------------- 实时速率 / 内存（订阅 /traffic 与 /memory 流）
+def udp_dns_query(name, port=1053, host="127.0.0.1", timeout=8):
+    """向本机 DNS 端口发一个 A 记录查询；收到同 ID 的应答（含 NXDOMAIN）即视为成功"""
+    qid = secrets.randbits(16)
+    pkt = qid.to_bytes(2, "big") + b"\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
+    for lab in name.strip(".").split("."):
+        b = lab.encode("idna") if lab else b""
+        pkt += bytes([len(b)]) + b
+    pkt += b"\x00\x00\x01\x00\x01"
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.settimeout(timeout)
+    try:
+        s.sendto(pkt, (host, port))
+        end = time.time() + timeout
+        while time.time() < end:
+            data = s.recv(1500)
+            if len(data) >= 12 and int.from_bytes(data[:2], "big") == qid and data[2] & 0x80:
+                return True
+    except Exception:
+        return False
+    finally:
+        s.close()
+    return False
+
+
 LIVE = {"up": 0, "down": 0, "upTotal": 0, "downTotal": 0, "inuse": 0, "oslimit": 0, "t": 0}
 
 
@@ -5087,7 +5114,13 @@ def live_loop(path):
             if j.get("inuse"):  # 首条消息固定为 0
                 LIVE["inuse"], LIVE["oslimit"] = j["inuse"], j.get("oslimit", 0)
         else:
-            LIVE.update({k: j.get(k, 0) for k in ("up", "down", "upTotal", "downTotal")})
+            LIVE.update({k: j.get(k, 0) for k in ("up", "down")})
+            if "upTotal" in j or "downTotal" in j:
+                LIVE.update(upTotal=j.get("upTotal", 0), downTotal=j.get("downTotal", 0))
+            elif time.time() - LIVE.get("_tt", 0) > 2:  # sing-box 的 /traffic 不带累计值，从 /connections 取
+                LIVE["_tt"] = time.time()
+                c = core_json("/connections", timeout=3) or {}
+                LIVE.update(upTotal=int(c.get("uploadTotal") or 0), downTotal=int(c.get("downloadTotal") or 0))
             LIVE["t"] = time.time()
     while True:
         try:

@@ -870,7 +870,7 @@ async function loadAdStat(){let a;try{a=await api('/api/adblock')}catch(e){retur
   on.onchange=async e=>{const v=e.target.checked;try{toast('正在应用…');const j=await api('/api/adblock','PUT',{enabled:v});toast(/下载/.test(j.message||'')?j.message:'广告拦截已'+(v?'开启':'关闭'))}catch(x){toast(x.message)}loadAdStat()};
   const H=a.stats.hours||[],req=H.reduce((s,h)=>s+h.req,0),blk=H.reduce((s,h)=>s+h.blk,0),dv=H.filter(h=>h.dns!=null),
     D=a.stats.dns||{},dns=D.avg!=null?Math.round(D.avg):dv.length?Math.round(dv.reduce((s,h)=>s+h.dns,0)/dv.length):null,
-    dser=D.series||H.map(h=>h.dns),dsub=D.core==='singbox'?'sing-box 内核不支持':D.samples?(D.mode==='recent'?'最近 '+D.series.length+' 次':'24 小时 · '+D.samples+' 次')+(D.last!=null?' · 最新 '+D.last+' ms':''):'',pct=req?(blk/req*100).toFixed(1)+'%':'',
+    dser=D.series||H.map(h=>h.dns),dsub=D.samples?(D.mode==='recent'?'最近 '+D.series.length+' 次':'24 小时 · '+D.samples+' 次')+(D.last!=null?' · 最新 '+D.last+' ms':''):'',pct=req?(blk/req*100).toFixed(1)+'%':'',
     top=(a.stats.top||[]).slice(0,5),tmx=top.length?top[0][1]:1,O='#ff9f0a';
   $('#ovab-body').innerHTML=`<div class="dft">
     <div class="card dfc"><div class="k row"><span class="sp">平均解析耗时</span><span class="mut" style="font-size:11.5px">${esc(dsub)}</span></div><div class="v">${dns==null?'-':dns+'<small>ms</small>'}</div>${spark(dser,cssv('--ok'),D.core==='singbox'?'sing-box 内核不支持':'等待首次检测（约 10 秒）')}</div>
