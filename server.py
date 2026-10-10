@@ -103,7 +103,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "6.9.4"
+PANEL_VERSION = "6.9.5"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -540,7 +540,39 @@ def parse_link(line):
             if truthy(q1(qs, "disable_sni")):
                 p["disable-sni"] = True
             return p
-    raise ValueError("不支持的链接类型")
+    if scheme in ("anytls", "hysteria", "hy", "socks", "socks5", "socks5h"):
+        u = urlsplit(line)
+        qs = parse_qs(u.query)
+        host, port = host_port(u.netloc)
+        port = re.split(r"[,\-]", port)[0]
+        name = unquote(u.fragment)
+        user = unquote(u.username or "")
+        pw = unquote(u.password) if u.password is not None else None
+        if scheme == "anytls":
+            p = {"name": name, "type": "anytls", "server": host, "port": int(port), "password": user, "udp": True}
+            common_tls(p, qs, "sni")
+            return p
+        if scheme in ("hysteria", "hy"):
+            p = {"name": name, "type": "hysteria", "server": host, "port": int(port), "udp": True,
+                 "up": q1(qs, "upmbps", "up", default="10"), "down": q1(qs, "downmbps", "down", default="50")}
+            auth = q1(qs, "auth", "auth_str") or user
+            if auth:
+                p["auth-str"] = auth
+            if q1(qs, "obfsParam", "obfs-password", "obfs"):
+                p["obfs"] = q1(qs, "obfsParam", "obfs-password", "obfs")
+            common_tls(p, qs, "sni")
+            p.pop("client-fingerprint", None)
+            return p
+        if pw is None and user and ":" not in user:  # socks://base64(user:pass)@host:port
+            try:
+                user, _, pw = b64d(user).partition(":")
+            except Exception:
+                pass
+        p = {"name": name, "type": "socks5", "server": host, "port": int(port), "udp": True}
+        if user:
+            p["username"], p["password"] = user, pw or ""
+        return p
+    raise ValueError(f"不支持的链接类型 {scheme}://")
 
 
 def add_links(text, existing, d=None):
@@ -1530,7 +1562,7 @@ def sub_cache_path(name):
     return os.path.join(SB_SUB_DIR, safe(name) + ".json")
 
 
-def parse_sub_text(text):
+def parse_sub_text(text, fetch=None, depth=0):
     """订阅内容 → mihomo 风格节点列表。支持 Clash YAML、sing-box JSON、Base64 / 明文分享链接"""
     t = text.strip().lstrip("\ufeff")
     if t.startswith("{"):
@@ -1541,11 +1573,29 @@ def parse_sub_text(text):
                         if o.get("type") not in ("selector", "urltest", "direct", "block", "dns") and o.get("tag") and o.get("server")], []
         except ValueError:
             pass
-    if re.search(r"(?m)^proxies\s*:", t):
+    if re.search(r"(?m)^(proxies|proxy-providers)\s*:", t):
         y = yaml_lite(t)
-        ps = (y or {}).get("proxies") if isinstance(y, dict) else None
-        if isinstance(ps, list):
-            return [p for p in ps if isinstance(p, dict) and p.get("name") and p.get("type")], []
+        y = y if isinstance(y, dict) else {}
+        ps = y.get("proxies") if isinstance(y.get("proxies"), list) else []
+        out = [p for p in ps if isinstance(p, dict) and p.get("name") and p.get("type")]
+        errs = []
+        pv = y.get("proxy-providers") if isinstance(y.get("proxy-providers"), dict) else {}
+        # 聚合配置：mihomo 自己会去拉 proxy-providers，sing-box 不会，这里由面板逐个下载展开
+        for pname, prov in pv.items():
+            if not isinstance(prov, dict) or not prov.get("url") or depth > 1 or fetch is None:
+                continue
+            try:
+                sub, e2 = parse_sub_text(fetch(str(prov["url"])), fetch, depth + 1)
+                names = {x["name"] for x in out}
+                for x in sub:
+                    if x["name"] in names:
+                        x["name"] = f"{x['name']} [{pname}]"
+                    out.append(x)
+                errs += e2
+            except Exception as e:
+                errs.append(f"{pname}：{str(e)[:80]}")
+        if out or ps or pv:
+            return out, errs
     body = t
     if "://" not in t:
         try:
@@ -1561,6 +1611,19 @@ def parse_sub_text(text):
         except Exception as e:
             errs.append(f"第 {i} 条：{e}")
     return out, errs
+
+
+def _sub_get(url, ua):
+    """下载订阅里嵌套的 proxy-providers 地址：先代理后直连"""
+    last = None
+    for use_proxy in ((True, False) if core_alive() else (False,)):
+        req = urllib.request.Request(url, headers={"User-Agent": ua})
+        try:
+            with proxy_opener(use_proxy).open(req, timeout=30) as r:
+                return r.read(20 << 20).decode("utf-8", "ignore")
+        except Exception as e:
+            last = e
+    raise IOError(str(last)[:120])
 
 
 def sb_fetch_sub(s, gh=""):
@@ -1581,10 +1644,16 @@ def sb_fetch_sub(s, gh=""):
                     last = str(e)[:150]
             if data is None:
                 continue
-            nodes, errs = parse_sub_text(data.decode("utf-8", "ignore"))
+            nodes, errs = parse_sub_text(data.decode("utf-8", "ignore"), lambda u, _ua=ua: _sub_get(u, _ua))
             if not nodes:
                 last = "没有解析出节点" + ("：" + errs[0] if errs else "")
-                continue
+                # mihomo 已下载过这个订阅时，用它的缓存兜底
+                cache = os.path.join(CONF_DIR, "providers", safe(s["name"]) + ".yaml")
+                if os.path.isfile(cache):
+                    with open(cache, encoding="utf-8", errors="ignore") as f:
+                        nodes, errs = parse_sub_text(f.read(), lambda u, _ua=ua: _sub_get(u, _ua))
+                if not nodes:
+                    continue
             flt, exc = s.get("filter") or "", s.get("exclude", DEFAULT_EXCLUDE) or ""
             rf, re_ = rx(flt) if flt else None, rx(exc) if exc else None
             nodes = [p for p in nodes if (not rf or rf.search(p["name"])) and not (re_ and re_.search(p["name"]))]

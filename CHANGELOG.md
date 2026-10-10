@@ -1,5 +1,11 @@
 # 更新记录与详细说明
 
+## v6.9.5 sing-box 兼容 mihomo 的订阅
+- 「聚合」类订阅（mihomo 配置里用 `proxy-providers` 引用其他订阅）：mihomo 会自己去拉，sing-box 不会，之前面板把里面的订阅地址当成节点链接，报“不支持的链接类型”。现在面板会逐个下载 proxy-providers 并展开成节点，同时保留配置里直接写的 proxies
+- 分享链接新增支持 `anytls://`、`hysteria://`（v1）、`socks://` / `socks5://`
+- 下载解析失败时，用 mihomo 已缓存的同名订阅文件兜底
+- 报错会写明是哪种链接不支持（如 `ssr://`）
+
 ## v6.9.4 修复切换 sing-box 内核失败
 - sing-box 1.14 起普通 linux 包依赖 glibc，Alpine（musl）上无法运行，导致提示“架构不匹配或文件损坏”
 - 现在在 Alpine 上优先下载 `-musl` 版，失败依次尝试普通版、`-glibc` 版；校验下载完整性，失败时列出每个包的具体原因
