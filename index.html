@@ -314,6 +314,19 @@ nav .ico{display:none}nav .more{display:none}
   .nfilter:has(#nf-r:empty){margin-bottom:12px}
 }
 .abps{display:flex;flex-direction:column;gap:6px}.abpr{display:grid;grid-template-columns:112px 1fr;align-items:center;gap:8px}.abpr>.row{flex-wrap:wrap;gap:6px}@media (max-width:720px){.abpr{grid-template-columns:86px 1fr}}
+/* v6.9.8 顶栏字体加大加粗 */
+.brand{font-size:19px;font-weight:800}
+.pill{font-size:14.5px;font-weight:700}
+.ver{font-size:13px;font-weight:600;color:var(--txt);opacity:.75}
+.ib{font-weight:700}
+.chip{padding:5px 13px;min-width:100px}
+.chip .k{font-size:12.5px;font-weight:600;color:var(--txt);opacity:.72}
+.chip b{font-size:16px;font-weight:800}
+nav button{font-size:15.5px;font-weight:600;opacity:.85}nav button.on{font-weight:800}
+@media (min-width:721px){.ib{font-size:14.5px}nav button{font-size:16px}}
+@media (max-width:720px){
+  .chip{padding:4px 6px;min-width:0}.chip .k{font-size:11px}.chip b{font-size:13px}
+  nav button{font-size:14.5px;padding:6px 12px}.pill{font-size:13.5px}}
 </style>
 </head>
 <body><div id="bgimg"></div><div id="bgdim"></div>
