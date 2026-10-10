@@ -660,11 +660,9 @@ nav .ico{display:none}nav .more{display:none}
         <div id="core-log" class="mut small mt" style="white-space:pre-line;max-height:120px;overflow:auto"></div></div>
       <div class="row mt"><span class="sp"></span><button class="btn g" onclick="coreRollback()" id="core-rb">回滚内核</button><button class="btn" id="core-btn" onclick="coreUpdate()">更新内核</button></div></div>
     <div data-sg="sec" class="card"><h3>面板安全</h3>
-      <div class="opt"><div class="sp"><div class="t">HTTPS（自签名证书）</div><div class="dsc">开启后面板改用 https:// 访问，浏览器提示证书不受信任时选择继续。登录失败 5 次锁定该 IP 10 分钟。</div></div>
+      <div class="opt"><div class="sp"><div class="t">HTTPS（自签名证书）</div><div class="dsc">开启后面板改用 https:// 访问，浏览器提示证书不受信任时选择继续。面板已取消登录密码，局域网内能打开地址的设备都能管理，请勿把面板端口暴露到公网。</div></div>
         <label class="sw"><input type="checkbox" id="https"><span></span></label></div>
-      <div class="row" style="margin-top:12px"><input id="newpw" type="password" placeholder="新面板密码" class="sp"><button class="btn" onclick="chpw()">修改密码</button></div>
-      <div class="opt mt"><div class="sp"><div class="t">登录会话</div><div class="dsc">登录 30 天内没有访问会自动失效；修改密码会让其他设备全部退出</div></div>
-        <button class="btn g sm" onclick="logout()">退出登录</button><button class="btn r sm" onclick="logoutAll()">退出所有设备</button></div></div>
+</div>
     <div data-sg="sec" class="card"><h3>Telegram 通知</h3>
       <div class="mut small" style="margin-bottom:6px">看门狗事件、节点全部超时、订阅 3 天内到期或流量超 90% 时推送（同一状态只提醒一次）。先找 @BotFather 创建机器人，再给机器人发一条消息，用 @userinfobot 查 chat id。</div>
       <div class="row"><input id="tg-token" placeholder="Bot Token，如 123456:ABC-..." class="sp"><input id="tg-chat" placeholder="Chat ID" style="width:150px"></div>
@@ -765,7 +763,7 @@ async function login(){try{const j=await api('/api/login','POST',{password:$('#p
 function dropLocal(){TOKEN='';localStorage.removeItem('mp_token');timers.forEach(clearInterval);timers=[];showLogin()}
 async function logout(){try{await api('/api/logout','POST',{})}catch(e){}dropLocal()}
 async function logoutAll(){if(!confirm('让所有已登录的设备（包括本机）退出登录？'))return;try{await api('/api/logout','POST',{all:true})}catch(e){}dropLocal()}
-function checkPwDefault(){$('#pwmodal').classList.toggle('hide',!STATE.pw_default);if(STATE.pw_default)setTimeout(()=>$('#pw1').focus(),50)}
+function checkPwDefault(){$('#pwmodal').classList.add('hide')}  // 已取消面板密码
 async function forcePw(){const a=$('#pw1').value,b=$('#pw2').value;if(a.length<4)return toast('密码至少 4 位');if(a!==b)return toast('两次输入不一致');
   try{const j=await api('/api/password','PUT',{password:a});toast('密码已修改');STATE.pw_default=false;$('#pw1').value=$('#pw2').value='';checkPwDefault()}catch(e){toast(e.message)}}
 
@@ -830,7 +828,7 @@ function renderWD(){const w=STATE.wd||{};const s=WDS[w.status]||['mut',w.status|
 // 页面不可见时全部暂停；连续失败按 2、4、8…最多 30 秒退避；连接列表只在概览（每 3 秒）和连接页（每秒，暂停时不拉）获取
 let _cn=0,_busy=false,_fail=0,_skip=0;
 async function tick(){
-  if(document.hidden||_busy||!TOKEN)return;if(_skip>0){_skip--;return}_busy=true;
+  if(document.hidden||_busy)return;if(_skip>0){_skip--;return}_busy=true;
   try{await tickOnce()}finally{_busy=false}}
 async function tickOnce(){
   try{LIVE=await api('/api/live');renderHdr(LIVE);pushHist(LIVE.up||0,LIVE.down||0);_fail=0}
@@ -1446,16 +1444,16 @@ async function backup(){try{const j=await api('/api/backup');const a=document.cr
 async function restore(){const inp=$('#restore-file'),f=inp.files[0];inp.value='';if(!f)return;if(!confirm(`用「${f.name}」恢复设置？当前设置会先保存为配置快照。`))return;try{const j=JSON.parse(await f.text());const r=await api('/api/restore','POST',j);toast(r.message);loadState().then(fillSettings)}catch(e){toast('恢复失败：'+e.message)}}
 let _rz=0;addEventListener('resize',()=>{clearTimeout(_rz);_rz=setTimeout(()=>{drawChart();if(TAB==='统计')drawDays()},120)});
 async function start(){
-  try{await loadState()}catch(e){if(e.message==='未登录')return;}
+  try{await loadState()}catch(e){if(e.message==='未登录')return;toast('面板服务连接失败：'+e.message)}
   $('#login').classList.add('hide');$('#app').classList.remove('hide');nav();go(TAB);
   const vis=f=>()=>{if(!document.hidden)f()};
   timers.forEach(clearInterval);timers=[setInterval(tick,1000),setInterval(vis(testSites),60000),setInterval(vis(()=>loadState().catch(()=>{})),15000),setInterval(vis(loadDevs),30000),
     setInterval(vis(()=>{if(TAB==='统计')loadStats();if(TAB==='概览')loadAdStat();if(TAB==='广告拦截'&&!AB?.updating)loadAB()}),30000)];
   loadDevs();tick();testSites();bgSync()}
 // 切回前台时立即刷新一次
-document.addEventListener('visibilitychange',()=>{if(document.hidden||!TOKEN||$('#app').classList.contains('hide'))return;_skip=0;tick();loadState().catch(()=>{});if(TAB==='节点')loadProxies()});
+document.addEventListener('visibilitychange',()=>{if(document.hidden||$('#app').classList.contains('hide'))return;_skip=0;tick();loadState().catch(()=>{});if(TAB==='节点')loadProxies()});
 placeNav();
-TOKEN?start():showLogin();
+start();  // 不再需要登录
 </script>
 </body>
 </html>

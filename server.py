@@ -103,7 +103,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "6.8.1"
+PANEL_VERSION = "6.8.2"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -5604,8 +5604,8 @@ class H(BaseHTTPRequestHandler):
     def tok(self):
         return self.headers.get("X-Token") or ""
 
-    def authed(self):
-        return sess_ok(self.tok())
+    def authed(self):  # v6.8.2 起面板不再需要密码，局域网内直接访问
+        return True
 
     def do_GET(self): self.route("GET")
     def do_POST(self): self.route("POST")
@@ -6008,7 +6008,7 @@ class H(BaseHTTPRequestHandler):
                         gmeta.pop(n)
                     elif mt["type"] in ("load-balance", "fallback"):
                         mt.update(sb_from=mt["type"], type="url-test")
-            return self.send(200, {"pw_default": bool(d.get("pw_default")), "mode": d["mode"], "subs": d["subs"], "rules": d["rules"],
+            return self.send(200, {"pw_default": False, "mode": d["mode"], "subs": d["subs"], "rules": d["rules"],
                                    "running": "started" in st or code == 200, "version": version, "groups": groups,
                                    "nodes": [{"name": n["proxy"]["name"], "type": n["proxy"]["type"],
                                                                 "server": n["proxy"]["server"], "port": n["proxy"]["port"]} for n in d["nodes"]],
