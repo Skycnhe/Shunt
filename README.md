@@ -31,6 +31,21 @@ wget -qO- https://raw.githubusercontent.com/Skycnhe/Shunt/Hk001/install.sh | sh
 
 装完会显示面板地址（默认 `http://旁路由IP:8080`）和随机生成的初始密码，登录后可在「设置」里修改。
 
+### 离线安装包
+
+[Releases · offline](https://github.com/Skycnhe/Shunt/releases/tag/offline) 里有打包好的离线安装包：面板 + mihomo / mihomo Smart / sing-box 三个内核 + geo 数据 + sing-box 规则集 + 全部 apk 依赖，装的时候不用联网。每次面板更新和每周一自动重新打包，内核始终是最新版。
+
+```sh
+# 一键：自动选对应架构和 Alpine 版本的包，下载后安装
+wget -qO- https://ghfast.top/https://raw.githubusercontent.com/Skycnhe/Shunt/Hk001/offline.sh | sh -s -- --cn   # 国内
+wget -qO- https://raw.githubusercontent.com/Skycnhe/Shunt/Hk001/offline.sh | sh                                  # 国外
+
+# 设备不联网：在电脑上下载 shunt-offline-<aarch64|x86_64>-alpine<3.22|3.23|3.24>.tar.gz，传到设备后
+tar xzf shunt-offline-aarch64-alpine3.24.tar.gz && sh shunt-offline/install.sh
+```
+
+架构看 `uname -m`，Alpine 版本看 `cat /etc/alpine-release`。已安装的设备加 `--update-core` 可以用包里的内核和 geo 数据覆盖升级（旧内核留作 .bak，面板里可回滚）。
+
 ## 使用
 
 1. 打开面板 →「订阅」粘贴你的订阅链接
