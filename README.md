@@ -96,10 +96,6 @@ rc-service mihomo-panel restart    # 重启面板
 - [ghfast.top](https://ghfast.top/)：国内 GitHub 下载加速
 - [Alpine Linux](https://alpinelinux.org/)：运行系统
 
-## 许可证
-
-本项目基于 [GNU General Public License v3.0 or later](LICENSE) 开源。
-
 ---
 
 更新记录和详细说明见 [CHANGELOG.md](CHANGELOG.md)。
