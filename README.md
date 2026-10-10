@@ -81,7 +81,6 @@ rc-service mihomo-panel restart    # 重启面板
 
 面板和内核都能在「设置」里在线更新，出问题可一键回滚。
 
-> 为兼容旧版，系统里的服务名和目录仍叫 `mihomo-panel`（`/opt/mihomo-panel`、`/etc/mihomo-panel`），升级不受影响。
 
 ## 端口
 
