@@ -1,5 +1,11 @@
 # 更新记录与详细说明
 
+## v6.9.6 mihomo 订阅自动转换给 sing-box 用
+- 切到 sing-box 时，面板把 mihomo（Clash）订阅自动转换成 sing-box 节点；6.9.5 遇到带锚点（&/<<）、缩进不规整、多行规则的完整 mihomo 配置时读不到 proxies，把 DNS 里的 `tls://` 当成节点链接报错
+- 现在只截取 `proxies` / `proxy-providers` 两段解析，整段失败时逐个节点解析、坏的跳过；设备装了 py3-yaml 时优先用完整解析器
+- 明文链接只识别行首的 `协议://`，不再把 YAML 里的地址当节点
+- 解析失败时把订阅原文保存到 `/etc/mihomo-panel/sub-debug.txt` 方便排查
+
 ## v6.9.5 sing-box 兼容 mihomo 的订阅
 - 「聚合」类订阅（mihomo 配置里用 `proxy-providers` 引用其他订阅）：mihomo 会自己去拉，sing-box 不会，之前面板把里面的订阅地址当成节点链接，报“不支持的链接类型”。现在面板会逐个下载 proxy-providers 并展开成节点，同时保留配置里直接写的 proxies
 - 分享链接新增支持 `anytls://`、`hysteria://`（v1）、`socks://` / `socks5://`

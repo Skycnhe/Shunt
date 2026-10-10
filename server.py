@@ -103,7 +103,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "6.9.5"
+PANEL_VERSION = "6.9.6"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -1562,6 +1562,89 @@ def sub_cache_path(name):
     return os.path.join(SB_SUB_DIR, safe(name) + ".json")
 
 
+def _yaml_full(text):
+    try:
+        import yaml  # 设备装了 py3-yaml 就用完整解析器
+        y = yaml.safe_load(text)
+        return y if isinstance(y, dict) else None
+    except ImportError:
+        return None
+    except Exception:
+        return None
+
+
+def _yaml_section(text, key):
+    """取出顶层 key: 段落原文（到下一个顶层键为止）"""
+    lines = text.replace("\t", "  ").splitlines()
+    out, on = [], False
+    for ln in lines:
+        top = ln[:1] not in ("", " ", "-", "#")
+        if top:
+            m = re.match(r"^[\"']?([^:\"']+)[\"']?\s*:", ln)
+            on = bool(m and m.group(1).strip() == key)
+            if on:
+                out.append(f"{key}:" + ln.split(":", 1)[1])
+            continue
+        if on:
+            out.append(ln)
+    return "\n".join(out) if out else ""
+
+
+def _yaml_items(sec):
+    """整段解析失败时，按列表项逐条解析，坏的跳过"""
+    lines = sec.splitlines()[1:]
+    ind = next((len(x) - len(x.lstrip(" ")) for x in lines if x.strip().startswith("-")), None)
+    if ind is None:
+        return []
+    items, cur = [], []
+    for ln in lines:
+        if ln.strip().startswith("-") and len(ln) - len(ln.lstrip(" ")) == ind:
+            if cur:
+                items.append(cur)
+            cur = [ln]
+        elif cur:
+            cur.append(ln)
+    if cur:
+        items.append(cur)
+    out = []
+    for it in items:
+        try:
+            v = yaml_lite("x:\n" + "\n".join(it))
+            v = (v or {}).get("x")
+            if isinstance(v, list) and v and isinstance(v[0], dict):
+                out.append(v[0])
+        except Exception:
+            pass
+    return out
+
+
+def sub_yaml(text):
+    """Clash/mihomo 订阅 → {"proxies": [...], "proxy-providers": {...}}，尽量容错"""
+    y = _yaml_full(text)
+    if y is not None:
+        return {"proxies": y.get("proxies") or [], "proxy-providers": y.get("proxy-providers") or {}}
+    res = {"proxies": [], "proxy-providers": {}}
+    for key in ("proxies", "proxy-providers"):
+        sec = _yaml_section(text, key)
+        if not sec:
+            continue
+        v = None
+        try:
+            v = (yaml_lite(sec) or {}).get(key)
+        except Exception:
+            v = None
+        if key == "proxies":
+            n_items = sum(1 for x in sec.splitlines() if re.match(r"^\s*-\s", x))
+            if not isinstance(v, list) or len(v) < n_items:
+                alt = _yaml_items(sec)
+                if len(alt) > len(v if isinstance(v, list) else []):
+                    v = alt
+            res[key] = v if isinstance(v, list) else []
+        else:
+            res[key] = v if isinstance(v, dict) else {}
+    return res
+
+
 def parse_sub_text(text, fetch=None, depth=0):
     """订阅内容 → mihomo 风格节点列表。支持 Clash YAML、sing-box JSON、Base64 / 明文分享链接"""
     t = text.strip().lstrip("\ufeff")
@@ -1573,9 +1656,8 @@ def parse_sub_text(text, fetch=None, depth=0):
                         if o.get("type") not in ("selector", "urltest", "direct", "block", "dns") and o.get("tag") and o.get("server")], []
         except ValueError:
             pass
-    if re.search(r"(?m)^(proxies|proxy-providers)\s*:", t):
-        y = yaml_lite(t)
-        y = y if isinstance(y, dict) else {}
+    if re.search(r"(?m)^[\"']?(proxies|proxy-providers)[\"']?\s*:", t):
+        y = sub_yaml(t)
         ps = y.get("proxies") if isinstance(y.get("proxies"), list) else []
         out = [p for p in ps if isinstance(p, dict) and p.get("name") and p.get("type")]
         errs = []
@@ -1596,6 +1678,7 @@ def parse_sub_text(text, fetch=None, depth=0):
                 errs.append(f"{pname}：{str(e)[:80]}")
         if out or ps or pv:
             return out, errs
+        return [], errs or ["订阅是 mihomo 配置，但没读到 proxies 节点"]
     body = t
     if "://" not in t:
         try:
@@ -1603,7 +1686,7 @@ def parse_sub_text(text, fetch=None, depth=0):
         except Exception:
             body = ""
     out, errs = [], []
-    for i, line in enumerate([x.strip() for x in body.splitlines() if "://" in x], 1):
+    for i, line in enumerate([x.strip() for x in body.splitlines() if re.match(r"^\s*[A-Za-z][\w+.\-]*://", x)], 1):
         try:
             p = parse_link(line)
             p["name"] = (p.get("name") or f"{p['type']}-{p['server']}:{p['port']}").strip()
@@ -1647,6 +1730,11 @@ def sb_fetch_sub(s, gh=""):
             nodes, errs = parse_sub_text(data.decode("utf-8", "ignore"), lambda u, _ua=ua: _sub_get(u, _ua))
             if not nodes:
                 last = "没有解析出节点" + ("：" + errs[0] if errs else "")
+                try:  # 留一份原文方便排查（只保留最近一次）
+                    with open(os.path.join(PANEL_DIR, "sub-debug.txt"), "wb") as f:
+                        f.write(data[:2 << 20])
+                except OSError:
+                    pass
                 # mihomo 已下载过这个订阅时，用它的缓存兜底
                 cache = os.path.join(CONF_DIR, "providers", safe(s["name"]) + ".yaml")
                 if os.path.isfile(cache):
