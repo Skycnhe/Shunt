@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Shunt 分流 —— mihomo 旁路由面板一键安装 (Alpine Linux)
 # 用法: sh install.sh [--cn] [--update-core] [--https] [--selftest]
+# 离线安装包（面板 + 全部内核 + 依赖，GitHub Releases「offline」）:
+#   一键: wget -qO- https://raw.githubusercontent.com/Skycnhe/Shunt/Hk001/offline.sh | sh
+#   本地: tar xzf shunt-offline-aarch64-alpine3.24.tar.gz && sh shunt-offline/install.sh
 # 一键安装（无需先下载仓库）:
 #   国外: wget -qO- https://raw.githubusercontent.com/Skycnhe/Shunt/Hk001/install.sh | sh
 #   国内: wget -qO- https://ghfast.top/https://raw.githubusercontent.com/Skycnhe/Shunt/Hk001/install.sh | sh -s -- --cn
@@ -26,6 +29,25 @@ for a in "$@"; do
 done
 
 [ -f /etc/alpine-release ] || { echo "本脚本仅支持 Alpine Linux"; exit 1; }
+REL=$(cut -d. -f1,2 /etc/alpine-release)
+# 离线安装包：同目录有 offline/（内核、geo 数据、apk 依赖），全程不需要联网
+OFF=""; [ -f "$SRC/server.py" ] && [ -f "$SRC/offline/VERSION" ] && OFF="$SRC/offline"
+PKGS="curl wget ca-certificates python3 nftables iptables ip6tables iproute2 gzip tar tzdata kmod coreutils"
+[ -n "$HTTPS" ] && PKGS="$PKGS openssl"
+ONLINE_DEPS=1
+if [ -n "$OFF" ]; then
+  echo ">> 离线安装包：$(tr '\n' ' ' < "$OFF/VERSION")"
+  BREL=$(sed -n 's/^alpine=//p' "$OFF/VERSION"); BARCH=$(sed -n 's/^arch=//p' "$OFF/VERSION")
+  [ "$BARCH" = "$(uname -m)" ] || { echo "!! 安装包是 $BARCH 的，本机是 $(uname -m)，请下载对应架构的包"; exit 1; }
+  [ "$BREL" = "$REL" ] || echo "!! 安装包按 Alpine $BREL 打包，本机是 $REL：包内依赖装不上时会改为联网安装"
+  echo ">> 安装依赖（包内离线源）"
+  if apk add --no-network --allow-untrusted --repositories-file /dev/null --repository "$OFF/apk" $PKGS openssl py3-yaml >/tmp/shunt-apk.log 2>&1; then
+    ONLINE_DEPS=""
+  else
+    echo "!! 包内依赖安装失败（详情 /tmp/shunt-apk.log），改为联网安装"
+  fi
+fi
+if [ -n "$ONLINE_DEPS" ]; then
 if [ -n "$CN" ]; then
   GH="${GH:-https://ghfast.top/}"
   MIRROR="${APK_MIRROR:-mirrors.ustc.edu.cn}"
@@ -34,7 +56,6 @@ if [ -n "$CN" ]; then
 fi
 
 echo ">> 补齐软件源（main + community）"
-REL=$(cut -d. -f1,2 /etc/alpine-release)
 BASE=$(sed -n -E 's#^(https?://[^ ]*/alpine)/.*#\1#p' /etc/apk/repositories | head -n1)
 BASE="${BASE:-https://dl-cdn.alpinelinux.org/alpine}"
 sed -i -E "s@^#[[:space:]]*(.*/v$REL/community)@\1@" /etc/apk/repositories
@@ -44,9 +65,8 @@ done
 
 echo ">> 安装依赖"
 apk update >/dev/null || { echo "!! apk update 失败，请检查网络/软件源（国内请加 --cn）"; exit 1; }
-PKGS="curl wget ca-certificates python3 nftables iptables ip6tables iproute2 gzip tar tzdata kmod coreutils"
-[ -n "$HTTPS" ] && PKGS="$PKGS openssl"
 for p in $PKGS; do apk add --no-cache "$p" >/dev/null 2>&1 || echo "!! 依赖 $p 安装失败"; done
+fi
 for c in curl python3 nft ip gunzip; do command -v $c >/dev/null || { echo "!! 缺少 $c，安装中止"; exit 1; }; done
 update-ca-certificates >/dev/null 2>&1 || true
 
@@ -67,7 +87,22 @@ case "$(uname -m)" in
   *) echo "不支持的架构 $(uname -m)"; exit 1 ;;
 esac
 
-if [ ! -x /usr/local/bin/mihomo ] || [ -n "$UPDATE_CORE" ]; then
+mkdir -p /etc/mihomo/providers /etc/mihomo-panel /opt/mihomo-panel /etc/sing-box/rules
+if [ -n "$OFF" ]; then
+  # 内核：没装过或带 --update-core 时用包里的（旧的留 .bak，面板里可回滚）
+  for b in mihomo mihomo-smart sing-box; do
+    [ -f "$OFF/bin/$b" ] || continue
+    if [ ! -x /usr/local/bin/$b ] || [ -n "$UPDATE_CORE" ]; then
+      [ -x /usr/local/bin/$b ] && ! cmp -s "$OFF/bin/$b" /usr/local/bin/$b && cp /usr/local/bin/$b /usr/local/bin/$b.bak
+      cp "$OFF/bin/$b" /usr/local/bin/$b.new && chmod 755 /usr/local/bin/$b.new && mv /usr/local/bin/$b.new /usr/local/bin/$b
+      echo ">> 安装内核 $b"
+    fi
+  done
+  for f in geoip.dat geosite.dat geoip.metadb Model.bin; do
+    [ -f "$OFF/geo/$f" ] && { [ -s /etc/mihomo/$f ] && [ -z "$UPDATE_CORE" ] || cp "$OFF/geo/$f" /etc/mihomo/$f; }
+  done
+  for f in "$OFF"/sb-rules/*; do [ -f "$f" ] && { [ -s "/etc/sing-box/rules/${f##*/}" ] || cp "$f" /etc/sing-box/rules/; }; done
+elif [ ! -x /usr/local/bin/mihomo ] || [ -n "$UPDATE_CORE" ]; then
   echo ">> 获取 mihomo 最新版本"
   VER=$(curl -fsSL --retry 3 "${GH}https://github.com/MetaCubeX/mihomo/releases/latest/download/version.txt" | tr -d ' \r\n')
   [ -n "$VER" ] || VER=$(curl -fsSL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)
@@ -77,7 +112,6 @@ if [ ! -x /usr/local/bin/mihomo ] || [ -n "$UPDATE_CORE" ]; then
   chmod +x /usr/local/bin/mihomo.new && mv /usr/local/bin/mihomo.new /usr/local/bin/mihomo
 fi
 
-mkdir -p /etc/mihomo/providers /etc/mihomo-panel /opt/mihomo-panel /etc/sing-box
 for f in geoip.dat geosite.dat geoip.metadb; do
   [ -s /etc/mihomo/$f ] || { echo ">> 下载 $f"; curl -fL -o /etc/mihomo/$f "${GH}https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/$f"; }
 done
