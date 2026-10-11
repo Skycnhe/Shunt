@@ -1,5 +1,12 @@
 # 更新记录与详细说明
 
+## v7.3.0 后端改为模块化的 Python 包
+- v7.2.0 的 src/ 片段（共用一个命名空间）改成真正独立的模块：shunt/ 包，39 个模块各有自己的命名空间和显式导入，pyflakes 检查无未定义名字，见 shunt/README.md
+- 部署方式不变：server.py 由 tools/build.py 生成，内嵌全部模块源码，设备上仍是单文件；旧版面板在线更新、install.sh、离线包、`import server` 的脚本都照常工作
+- 异常堆栈显示 shunt/xxx.py 的文件名、行号和源码行，排错更直观
+- 行为与 v7.2.0 一致：33 个自测场景在 mihomo / Smart / sing-box 三种内核下生成的配置逐字节相同，57 个只读接口返回一致
+- CI 增加 pyflakes 检查
+
 ## v7.2.0 拆分源码
 - server.py（约 7400 行）按功能拆成 src/ 下 39 个源码片段（数据、链接解析、策略组、mihomo 配置、sing-box 七个部分、更新、系统优化、广告拦截、诊断、访问控制、HTTP 接口等），见 src/README.md
 - 设备上仍然只部署合并后的单文件 server.py（`python3 tools/build.py` 生成），旧版面板在线更新、install.sh、离线包都不受影响；合并结果与拆分前逐行一致，只多了片段标记注释
