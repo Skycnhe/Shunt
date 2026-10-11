@@ -10,9 +10,12 @@ class AccessTest(unittest.TestCase):
             self.assertFalse(server.ip_is_lan(ip), ip)
 
     def test_host(self):
-        for h in ("192.168.1.1:8080", "[fd00::1]:8080", "router.lan", "nas.local", "localhost:8080", "myhost"):
+        for h in ("192.168.1.1:8080", "[fd00::1]:8080", "router.lan", "nas.local", "localhost:8080"):
             self.assertTrue(server.host_ok(h), h)
         self.assertFalse(server.host_ok("evil.example.com"))
+        # 单标签主机名只放行 localhost（防 DNS 重绑定绕过）：myhost 默认拒绝
+        self.assertFalse(server.host_ok("myhost"))
+        self.assertFalse(server.host_ok(""))
 
 
 class UpdateTest(unittest.TestCase):

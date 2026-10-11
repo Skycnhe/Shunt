@@ -1,5 +1,5 @@
 """HTTP"""
-import copy, gzip, json, os, re, shutil, socket, threading, time
+import copy, gzip, json, os, re, shutil, socket, ssl, threading, time
 from http.server import BaseHTTPRequestHandler
 from collections import deque
 from urllib.parse import parse_qs, quote, unquote, urlparse
@@ -11,14 +11,14 @@ from .base import (
     LB_STRATEGIES, LOCK, MAX_BODY, MIHOMO_BIN, MIHOMO_LOG, PANEL_VERSION, PRIMARY_REGIONS, PROXY_MODES, REGIONS, SMART_BIN, SVC, TPROXY_SH,
     TUN_STACKS
 )
-from .data import HISTORY_FILE, HISTORY_SKIP, auto_name, lb_names, load, migrate_names, read_json, region_lb_set, save, update
+from .data import HISTORY_FILE, HISTORY_SKIP, auto_name, config_version, lb_names, load, migrate_names, read_json, region_lb_set, save, update
 from .links import add_links, q1
 from .groups import all_node_names, clean_custom_group, gcfg, region_plan, rx, validate_groups
 from .mihomo import bad_rule_policies, build_config, dns_cfg, safe_dev, validate_dns
-from .core import core, core_json, refresh_after_sub, refresh_regions, reload_core
+from .core import conns_snapshot, core, core_json, refresh_after_sub, refresh_regions, reload_core
 from .sb_common import CORES, SB_BIN, SB_STATE, active_core, core_conf_path
 from .sb_subs import sb_update_subs
-from .sb_config import build_singbox, sb_ab_loaded, sb_fake_providers, sb_fake_rule_providers, sb_sync_assets, sb_version, write_active_config
+from .sb_config import build_singbox, sb_ab_loaded, sb_fake_providers, sb_fake_rule_providers, sb_rule_need, sb_sync_assets, sb_version, write_active_config
 from .sb_switch import core_switch_job, sb_arch, sb_remote_version, sb_update_job
 from .panel_update import self_rollback, self_update
 from .core_update import (
@@ -48,6 +48,25 @@ ROUTES = {}  # (方法, 路径) → H 的处理函数；api() 先处理前缀 / 
 # GET 也要求 X-Shunt 头的机密接口：返回内容含订阅 URL / 节点密码 / TG token 等机密，局域网零凭证可拖库
 SENSITIVE_GET = ("/api/backup", "/api/config", "/api/history")
 
+_SVC_CACHE = {}  # {"v": (t, st, code, version)}：rc-service 状态 + 核心 /version 缓存 10 秒
+_GRP_CACHE = {}  # {"v": (cfgver, groups, gmeta)}：策略组名单按配置版本缓存，避免每次完整 build_config
+
+
+def _svc_status():
+    """/api/state 每 15 秒/标签页轮询：起 shell 查服务状态 + 调核心 /version，10 秒内复用缓存"""
+    now = time.time()
+    v = _SVC_CACHE.get("v")
+    if v is not None and now - v[0] < 10:
+        return v[1], v[2], v[3]
+    _, st = sh(SVC + " status")
+    code, ver = core("GET", "/version")
+    try:
+        version = json.loads(ver).get("version", "-") if code == 200 else "-"
+    except Exception:
+        version = "-"
+    _SVC_CACHE["v"] = (now, st, code, version)
+    return st, code, version
+
 
 def api_route(path, *methods):
     def deco(fn):
@@ -67,6 +86,11 @@ class H(BaseHTTPRequestHandler):
     def gzip_ok(self):
         return "gzip" in (self.headers.get("Accept-Encoding") or "")
 
+    def sec_headers(self):
+        self.send_header("X-Frame-Options", "SAMEORIGIN")  # 防点击劫持
+        if isinstance(self.connection, ssl.SSLSocket):  # 启用 HTTPS 后才有意义
+            self.send_header("Strict-Transport-Security", "max-age=31536000")
+
     def send(self, code, obj, ctype="application/json"):
         body = obj if isinstance(obj, bytes) else json.dumps(obj, ensure_ascii=False).encode()
         zipped = len(body) > 1400 and ctype in ("application/json", "text/html", "text/plain") and self.gzip_ok()
@@ -79,6 +103,7 @@ class H(BaseHTTPRequestHandler):
             self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.sec_headers()
         self.end_headers()
         self.wfile.write(body)
 
@@ -91,6 +116,7 @@ class H(BaseHTTPRequestHandler):
             self.send_response(304)
             self.send_header("ETag", etag)
             self.send_header("Cache-Control", "no-cache")
+            self.sec_headers()
             self.end_headers()
             return
         body = gz if gz is not None and self.gzip_ok() else raw
@@ -103,6 +129,7 @@ class H(BaseHTTPRequestHandler):
         self.send_header("ETag", etag)
         # 页面每次打开都向服务器确认（未变化时只回 304），面板更新后立即生效；图标缓存 1 天
         self.send_header("Cache-Control", "no-cache" if name == "index.html" else "public, max-age=86400")
+        self.sec_headers()
         self.end_headers()
         self.wfile.write(body)
 
@@ -195,8 +222,8 @@ class H(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             raise
         except Exception as e:
-            log_err(f"{m} {p}", e, tb=True)
-            return self.send(500, {"message": str(e)})
+            log_err(f"{m} {p}", e, tb=True)  # 堆栈只写服务端日志
+            return self.send(500, {"message": "内部错误"})
 
     def logstream(self, level):
         if level not in ("debug", "info", "warning", "error"):
@@ -512,7 +539,7 @@ class H(BaseHTTPRequestHandler):
                 return self.send(204 if code < 300 else code, b"")
             if (sub.startswith("/providers/rules/") and m == "PUT") or sub == "/configs/geo":
                 d = load()
-                need = build_singbox(d)[2]
+                need = sb_rule_need(d)
                 if sub.startswith("/providers/rules/"):
                     nm = unquote(sub.rsplit("/", 1)[1])
                     need = {k: v for k, v in need.items() if k == nm}
@@ -577,23 +604,24 @@ class H(BaseHTTPRequestHandler):
     @api_route("/api/state", "GET")
     def api_state_get(self, m, p, b, q):
         d = load()
-        _, st = sh(SVC + " status")
-        code, ver = core("GET", "/version")
-        try:
-            version = json.loads(ver).get("version", "-") if code == 200 else "-"
-        except Exception:
-            version = "-"
-        cfg = build_config(d)
-        groups = [g["name"] for g in cfg["proxy-groups"]]
-        gmeta = group_meta(d, cfg)
-        if active_core(d) == "singbox":  # 地区负载均衡并入自动优选；负载均衡 / 故障转移按自动测速运行
-            lbs = region_lb_set()
-            groups = [g for g in groups if g not in lbs]
-            for n, mt in list(gmeta.items()):
-                if n in lbs:
-                    gmeta.pop(n)
-                elif mt["type"] in ("load-balance", "fallback"):
-                    mt.update(sb_from=mt["type"], type="url-test")
+        st, code, version = _svc_status()
+        cfgver = config_version()
+        gv = _GRP_CACHE.get("v")
+        if gv is None or gv[0] != cfgver:  # 配置未变时复用策略组名单，不再完整 build_config
+            cfg = build_config(d)
+            groups = [g["name"] for g in cfg["proxy-groups"]]
+            gmeta = group_meta(d, cfg)
+            if active_core(d) == "singbox":  # 地区负载均衡并入自动优选；负载均衡 / 故障转移按自动测速运行
+                lbs = region_lb_set()
+                groups = [g for g in groups if g not in lbs]
+                for n, mt in list(gmeta.items()):
+                    if n in lbs:
+                        gmeta.pop(n)
+                    elif mt["type"] in ("load-balance", "fallback"):
+                        mt.update(sb_from=mt["type"], type="url-test")
+            _GRP_CACHE["v"] = (cfgver, groups, gmeta)
+        else:
+            _, groups, gmeta = gv
         return self.send(200, {"mode": d["mode"], "subs": d["subs"], "rules": d["rules"],
                                "running": "started" in st or code == 200, "version": version, "groups": groups,
                                "nodes": [{"name": n["proxy"]["name"], "type": n["proxy"]["type"],
@@ -610,6 +638,11 @@ class H(BaseHTTPRequestHandler):
                                "gh_proxy": d["gh_proxy"], "panel_version": PANEL_VERSION, "core": active_core(d),
                                "wd": {"status": WD["status"], "last_check": WD["last_check"],
                                       "events": list(WD["events"])[:20]}})
+
+    @api_route("/api/ping", "GET")
+    def api_ping_get(self, m, p, b, q):
+        """轻量心跳：前端 15 秒轮询，version（data.json 每次 save 自增）变化时才拉全量 /api/state"""
+        return self.send(200, {"ok": True, "core": active_core(), "version": config_version()})
 
     @api_route("/api/groups", "GET")
     def api_groups_get(self, m, p, b, q):
@@ -889,8 +922,8 @@ class H(BaseHTTPRequestHandler):
 
     @api_route("/api/conns", "GET")
     def api_conns_get(self, m, p, b, q):
-        # 精简后的连接列表：只保留前端用到的字段
-        c = core_json("/connections", timeout=5)
+        # 精简后的连接列表：只保留前端用到的字段（/connections 走 2 秒共享快照）
+        c = conns_snapshot(timeout=5)
         if c is None:
             return self.send(502, {"message": "mihomo 未运行或无法连接"})
         keep = ("sourceIP", "host", "sniffHost", "destinationIP", "destinationPort", "network")
@@ -903,7 +936,7 @@ class H(BaseHTTPRequestHandler):
     def api_live_get(self, m, p, b, q):
         out = dict(LIVE)
         if time.time() - out["t"] > 5:  # 后台 /traffic 流未就绪（核心刚启动或已停止）时退回连接快照
-            c = core_json("/connections", timeout=3)
+            c = conns_snapshot(timeout=3)
             out.update(up=0, down=0, upTotal=(c or {}).get("uploadTotal", 0), downTotal=(c or {}).get("downloadTotal", 0))
             out["stale"] = True
         if not out["inuse"]:

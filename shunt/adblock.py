@@ -348,6 +348,7 @@ class AdStats:
     """订阅 mihomo info 日志，统计命中广告规则 (REJECT) 的连接；另按小时统计全部连接请求数、拦截数和 DNS 解析耗时（概览「域名过滤」）"""
     RX = re.compile(r"--> (\S+?):\d+ match .*?RuleSet[,(](ad-[0-9a-z]+)\).* using REJECT")
     RX_ALL = re.compile(r"--> \S+ (?:match|doesn't match)")
+    REQ_BATCH = 100  # req 计数攒批：攒够这么多行或持锁时一次性合并，减少逐行加锁
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -357,6 +358,7 @@ class AdStats:
         self.data.setdefault("dns5", {})
         self.dns_recent = deque(self.data.get("dns_recent") or [], maxlen=60)  # 最近 60 次原始耗时，刚启动时画曲线用
         self.saved = time.time()
+        self._req_batch = 0  # 未持锁攒批的 req 增量（sink 系单线程调用，无竞争）
 
     def hour(self):
         return self.data["hours"].setdefault(time.strftime("%Y-%m-%d %H"), {"req": 0, "blk": 0, "dns": [0, 0]})
@@ -373,10 +375,17 @@ class AdStats:
             b[1] += 1
             self.dns_recent.append(ms)
 
+    def _merge_req_locked(self):
+        """调用方已持锁：把攒批的 req 增量一次性合并"""
+        if self._req_batch:
+            self.hour()["req"] += self._req_batch
+            self._req_batch = 0
+
     def hit(self, host, prov):
         if host.startswith("["):
             host = host[1:-1]
         with self.lock:
+            self._merge_req_locked()
             b = self.data["days"].setdefault(time.strftime("%Y-%m-%d"), {"count": 0, "top": {}, "lists": {}})
             b["count"] += 1
             b["top"][host] = b["top"].get(host, 0) + 1
@@ -387,13 +396,18 @@ class AdStats:
                 b["top"] = dict(sorted(b["top"].items(), key=lambda x: -x[1])[:2000])
 
     def sink(self, line):
+        # 子串预过滤：两个正则都要求 payload 含 "-->"，绝大多数日志行直接跳过 json 解析
+        if "-->" not in line:
+            return
         try:
             msg = json.loads(line).get("payload", "")
         except Exception:
             return
         if self.RX_ALL.search(msg):
-            with self.lock:
-                self.hour()["req"] += 1
+            self._req_batch += 1
+            if self._req_batch >= self.REQ_BATCH:
+                with self.lock:
+                    self._merge_req_locked()
         if "REJECT" in msg:
             m = self.RX.search(msg)
             if m:
@@ -410,6 +424,9 @@ class AdStats:
 
     def sink_sb(self, line):
         """sing-box debug 日志：按连接 ID 记住目标域名，命中 ad- 规则集的 reject / DNS 拦截记为一次拦截"""
+        # 子串预过滤：各分支的 body 关键字，绝大多数 debug 行直接跳过 json 解析
+        if "inbound/" not in line and "sniffed" not in line and "reject" not in line and "dns: " not in line:
+            return
         try:
             msg = json.loads(line).get("payload", "")
         except Exception:
@@ -425,8 +442,10 @@ class AdStats:
         if m:
             if m.group(2) != "dns-in":
                 hosts[cid] = m.group(3)
-                with self.lock:
-                    self.hour()["req"] += 1
+                self._req_batch += 1
+                if self._req_batch >= self.REQ_BATCH:
+                    with self.lock:
+                        self._merge_req_locked()
         elif "sniffed" in body:
             m = self.SB_SNIFF.search(body)
             if m:
@@ -448,6 +467,7 @@ class AdStats:
 
     def flush(self):
         with self.lock:
+            self._merge_req_locked()
             keep = sorted(self.data["days"])[-14:]
             self.data["days"] = {k: self.data["days"][k] for k in keep}
             hk = sorted(self.data["hours"])[-48:]

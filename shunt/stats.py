@@ -3,7 +3,7 @@ import copy, threading, time
 
 from .base import STATS_FILE
 from .data import read_json, write_json
-from .core import core_json
+from .core import conns_snapshot
 class Stats:
     def __init__(self):
         self.lock = threading.Lock()
@@ -15,7 +15,7 @@ class Stats:
         return self.data["days"].setdefault(day, {"up": 0, "down": 0, "dev": {}, "node": {}})
 
     def poll(self):
-        c = core_json("/connections", timeout=5)
+        c = conns_snapshot(timeout=5)
         if c is None:
             self.conns, self.tot = {}, None
             return

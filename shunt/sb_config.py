@@ -1,5 +1,5 @@
 """生成 sing-box 配置"""
-import ipaddress, json, os, re, signal, time, urllib.request, urllib.error
+import ipaddress, json, os, re, signal, threading, time, urllib.request, urllib.error
 
 from .base import (
     AB_DIR, BUILTIN_POLICIES, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, SVC, TUN_DEFAULT, TUN_STACKS, UA,
@@ -7,13 +7,13 @@ from .base import (
 )
 from .data import auto_name, lb_dropped_names, lb_names, lb_old_name, load, safe, write_json
 from .groups import PROV, gcfg, rx
-from .mihomo import build_config, dns_cfg, safe_dev, write_config
+from .mihomo import BUILTIN_GEO, build_config, build_rule_providers, dns_cfg, policy_parts, safe_dev, write_config
 from .core import core_json
-from .sb_common import CORE_PID, SB_BIN, SB_CONF, SB_DIR, SB_RULE_DIR, SB_STATE, active_core
+from .sb_common import CORE_PID, SB_BIN, SB_CONF, SB_DIR, SB_GEO, SB_RULE_DIR, SB_STATE, active_core
 from .sb_yaml import yaml_lite
 from .sb_subs import sb_provider_nodes, sb_sub_cache, sb_sub_outbounds
 from .sb_nodes import sb_outbound
-from .sb_rules import SBRules, _mh_domain
+from .sb_rules import SBRules, _mh_domain, _rs_tag
 from .sb_dns import sb_dns
 def build_singbox(d):
     """把 build_config 生成的 mihomo 结构翻译成 sing-box 配置；返回 (配置, 警告列表, 需要的规则集文件)"""
@@ -172,6 +172,54 @@ def sb_inbounds(d, v6):
     return inbounds
 
 
+def sb_geo_rule_sets(d, dc=None):
+    """显式计算 sing-box 需要的 GEO 规则集条目（{tag: {kind:url:path}}）。
+
+    之前这些条目靠完整 build_singbox 的副作用产生：SBRules.use_geo 在翻译 GEOSITE/GEOIP 规则、
+    sb_dns 在生成 DNS 策略时把它们塞进共用的 rule_sets 字典。这里逐条复刻那两个地方的逻辑，
+    供轻量路径（sb_rule_need）使用，避免为取 [2] 而重跑整个构建。
+    """
+    dc = dc or dns_cfg(d)
+    geos = {}
+
+    def add(kind, name):
+        if kind == "geoip" and name.lower() in ("private", "lan"):
+            return  # 翻译成 ip_is_private，不产生规则集条目
+        tag = _rs_tag(kind, name)
+        if tag not in geos:
+            geos[tag] = {"kind": "geo", "url": f"{SB_GEO}/{kind}/{name.lower()}.srs",
+                         "path": f"{kind}-{name.lower()}.srs"}
+
+    for kind, name in BUILTIN_GEO:  # mihomo_rules 末尾硬编码分流规则
+        add(kind, name)
+    for line in d.get("rules") or []:  # 用户自定义规则里的 GEOSITE/GEOIP（fix_rule_policy 只换 target，不过滤）
+        parts = str(line).split(",")
+        if len(parts) >= 2 and parts[0].strip().upper() in ("GEOSITE", "GEOIP"):
+            add(parts[0].strip().lower(), parts[1].strip())
+    for pe in dc.get("policies") or []:  # sb_dns.policy_cond：DNS 策略里的 geosite 匹配
+        kind, names = policy_parts(pe["match"])
+        if kind == "geosite":
+            for n in names:
+                add("geosite", n)
+    add("geosite", "cn")  # sb_dns.cn_cond：固定加入
+    add("geosite", "private")
+    for x in dc.get("fake_filter") or []:  # sb_dns：fake-ip 过滤里的 geosite:
+        if x.lower().startswith("geosite:"):
+            add("geosite", x[8:])
+    return geos
+
+
+def sb_rule_need(d):
+    """轻量计算 sing-box 规则集需求表（等价于 build_singbox(d)[2]）：只依赖 d，不跑完整构建。
+    之前多处为取 [2] 而重跑整个 build_singbox（含 build_config、节点/策略组/outbound 全量计算）。
+    由 rule-providers 条目 + 显式计算的 GEO 条目组成，与完整构建的 [2] 逐项一致
+    （含 SBRules.use_geo / sb_dns 副作用加入的 geo 条目；同完整构建一样过滤掉 kind=="inline"，内嵌规则集无需下载）。"""
+    dc = dns_cfg(d)
+    need = sb_rule_sets({"rule-providers": build_rule_providers(d, dc)[0]}, [])
+    need.update(sb_geo_rule_sets(d, dc))
+    return {tag: rsd for tag, rsd in need.items() if rsd["kind"] != "inline"}
+
+
 def sb_rule_sets(cfg, warn):
     """mihomo rule-providers → sing-box 规则集描述（inline / 广告拦截 / srs / 需要转换）"""
     rule_sets = {}
@@ -301,7 +349,7 @@ def sb_rule_count(path):
 def sb_ab_loaded(d):
     """{"ad-xxx": 条目数}：只统计配置里实际引用、且已转换好的广告拦截规则集"""
     out = {}
-    for tag, rsd in build_singbox(d)[2].items():
+    for tag, rsd in sb_rule_need(d).items():
         if rsd.get("kind") == "adblock":
             path = os.path.join(SB_RULE_DIR, rsd["path"])
             if os.path.isfile(path) and os.path.getsize(path) > 0:
@@ -312,19 +360,22 @@ def sb_ab_loaded(d):
 def sb_sync_assets(d, force=False, need=None):
     """下载 / 转换 sing-box 需要的规则集文件；返回失败列表"""
     if need is None:
-        need = build_singbox(d)[2]
+        need = sb_rule_need(d)
     gh = (d.get("gh_proxy") or "").rstrip("/")
     os.makedirs(SB_RULE_DIR, exist_ok=True)
     bad = []
-    for tag, rsd in need.items():
+    bad_lock = threading.Lock()
+
+    def one(tag, rsd):
+        """单个规则集：下载 / 转换 / 写文件（每个规则集独立文件，线程间无冲突）"""
         path = os.path.join(SB_RULE_DIR, rsd["path"])
         try:
             if rsd["kind"] == "adblock":
                 if os.path.isfile(rsd["src"]) and (force or not os.path.isfile(path) or os.path.getmtime(rsd["src"]) > os.path.getmtime(path)):
                     write_json(path, sb_adblock_source(rsd["src"]))
-                continue
+                return
             if os.path.isfile(path) and os.path.getsize(path) > 0 and not force:
-                continue
+                return
             urls = ([gh + "/" + rsd["url"]] if gh and "github" in rsd["url"] else []) + [rsd["url"]]
             data, err = None, ""
             for u in urls:
@@ -356,7 +407,14 @@ def sb_sync_assets(d, force=False, need=None):
                     raise ValueError("没有解析出任何规则")
                 write_json(path, src)
         except Exception as e:
-            bad.append(f"{tag}：{e}")
+            with bad_lock:
+                bad.append(f"{tag}：{e}")
+
+    ths = [threading.Thread(target=one, args=(tag, rsd)) for tag, rsd in need.items()]
+    for t in ths:
+        t.start()
+    for t in ths:
+        t.join(150)
     return bad
 
 
@@ -461,7 +519,7 @@ def sb_fake_providers(d):
 
 def sb_fake_rule_providers(d):
     out = {}
-    need = build_singbox(d)[2]
+    need = sb_rule_need(d)
     for r in d.get("rulesets") or []:
         rsd = need.get(r["name"])
         path = os.path.join(SB_RULE_DIR, rsd["path"]) if rsd else ""

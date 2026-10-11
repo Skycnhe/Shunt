@@ -1,5 +1,15 @@
 # 更新记录与详细说明
 
+## v7.4.3 性能与安全收尾
+- /api/state 瘦身：服务状态缓存 10 秒，策略组名单按配置版本缓存不再完整 build_config；前端 15 秒轮询改为轻量心跳 /api/ping（配置版本变化才拉全量）
+- /connections 三路（统计、连接页、live 流）复用 2 秒共享快照，不再各自全量抓取解析
+- sing-box 规则集需求表走轻量 sb_rule_need（与完整构建逐项一致），规则集下载改并发
+- update() 的 history 快照移出全局锁（另用专用锁保证原子）；站点测速 double-checked locking 不再全程持锁
+- 安全：500 错误对外固定"内部错误"（堆栈只写服务端日志），诊断页输出脱敏；全站 X-Frame-Options: SAMEORIGIN，HTTPS 下加 HSTS；自签证书加 SAN（shunt.lan + 本机局域网 IP），TLS 最低 1.2
+- favicon 下载加 SSRF 公网检查；远端文件名/环境变量拼 shell 改用 shlex.quote；config_view(masked) 递归掩盖节点密码/uuid 等
+- RDNS / 图标失败记录加过期清理或数量上限；广告统计日志解析加子串预过滤
+- host_ok 收紧：空 Host 拒绝，单标签主机名只放行 localhost
+
 ## v7.4.2 安全与性能修复
 - 敏感文件落盘权限收紧：`write_json()` 默认 600；旧版留下的 644 敏感文件（history.json、sub-debug.txt、订阅缓存）启动时自动收紧到 600
 - SSRF 防护：订阅、规则列表、规则集、内核/面板更新、背景图下载前校验目标为公网地址；跟随重定向前同样校验

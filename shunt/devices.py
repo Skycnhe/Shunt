@@ -52,6 +52,10 @@ def rdns_loop():
             if name and (name == ip or name.endswith(".in-addr.arpa")):
                 name = ""
             RDNS[ip] = (name.split(".")[0] if name.endswith((".lan", ".local", ".home", ".localdomain")) else name, time.time() + 1800)
+        # 顺手清理过期条目：RDNS 只增不减会导致无界增长；device_map 对缺失 key 会重新入队，语义不变
+        now = time.time()
+        for ip in [k for k, v in RDNS.items() if v[1] <= now]:
+            RDNS.pop(ip, None)
 
 
 def device_map(ips):

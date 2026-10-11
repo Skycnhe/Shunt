@@ -1,14 +1,33 @@
 """HTTPS"""
-import os, socket, ssl, sys
+import os, shlex, socket, ssl, sys
 from http.server import ThreadingHTTPServer
 
 from .base import CERT, KEY, PANEL_DIR
 from .sysopt import sh
+
+
+def _lan_ip():
+    """本机局域网 IP：UDP connect 只查路由出口地址，不实际发包；拿不到返回空串"""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except OSError:
+        return ""
+
+
 def gen_cert():
     if not sh("command -v openssl")[1]:
         sh("apk add --no-cache openssl", timeout=120)
     os.makedirs(PANEL_DIR, exist_ok=True)
+    san = "DNS:shunt.lan"
+    ip = _lan_ip()
+    if ip:
+        san += f",IP:{ip}"
     code, out = sh(f"openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj '/CN=Shunt' "
+                   f"-addext 'subjectAltName={san}' "
                    f"-keyout '{KEY}' -out '{CERT}'", timeout=120)
     if code == 0:
         os.chmod(KEY, 0o600)
@@ -29,5 +48,13 @@ class Server(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
+_DEFAULT_RESTART = "rc-service mihomo-panel restart"  # 可信默认值（含参数，直接拼）
+
+
 def restart_self():
-    sh("(sleep 1; %s) >/dev/null 2>&1 &" % os.environ.get("PANEL_RESTART", "rc-service mihomo-panel restart"))
+    cmd = os.environ.get("PANEL_RESTART")
+    if cmd is None:
+        cmd = _DEFAULT_RESTART
+    else:
+        cmd = shlex.quote(cmd)  # 环境变量来源不可信：整体引用为单个词，防止注入
+    sh(f"(sleep 1; {cmd}) >/dev/null 2>&1 &")

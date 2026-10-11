@@ -46,6 +46,28 @@ def core_json(path, timeout=10):
         return None
 
 
+_CONN_SNAP = {}
+_CONN_LOCK = threading.Lock()
+
+
+def conns_snapshot(timeout=5, ttl=2):
+    """1~2 秒 TTL 的 /connections 进程内共享快照。
+
+    stats（5 秒）、连接页（1 秒）、live（2 秒）三处原来各自全量抓取解析
+    （300 连接时 100~300KB JSON），现在复用同一份快照。返回的 dict 三处只读不改。
+    抓取失败返回 None（与原来语义一致），不缓存失败结果。"""
+    now = time.time()
+    v = _CONN_SNAP.get("v")
+    if v is not None and now - v[0] < ttl:
+        return v[1]
+    c = core_json("/connections", timeout=timeout)
+    if c is None:
+        return None
+    with _CONN_LOCK:
+        _CONN_SNAP["v"] = (time.time(), c)
+    return c
+
+
 def reload_core(prev=None):
     """写配置 → mihomo -t 校验 → 热重载；校验失败时回滚 data.json"""
     with LOCK:
@@ -54,7 +76,7 @@ def reload_core(prev=None):
         if sb:
             final = SB_CONF
             try:  # 广告 / 白名单列表改动后，先把对应的 sing-box 规则集文件转换好，否则这些规则会被跳过
-                need = {k: v for k, v in build_singbox(d)[2].items() if v.get("kind") == "adblock"}
+                need = {k: v for k, v in sb_rule_need(d).items() if v.get("kind") == "adblock"}
                 if need:
                     sb_sync_assets(d, need=need)
             except Exception as e:
@@ -122,7 +144,7 @@ def refresh_after_sub(name, wait=90):
     def run():
         end = time.time() + wait
         while time.time() < end:
-            time.sleep(4)
+            time.sleep(10)
             if name in provider_nodes(fresh=True):
                 break
         try:
@@ -137,7 +159,7 @@ def _link():
     global SB_CONF, active_core, build_singbox, check_sb_config, sb_hot_reload, sb_log_error, sb_sync_assets, write_sb_config
     global sh, WD, core_alive, retest_soon
     from .sb_common import SB_CONF, active_core
-    from .sb_config import build_singbox, check_sb_config, sb_hot_reload, sb_log_error, sb_sync_assets, write_sb_config
+    from .sb_config import build_singbox, check_sb_config, sb_hot_reload, sb_log_error, sb_rule_need, sb_sync_assets, write_sb_config
     from .sysopt import sh
     from .notify import WD, core_alive
     from .latency import retest_soon

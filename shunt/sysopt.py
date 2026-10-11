@@ -3,7 +3,7 @@ import http.client, json, os, re, ssl, subprocess, threading, time, urllib.reque
 from collections import deque
 from urllib.parse import urlsplit
 
-from .base import MIXED, PANEL_DIR, TESTS, UA, SafeRedirectHandler
+from .base import MIXED, PANEL_DIR, TESTS, UA, SafeRedirectHandler, dl_check
 from .data import load, update
 from .mihomo import build_config
 from .sb_common import active_core
@@ -397,16 +397,34 @@ def speed_test(proxy):
         return {"ok": False, "error": str(e)[:120], "mb": round(n / 1e6, 1)}
 
 
+_MASK_WORDS = ("password", "passwd", "uuid", "token", "psk", "secret", "privatekey")
+
+
+def _mask_val(v):
+    """敏感值掩盖中间：长值露头 3 + 尾 2，短值全打码"""
+    s = str(v)
+    return f"{s[:3]}******{s[-2:]}" if len(s) > 6 else "******"
+
+
+def _mask_cfg(o):
+    """递归掩盖配置里的敏感字段（key 含 password/uuid/token/psk/secret/privatekey 等，去掉 -_ 后匹配）"""
+    if isinstance(o, dict):
+        return {k: (_mask_val(v) if isinstance(v, str) and any(w in k.lower().replace("-", "").replace("_", "")
+                                                              for w in _MASK_WORDS) else _mask_cfg(v))
+                for k, v in o.items()}
+    if isinstance(o, list):
+        return [_mask_cfg(x) for x in o]
+    return o
+
+
 def config_view(d=None, masked=True):
     d = d or load()
     if active_core(d) == "singbox":
         cfg = build_singbox(d)[0]
-        if masked:
-            cfg["experimental"]["clash_api"]["secret"] = "******"
-        return json.dumps(cfg, ensure_ascii=False, indent=2)
-    cfg = build_config(d)
+    else:
+        cfg = build_config(d)
     if masked:
-        cfg["secret"] = "******"
+        cfg = _mask_cfg(cfg)  # 原来只掩 secret，节点 password/uuid 等明文：名不副实，改为递归掩盖
     return json.dumps(cfg, ensure_ascii=False, indent=2)
 
 
@@ -426,6 +444,8 @@ def nft_ok():
 
 
 def sh(cmd, timeout=60):
+    """shell=True 是有意的：大量调用方依赖 shell 特性（管道、重定向、&& 等），不要改成 shell=False。
+    约定：拼进 cmd 的不可信输入（远端文件名、环境变量、用户输入）调用方必须先用 shlex.quote() 包裹。"""
     try:
         p = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
         return p.returncode, (p.stdout + p.stderr).strip()
@@ -439,6 +459,16 @@ def proxy_opener(proxy=True):
     return urllib.request.build_opener(*hs, SafeRedirectHandler())
 
 
+_RTT_CTX = None  # site_rtt 复用：SSL context 创建含 CA 加载，约几十 ms；context 本身线程安全
+
+
+def _rtt_ctx():
+    global _RTT_CTX
+    if _RTT_CTX is None:
+        _RTT_CTX = ssl.create_default_context()
+    return _RTT_CTX
+
+
 def site_rtt(url, timeout=6):
     """经 mixed 端口建立一条连接（DNS、TCP、TLS 握手不计时），在同一连接上再请求一次，只计这一次的往返。
     与核心 unified-delay 的测法一致，也和浏览器复用连接时的实际体验一致；第二次请求失败时退回第一次的总耗时"""
@@ -448,7 +478,7 @@ def site_rtt(url, timeout=6):
     path = (u.path or "/") + ("?" + u.query if u.query else "")
     hdr = {"User-Agent": "curl/8", "Accept": "*/*"}
     if https:
-        c = http.client.HTTPSConnection("127.0.0.1", MIXED, timeout=timeout, context=ssl.create_default_context())
+        c = http.client.HTTPSConnection("127.0.0.1", MIXED, timeout=timeout, context=_rtt_ctx())
         c.set_tunnel(u.hostname, port)
     else:  # 普通 HTTP 走代理时请求行用完整 URL
         c = http.client.HTTPConnection("127.0.0.1", MIXED, timeout=timeout)
@@ -477,22 +507,27 @@ SITE_HIST_N = 30  # 每个站点保留最近 30 次（约 30 分钟）
 
 
 def delay_test(force=False):
-    """多个浏览器同时打开概览时 20 秒内复用同一次结果，历史只记一次"""
+    """多个浏览器同时打开概览时 20 秒内复用同一次结果，历史只记一次。
+    double-checked locking：缓存检查在锁内，整个多线程测速在锁外，写回前再检查一次"""
+    if not force:
+        with SITE_LOCK:
+            if SITE_LAST["r"] is not None and time.time() - SITE_LAST["t"] < 20:
+                return SITE_LAST["r"]
+    tests = load()["tests"] or TESTS
+    out = [None] * len(tests)
+
+    def one(i, t):
+        try:
+            out[i] = {"name": t["name"], "url": t["url"], "ms": site_rtt(t["url"])}
+        except Exception:
+            out[i] = {"name": t["name"], "url": t["url"], "ms": -1}
+
+    ths = [threading.Thread(target=one, args=(i, t)) for i, t in enumerate(tests)]
+    [t.start() for t in ths]
+    [t.join() for t in ths]
     with SITE_LOCK:
         if not force and SITE_LAST["r"] is not None and time.time() - SITE_LAST["t"] < 20:
-            return SITE_LAST["r"]
-        tests = load()["tests"] or TESTS
-        out = [None] * len(tests)
-
-        def one(i, t):
-            try:
-                out[i] = {"name": t["name"], "url": t["url"], "ms": site_rtt(t["url"])}
-            except Exception:
-                out[i] = {"name": t["name"], "url": t["url"], "ms": -1}
-
-        ths = [threading.Thread(target=one, args=(i, t)) for i, t in enumerate(tests)]
-        [t.start() for t in ths]
-        [t.join() for t in ths]
+            return SITE_LAST["r"]  # 测速期间已有更新鲜的结果，直接复用，丢弃本次结果
         names = {o["name"] for o in out}
         for k in list(SITE_HIST):
             if k not in names:
@@ -508,6 +543,7 @@ def delay_test(force=False):
 # 站点图标：经代理下载 https://<host>/favicon.ico，失败再试 Google favicon 服务；缓存 7 天，失败的 1 小时内不重试
 FAV_DIR = os.path.join(PANEL_DIR, "favicons")
 FAV_FAIL = {}
+FAV_FAIL_MAX = 2000  # 失败记录上限：超限淘汰最旧的，防止无界增长
 
 
 def _is_img(b):
@@ -533,6 +569,7 @@ def favicon(url):
     tries = [f"https://{host}/favicon.ico"] + ([f"https://{root}/favicon.ico", f"https://www.{root}/favicon.ico"] if root != host else [])
     for u in tries + [f"https://www.google.com/s2/favicons?domain={host}&sz=64"]:
         try:
+            dl_check(u)  # SSRF 防护：拦截非公网目标（注意：/api/favicon 走 <img> 请求，不能要求 X-Shunt 头）
             with op.open(urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"}), timeout=8) as r:
                 b = r.read(256 * 1024)
             if len(b) > 60 and _is_img(b):
@@ -542,5 +579,7 @@ def favicon(url):
                 return favicon(url)
         except Exception:
             pass
+    if len(FAV_FAIL) >= FAV_FAIL_MAX:
+        del FAV_FAIL[min(FAV_FAIL, key=FAV_FAIL.get)]  # 淘汰最旧的一条
     FAV_FAIL[host] = time.time()
     return None, None

@@ -1,5 +1,5 @@
 """面板在线更新"""
-import hashlib, json, os, re, shutil, time, urllib.request, urllib.error
+import hashlib, json, os, re, shlex, shutil, time, urllib.request, urllib.error
 
 from .errlog import log_err
 from .base import BASE, PANEL_VERSION, UA, dl_check
@@ -144,7 +144,7 @@ def self_update(apply=False, gh=""):
             with open(os.path.join(tmpd, f), "wb") as fh:
                 fh.write(data)
             if f.endswith(".sh") or f.startswith("init.d/"):
-                code, out = sh(f"sh -n '{os.path.join(tmpd, f)}'")
+                code, out = sh("sh -n " + shlex.quote(os.path.join(tmpd, f)))  # f 来自远端清单：引用防注入
                 if code != 0:
                     raise ValueError(f"新版 {f} 语法错误：{out[-200:]}")
         bak = os.path.join(BASE, ".backup")

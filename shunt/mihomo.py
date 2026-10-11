@@ -137,14 +137,40 @@ def build_config(d, strict=False):
         "proxy-providers": providers, "rule-providers": rule_providers, "proxy-groups": groups, "rules": rules,
     })
 
-def mihomo_rules(d, policies, dc):
-    """规则集、TUN 绕过、广告拦截、防绕过 DNS、自定义规则与内置分流规则 → (rule-providers, rules, 广告拦截 providers)"""
+def build_rule_providers(d, dc):
+    """rule-providers 段：规则集 + 广告拦截 + DNS 防绕过 → (rule-providers, 广告拦截 providers, 广告拦截 rules)。
+    mihomo_rules 与 sing-box 轻量路径（sb_rule_need）共用，后者不再为取规则集需求表而跑完整 build_config。"""
     rule_providers = {}
-    rs_rules = []
     for r in d.get("rulesets", []):
         ext = {"mrs": "mrs", "text": "list"}.get(r.get("format"), "yaml")
         rule_providers[r["name"]] = {"type": "http", "behavior": r.get("behavior", "domain"), "format": r.get("format", "yaml"),
                                      "url": r["url"], "path": f"./rules/{safe(r['name'])}.{ext}", "interval": 86400}
+    ab_prov, ab_rules = adblock_providers(d)
+    rule_providers.update(ab_prov)
+    if dc["block_bypass"]:  # 阻止局域网设备绕过 mihomo DNS：拒绝 DoT/DoQ(853) 与已知公共 DoH 服务器
+        rule_providers["dns-bypass-ip"] = {"type": "inline", "behavior": "ipcidr", "payload": list(DOH_IPS)}
+        rule_providers["dns-bypass-domain"] = {"type": "inline", "behavior": "domain", "payload": list(DOH_DOMAINS)}
+    return rule_providers, ab_prov, ab_rules
+
+
+# 内置规则里的 GEOSITE/GEOIP（kind, 值）：sing-box 需为它们下载 .srs。
+# 与下面 mihomo_rules 末尾硬编码列表保持一致；SBRules.use_geo 在翻译时把它们加入 [2]，sb_geo_rule_sets 显式计算供轻量路径使用。
+# 注意 GEOIP,private 不会产生条目（翻译成 ip_is_private），这里保留仅作对照。
+BUILTIN_GEO = (
+    ("geosite", "private"), ("geoip", "private"),
+    ("geosite", "category-ai-!cn"),
+    ("geosite", "netflix"), ("geoip", "netflix"),
+    ("geosite", "youtube"), ("geosite", "google"), ("geoip", "google"),
+    ("geosite", "telegram"), ("geoip", "telegram"),
+    ("geosite", "geolocation-!cn"), ("geosite", "cn"), ("geoip", "CN"),
+)
+
+
+def mihomo_rules(d, policies, dc):
+    """规则集、TUN 绕过、广告拦截、防绕过 DNS、自定义规则与内置分流规则 → (rule-providers, rules, 广告拦截 providers)"""
+    rule_providers, ab_prov, ab_rules = build_rule_providers(d, dc)
+    rs_rules = []
+    for r in d.get("rulesets", []):
         tgt = r.get("target", G_SEL) if r.get("target", G_SEL) in policies else G_SEL
         rs_rules.append(f"RULE-SET,{r['name']},{tgt}" + (",no-resolve" if r.get("behavior") == "ipcidr" else ""))
     custom = [fix_rule_policy(x, policies) for x in d["rules"]]
@@ -156,12 +182,8 @@ def mihomo_rules(d, policies, dc):
                 pre.append(f"SRC-IP-CIDR,{n},DIRECT")
             except ValueError:
                 pass
-    ab_prov, ab_rules = adblock_providers(d)
-    rule_providers.update(ab_prov)
     guard = []
-    if dc["block_bypass"]:  # 阻止局域网设备绕过 mihomo DNS：拒绝 DoT/DoQ(853) 与已知公共 DoH 服务器
-        rule_providers["dns-bypass-ip"] = {"type": "inline", "behavior": "ipcidr", "payload": list(DOH_IPS)}
-        rule_providers["dns-bypass-domain"] = {"type": "inline", "behavior": "domain", "payload": list(DOH_DOMAINS)}
+    if dc["block_bypass"]:
         guard = [f"AND,(({LAN_IN}),(DST-PORT,853)),REJECT",
                  f"AND,(({LAN_IN}),(DST-PORT,443),(RULE-SET,dns-bypass-ip,no-resolve)),REJECT",
                  f"AND,(({LAN_IN}),(RULE-SET,dns-bypass-domain)),REJECT"]

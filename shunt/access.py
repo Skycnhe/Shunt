@@ -37,11 +37,12 @@ def host_name(host):
 def host_ok(host):
     h = host_name(host).rstrip(".")
     if not h:
-        return True  # HTTP/1.0 等不带 Host：没有重绑定风险
+        return False  # 空 Host 拒绝
     try:
         ipaddress.ip_address(h)
         return True
     except ValueError:
         pass
     a = acl_cfg()
-    return a["public"] or h == "localhost" or "." not in h or h.endswith(LAN_SUFFIX) or h in a["hosts"]
+    # 单标签主机名只放行 localhost（防 DNS 重绑定绕过）；其余单标签需用户显式加入允许列表
+    return a["public"] or h == "localhost" or h.endswith(LAN_SUFFIX) or h in a["hosts"]

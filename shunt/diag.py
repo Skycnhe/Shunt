@@ -1,5 +1,5 @@
 """网络诊断"""
-import json, os, secrets, shutil, socket, threading, time, urllib.request, urllib.error
+import json, os, re, secrets, shutil, socket, threading, time, urllib.request, urllib.error
 
 from .errlog import ERRS
 from .base import CONF_DIR, TPROXY_SH
@@ -26,6 +26,14 @@ def dns_probe(server=("127.0.0.1", 1053), name="www.baidu.com"):
         s.close()
 
 
+def _scrub(s):
+    """诊断页脱敏：异常信息里可能带文件绝对路径或 URL 中的账号密码，展示前替换"""
+    s = re.sub(r"'/[^']*'", "'<路径>'", s)  # Python 异常常用引号包裹路径
+    s = re.sub(r'"/[^"]*"', '"<路径>"', s)
+    s = re.sub(r"(https?://[^/\s:]+:)[^@/\s]+@", r"\1***@", s)
+    return s
+
+
 def diagnose():
     d = load()
     mode = d["proxy_mode"]
@@ -37,7 +45,7 @@ def diagnose():
     recent = [e for e in ERRS if time.time() - e["t"] < 86400]
     if recent:
         item(f"面板内部错误（24 小时内 {len(recent)} 条）", "warn",
-             "；".join(f"{time.strftime('%m-%d %H:%M', time.localtime(e['t']))} {e['where']}：{e['msg']}" for e in recent[:5])[:600],
+             "；".join(f"{time.strftime('%m-%d %H:%M', time.localtime(e['t']))} {e['where']}：{_scrub(e['msg'])}" for e in recent[:5])[:600],
              "完整记录在 /var/log/mihomo-panel.log，反馈问题时请附上")
 
     code, ver = core("GET", "/version", timeout=5)

@@ -2,7 +2,7 @@
 import json, secrets, socket, time
 
 from .errlog import log_err
-from .core import core_json
+from .core import conns_snapshot
 from .logstream import core_stream
 def udp_dns_query(name, port=1053, host="127.0.0.1", timeout=8):
     """向本机 DNS 端口发一个 A 记录查询；收到同 ID 的应答（含 NXDOMAIN）即视为成功"""
@@ -46,7 +46,7 @@ def live_loop(path):
                 LIVE.update(upTotal=j.get("upTotal", 0), downTotal=j.get("downTotal", 0))
             elif time.time() - LIVE.get("_tt", 0) > 2:  # sing-box 的 /traffic 不带累计值，从 /connections 取
                 LIVE["_tt"] = time.time()
-                c = core_json("/connections", timeout=3) or {}
+                c = conns_snapshot(timeout=3) or {}
                 LIVE.update(upTotal=int(c.get("uploadTotal") or 0), downTotal=int(c.get("downloadTotal") or 0))
             LIVE["t"] = time.time()
     while True:

@@ -1,5 +1,5 @@
 """数据"""
-import copy, json, os, re, secrets, time
+import copy, json, os, re, secrets, threading, time
 
 from .base import (
     AUTO_SUFFIX, AUTO_TAIL, AUTO_TAIL_OLD, DATA_FILE, DEFAULT, G_AUTO, G_OTHER, LB_PREFIX, LB_SUFFIX, LB_TAIL, LEGACY_AUTO, LOCK,
@@ -207,6 +207,13 @@ def migrate_names(d, st=None):
     return map_refs(d, {k: v for k, v in mp.items() if k != v})
 
 
+_CONFIG_VERSION = [0]  # data.json 每次 save() 自增：/api/ping 用它判断配置是否变化
+
+
+def config_version():
+    return _CONFIG_VERSION[0]
+
+
 def save(d):
     os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
     tmp = DATA_FILE + ".tmp"
@@ -214,20 +221,27 @@ def save(d):
         json.dump(d, f, ensure_ascii=False, indent=2)
     os.chmod(tmp, 0o600)
     os.replace(tmp, DATA_FILE)
+    with LOCK:  # RLock 可重入：调用方可能已持有
+        _CONFIG_VERSION[0] += 1
 
 
 def update(fn):
-    """在锁内读-改-写 data.json，返回修改前的副本（用于配置校验失败时回滚）；有实际变化时把旧版本记入配置快照"""
+    """在锁内读-改-写 data.json，返回修改前的副本（用于配置校验失败时回滚）；有实际变化时把旧版本记入配置快照。
+    history.json 的全量读+写移到 LOCK 外（另用 _HISTORY_LOCK 保证原子），避免大快照拖慢写配置并阻塞其他 API。"""
     with LOCK:
         d = load()
         prev = copy.deepcopy(d)
         fn(d)
         save(d)
-        try:
+    try:
+        with _HISTORY_LOCK:
             history_push(prev, d)
-        except Exception as e:
-            print("history error", e, flush=True)
+    except Exception as e:
+        print("history error", e, flush=True)
     return prev
+
+
+_HISTORY_LOCK = threading.Lock()  # history.json 读-改-写原子性（update 的全局 LOCK 之外）
 
 
 HISTORY_FILE = os.path.join(PANEL_DIR, "history.json")
