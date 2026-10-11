@@ -1,5 +1,13 @@
 # 更新记录与详细说明
 
+## v7.0.0 三内核实测修复
+- 已在 Alpine 3.24 (aarch64) 上用离线包实测 mihomo、mihomo Smart、sing-box：订阅、手动节点、测速、策略组、规则、DNS、广告拦截、TProxy / TUN、内核切换、定时任务、备份恢复、重启后自动恢复均正常
+- 内核缺少 nftables / TProxy 模块时，透明代理规则加载失败会让 OpenRC 把核心标为启动失败，但进程还在后台运行，之后再也启动不了（"already running"）。现在规则失败只给出警告，核心照常运行，可改用 TUN
+- sing-box + TUN：内核不支持 nftables 时 auto_redirect 会让 sing-box 直接退出，局域网断网。现在检测到不支持就不启用 auto_redirect
+- sing-box 改配置后启动失败（能通过 sing-box check 但运行时报错）会撤销本次修改并恢复，不再停在核心未运行的状态；提示里带上 sing-box 的报错
+- TUN 启动失败时自动恢复原来的代理方式，避免局域网断网；TUN 网卡检测改为确认是真正的 TUN 网卡，网卡名与 eth0 等已有网卡重名时不再误报成功
+- selftest.sh（`install.sh --selftest`）跟上新的策略组名称（X竞技 / ⚖️ X哈希、只支持一致性哈希、≥2 个节点才生成哈希组），66 项全部通过
+
 ## v6.9.9 sing-box 累计流量与解析耗时
 - sing-box 的 /traffic 不带累计值，改为从 /connections 读取累计上传/下载，顶栏和概览恢复显示
 - sing-box 下「平均解析耗时」改为直接向 dns-in(1053) 发送 UDP 查询测速（国内、国外随机子域名各一次），不再显示「不支持」
