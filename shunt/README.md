@@ -21,6 +21,7 @@ python3 tools/build.py --split  # 直接改了 server.py 时，把内嵌源码�
 | 模块 | 内容 |
 |---|---|
 | base | 路径、常量、预设、通用工具 |
+| errlog | 错误记录（log_err，进日志和诊断页） |
 | data | 数据读写、迁移、组名 |
 | links | 节点链接解析 |
 | groups | 策略组 |
@@ -29,7 +30,13 @@ python3 tools/build.py --split  # 直接改了 server.py 时，把内嵌源码�
 | sb_common / sb_yaml / sb_subs / sb_nodes / sb_rules / sb_dns / sb_config / sb_switch | sing-box：公共、YAML 解析、订阅、节点转换、规则转换、DNS、生成配置、内核切换 |
 | panel_update / core_update | 面板在线更新（按 update-files.txt）、内核更新 |
 | sysopt | Alpine 系统优化、测速 |
-| auth / notify / latency / stats / unlock / ruletest / logstream | 认证、Telegram 与故障直连、延迟缓存、流量统计、流媒体解锁、规则测试、实时日志 |
+| notify / latency / stats / unlock / ruletest / logstream | Telegram 与故障直连、延迟缓存、流量统计、流媒体解锁、规则测试、实时日志 |
 | adblock / live / logclean / schedule / devices / diag / dnsleak | 广告拦截、实时速率、日志清理、定时任务、设备名、网络诊断、DNS 防泄露 |
-| migrate / login / https / access / update_guard | 升级迁移、登录防爆破、HTTPS、访问控制、更新回滚守护 |
-| static / webapi / cli | 静态资源、HTTP 接口、命令行入口 |
+| migrate / https / access / update_guard | 升级迁移、HTTPS、访问控制、更新回滚守护 |
+| static / webapi / cli | 静态资源、HTTP 接口（`@api_route` 路由表）、命令行入口 |
+
+## 前端与测试
+
+- 前端源码在 `web/`：`index.html` 模板 + `style.css` + `js/NN-*.js`（按页面分），`tools/build.py` 合并成根目录的单文件 `index.html`
+- 单元测试在 `tests/`：`python3 -m unittest discover -s tests -t .`；端到端测试仍是 `selftest.sh`
+- 新增接口：在 `webapi.py` 的类 H 里加一个 `@api_route("/api/xxx", "GET")` 方法
