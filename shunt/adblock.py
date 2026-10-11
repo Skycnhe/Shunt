@@ -4,20 +4,21 @@ from collections import deque
 from urllib.parse import quote
 
 from .errlog import log_err
-from .base import AB_DIR, AB_STATS_FILE, CONF_DIR, UA, dl_check
+from .base import AB_DIR, AB_STATS_FILE, CONF_DIR, UA, dl_check, udp_dns_query
 from .data import load, read_json, write_json
 from .mihomo import build_config
-from .core import core, reload_core
+from .core import reload_core
+from .corehttp import core
 from .sb_common import active_core
 from .sb_config import sb_sync_assets
 from .sysopt import proxy_opener
 from .ruletest import clean_target
 from .logstream import core_stream
+from .ruleutil import DOMAIN_RX, adblock_providers
 # 订阅 AdGuard/ABP（||domain^、@@||domain^）、hosts（0.0.0.0 domain）与纯域名列表，转换为 mihomo
 # behavior=domain / format=text 的本地 rule-provider 文件：
 #   ||a.com^ → "+.a.com"（含子域）；hosts / 纯域名 → "a.com"（仅该域名，与 AdGuard Home 语义一致）
 # 规则：AND,((RULE-SET,ad-xxx),(NOT,((RULE-SET,ad-allow)))),REJECT  —— 白名单优先，且被放行的域名继续走正常分流
-DOMAIN_RX = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9_](?:[a-z0-9_\-]{0,61}[a-z0-9_])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9\-]{1,59})$")
 CLASH_RX = re.compile(r"^(domain|domain-suffix),([^,\s]+)(?:,.*)?$")
 ABP_RX = re.compile(r"^(@@)?\|\|([^\^/|$]+)\^\|?(?:\$(.*))?$")
 HOSTS_IPS = {"0.0.0.0", "127.0.0.1", "::", "::1", "0:0:0:0:0:0:0:0", "::0", "0", "255.255.255.255"}
@@ -198,29 +199,6 @@ def ab_compose(d):
         except OSError:
             pass
     write_lines(os.path.join(AB_DIR, "allow.txt"), domain_lines(suffix, exact)[0])
-
-
-def adblock_providers(d):
-    ab = d.get("adblock") or {}
-    if not ab.get("enabled"):
-        return {}, []
-    prov = {}
-
-    def add(name, fn):
-        path = os.path.join(AB_DIR, fn)
-        if os.path.isfile(path) and os.path.getsize(path) > 0:
-            prov[name] = {"type": "file", "behavior": "domain", "format": "text", "path": "./adblock/" + fn}
-    add("ad-allow", "allow.txt")
-    add("ad-custom", "custom.txt")
-    for l in ab.get("lists", []):
-        if l.get("enabled", True) and re.fullmatch(r"[0-9a-f]{8}", l.get("id", "")):
-            add("ad-" + l["id"], l["id"] + ".txt")
-    rules = []
-    for k in prov:
-        if k == "ad-allow":
-            continue
-        rules.append(f"AND,((RULE-SET,{k}),(NOT,((RULE-SET,ad-allow)))),REJECT" if "ad-allow" in prov else f"RULE-SET,{k},REJECT")
-    return prov, rules
 
 
 def config_text(d):
@@ -560,8 +538,3 @@ class AdStats:
 
 AD_STATS = None
 
-
-def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global udp_dns_query
-    from .live import udp_dns_query

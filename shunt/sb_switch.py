@@ -1,13 +1,17 @@
 """内核切换"""
 import hashlib, io, json, os, re, shutil, threading, time
 
-from .base import CONF_DIR, MIHOMO_LOG, SMART_BIN, SVC
+from .base import CONF_DIR, CORE_UPD, MIHOMO_LOG, SMART_BIN, SVC
 from .data import load, update
 from .groups import PROV, gcfg
 from .mihomo import check_config, mh_bin, write_config
 from .sb_common import CORES, SB_API, SB_BIN, SB_CONF, SB_REPO, SB_STATE, active_core, write_core_file
 from .sb_subs import sb_update_subs
 from .sb_config import check_sb_config, sb_sync_assets, sb_version, write_sb_config
+from .core_update import LGBM_FILE, _cu, bin_version, lgbm_fetch, mh_fetch, open_url, release_digest
+from .sysopt import sh
+from .notify import WD, core_alive, notify
+from .migrate import restore_selections, snapshot_selections
 def sb_arch():
     m = os.uname().machine
     return {"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64", "armv7l": "armv7", "armv8l": "armv7", "armv6l": "armv6",
@@ -216,11 +220,3 @@ def sb_update_job(channel, gh, force=False):
         CORE_UPD["busy"] = False
 
 
-def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global CORE_UPD, LGBM_FILE, _cu, bin_version, lgbm_fetch, mh_fetch, open_url, release_digest
-    global sh, WD, core_alive, notify, restore_selections, snapshot_selections
-    from .core_update import CORE_UPD, LGBM_FILE, _cu, bin_version, lgbm_fetch, mh_fetch, open_url, release_digest
-    from .sysopt import sh
-    from .notify import WD, core_alive, notify
-    from .migrate import restore_selections, snapshot_selections

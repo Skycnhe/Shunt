@@ -3,7 +3,8 @@ import ipaddress, json, re, socket, threading, time
 from urllib.parse import quote
 
 from .base import MIXED
-from .core import core_json
+from .corehttp import core_json
+from .logstream import core_stream
 def clean_target(t):
     t = t.strip()
     t = re.sub(r"^[a-z]+://", "", t, flags=re.I).split("/")[0].split("?")[0]
@@ -166,8 +167,3 @@ def rule_test(target):
     res["host"] = host
     return res
 
-
-def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global core_stream
-    from .logstream import core_stream

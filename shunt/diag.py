@@ -5,7 +5,7 @@ from .errlog import ERRS
 from .base import CONF_DIR, TPROXY_SH
 from .data import load
 from .mihomo import check_config, mh_bin, safe_dev
-from .core import core
+from .corehttp import core
 from .sb_common import CORES, SB_BIN, SB_CONF, SB_STATE, active_core
 from .sb_config import check_sb_config
 from .sysopt import proxy_opener, sh

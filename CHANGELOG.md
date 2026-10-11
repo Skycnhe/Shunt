@@ -1,5 +1,10 @@
 # 更新记录与详细说明
 
+## v7.4.6 架构重构：消除循环导入、双内核去重
+- 消除 `_link()` 延迟绑定：22 个模块的大循环拆成无环导入。新建 `corehttp.py`（核心 HTTP 交互）、`ruleutil.py`（规则工具）两个叶子模块；`config_view`→webapi、`validate_groups`→webapi、`gh_api`→core_update、`sb_provider_nodes` 相关→groups；常量（`LGBM_URL`、`UPD_STATE` 等）下沉到 base。仅剩 core↔latency 一处有意的最小延迟绑定（真互递归）
+- 双内核翻译层去重：抽出 `geo_srs_entry`、`tun_params` 等共享函数，`_mh_domain`/`_rs_tag` 下沉到 ruleutil，删掉重复实现
+- 行为零变化：重构前后 mihomo / sing-box 生成的配置逐字节一致，30 个测试全过
+
 ## v7.4.5
 - 修复 v7.4.3 的 bug：`core.py` 的 `_link()` 里 `sb_rule_need` 漏加 `global` 声明，sing-box 用户改配置触发 `reload_core` 时会 NameError（被异常捕获不会崩，但广告规则集预同步失效）
 

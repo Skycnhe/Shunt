@@ -3,11 +3,14 @@ import ipaddress, json, os, re
 
 from .base import (
     AUTO_ORDER, BUILTIN_POLICIES, CONF_DIR, CTRL_HOST, CTRL_PORT, DEFAULT_EXCLUDE, DNS_DEFAULT, DNS_LISTS, DOH_DOMAINS, DOH_IPS, G_AI,
-    G_AUTO, G_DIRECT, G_FINAL, G_GG, G_MANUAL, G_NF, G_SEL, G_TG, G_YT, HC, LAN_IN, LB_ORDER, MIHOMO_BIN, MIXED, SIDE_GROUPS, SMART_BIN,
+    G_AUTO, G_DIRECT, G_FINAL, G_GG, G_MANUAL, G_NF, G_SEL, G_TG, G_YT, HC, LAN_IN, LB_ORDER, LGBM_URL, MIHOMO_BIN, MIXED, SIDE_GROUPS, SMART_BIN,
     TUN_DEFAULT, TUN_STACKS
 )
 from .data import LB_KINDS, auto_name, lb_name, region_label, safe
 from .groups import clean_custom_group, gcfg, group_opts, region_plan, rx
+from .ruleutil import DOMAIN_RX, adblock_providers, dns_policy_of, rule_policy_index
+from .sb_common import active_core
+from .sysopt import sh
 def build_config(d, strict=False):
     providers = {}
     for s in d["subs"]:
@@ -248,24 +251,26 @@ def mihomo_hosts(dc):
     return hosts
 
 
-def mihomo_tun(d):
+def tun_params(d):
+    """TUN 参数归一化：mihomo_tun 与 sing-box sb_inbounds 共用同一决策（是否启用、协议栈回退、设备名、开关量）。"""
     tc = d.get("tun") or TUN_DEFAULT
-    if d.get("proxy_mode") == "tun":
-        tun = {"enable": True, "stack": tc.get("stack") if tc.get("stack") in TUN_STACKS else "mixed",
-               "device": safe_dev(tc.get("device")), "auto-route": True, "auto-redirect": bool(tc.get("auto_redirect", True)),
-               "auto-detect-interface": True, "dns-hijack": ["any:53", "tcp://any:53"],
-               "strict-route": bool(tc.get("strict_route", False))}
-    else:
-        tun = {"enable": False}
-    return tun
+    return {
+        "enable": d.get("proxy_mode") == "tun",
+        "stack": tc.get("stack") if tc.get("stack") in TUN_STACKS else "mixed",
+        "device": safe_dev(tc.get("device")),
+        "auto_redirect": bool(tc.get("auto_redirect", True)),
+        "strict_route": bool(tc.get("strict_route", False)),
+    }
 
 
+def mihomo_tun(d):
+    p = tun_params(d)
+    if not p["enable"]:
+        return {"enable": False}
+    return {"enable": True, "stack": p["stack"], "device": p["device"], "auto-route": True,
+            "auto-redirect": p["auto_redirect"], "auto-detect-interface": True, "dns-hijack": ["any:53", "tcp://any:53"],
+            "strict-route": p["strict_route"]}
 
-def rule_policy_index(parts):
-    i = len(parts) - 1
-    while i > 0 and parts[i].strip().lower() in ("no-resolve", "src"):
-        i -= 1
-    return i
 
 
 def fix_rule_policy(rule, policies):
@@ -343,14 +348,6 @@ def dns_cfg(d):
                          "servers": [str(x).strip() for x in sv if str(x).strip()]})
     dc["policies"] = pols
     return dc
-
-
-def dns_policy_of(server):
-    _, sep, tail = server.partition("#")
-    if not sep:
-        return ""
-    # "#节点" 或 "#节点&h3=true" 之类的参数
-    return tail.split("&")[0] if "=" not in tail.split("&")[0] else ""
 
 
 def fix_dns_policy(server, policies):
@@ -455,11 +452,3 @@ def check_config(path, kind=None):
     lines = [l for l in out.splitlines() if "level=error" in l or "level=fatal" in l or "test failed" in l.lower() or l.startswith("panic:")]
     return False, "\n".join(lines[-3:]) or out[-400:]
 
-
-def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global active_core, LGBM_URL, sh, DOMAIN_RX, adblock_providers
-    from .sb_common import active_core
-    from .core_update import LGBM_URL
-    from .sysopt import sh
-    from .adblock import DOMAIN_RX, adblock_providers

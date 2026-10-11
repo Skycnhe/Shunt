@@ -1,21 +1,20 @@
 """内核（mihomo）更新"""
-import hashlib, os, re, shutil, sys, threading, time, urllib.request, urllib.error
+import hashlib, json, os, re, shutil, sys, threading, time, urllib.request, urllib.error
 from collections import deque
 from urllib.parse import quote
 
 from .errlog import log_err
-from .base import CONF_DIR, MIHOMO_LOG, SVC, UA, dl_check
+from .base import CONF_DIR, CORE_UPD, LGBM_URL, MIHOMO_LOG, SVC, UA, UPD_STATE, dl_check
 from .data import load
 from .mihomo import mh_bin, write_config
 from .core import reload_core
 from .sb_common import CORES, active_core
-from .panel_update import UPD_STATE, gh_api
+from .sysopt import proxy_opener, sh
+from .notify import core_alive, notify
 CORE_REPO = os.environ.get("CORE_REPO", "https://github.com/MetaCubeX/mihomo/releases")
 CORE_CHANNELS = {"stable": "latest/download", "alpha": "download/Prerelease-Alpha"}
 SMART_REPO = os.environ.get("SMART_REPO", "https://github.com/vernesong/mihomo/releases")  # 只发布 Alpha 预览版
-LGBM_URL = SMART_REPO + "/download/LightGBM-Model/Model.bin"
 LGBM_FILE = os.path.join(CONF_DIR, "Model.bin")
-CORE_UPD = {"busy": False, "stage": "", "pct": 0, "ok": None, "message": "", "log": deque(maxlen=30), "t": 0}
 
 
 def core_arch():
@@ -55,6 +54,12 @@ def open_url(url, gh, timeout=20):
         except Exception as e:
             err = f"{u.split('/')[2]}{'(代理)' if use_proxy else ''}: {str(e)[:120]}"
     raise IOError(err)
+
+
+def gh_api(path, timeout=15):
+    """直连或经 mihomo 代理访问 GitHub API（绝不走第三方加速镜像：校验值必须来自 GitHub 本身）"""
+    with open_url("https://api.github.com" + path, "", timeout=timeout) as r:
+        return json.loads(r.read(8 << 20))
 
 
 def release_digest(repo_url, tag, name):
@@ -304,9 +309,3 @@ def core_job_start(fn, *args):
 def core_upd_status():
     return {k: (list(v) if isinstance(v, deque) else v) for k, v in CORE_UPD.items()}
 
-
-def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global proxy_opener, sh, core_alive, notify
-    from .sysopt import proxy_opener, sh
-    from .notify import core_alive, notify

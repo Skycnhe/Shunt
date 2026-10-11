@@ -3,8 +3,8 @@ import re
 from urllib.parse import urlsplit
 
 from .base import DNS_DEFAULT
-from .mihomo import dns_cfg, dns_policy_of, fix_dns_policy, is_ip_addr, policy_parts
-from .sb_rules import _mh_domain
+from .mihomo import dns_cfg, fix_dns_policy, is_ip_addr, policy_parts
+from .ruleutil import _mh_domain, dns_policy_of
 def _sb_dns_server(addr, tag, boot, warn):
     """mihomo DNS 地址（含 #策略组）→ sing-box DNS server"""
     addr = addr.strip()
@@ -138,8 +138,3 @@ def sb_dns(d, cfg, policies, rs, alias, v6):
            "cache_capacity": 4096}
     return out, t_node, t_direct, t_proxy
 
-
-def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global ab_sets
-    from .adblock import ab_sets

@@ -1,22 +1,14 @@
 """规则：mihomo 规则字符串 → sing-box 路由规则"""
 import re
 
-from .mihomo import rule_policy_index
+from .ruleutil import _mh_domain, _rs_tag, rule_policy_index
 from .sb_common import SB_GEO
-def _mh_domain(x):
-    """mihomo 域名通配（+.a.com / *.a.com / a.*.com）→ (字段, 值)"""
-    x = x.strip().lower()
-    if x.startswith("+."):
-        return "domain_suffix", x[2:]
-    if x.startswith("."):
-        return "domain_suffix", x[1:]
-    if "*" in x:
-        return "domain_regex", "^" + re.escape(x).replace(r"\*", r"[^.]+") + "$"
-    return "domain", x
 
 
-def _rs_tag(kind, name):
-    return f"{kind}-{name}".lower() if kind in ("geosite", "geoip") else name
+def geo_srs_entry(kind, name):
+    """GEOIP/GEOSITE → (tag, 规则集条目)。SBRules.use_geo 与 sb_geo_rule_sets 共用，避免两处硬编码同一 URL 格式。"""
+    tag = _rs_tag(kind, name)
+    return tag, {"kind": "geo", "url": f"{SB_GEO}/{kind}/{name.lower()}.srs", "path": f"{kind}-{name.lower()}.srs"}
 
 
 def _split_top(s):
@@ -45,9 +37,9 @@ class SBRules:
         self.warn = []
 
     def use_geo(self, kind, name):
-        tag = _rs_tag(kind, name)
+        tag, entry = geo_srs_entry(kind, name)
         if tag not in self.rule_sets:
-            self.rule_sets[tag] = {"kind": "geo", "url": f"{SB_GEO}/{kind}/{name.lower()}.srs", "path": f"{kind}-{name.lower()}.srs"}
+            self.rule_sets[tag] = entry
         return tag
 
     def cond(self, typ, val):

@@ -1,13 +1,10 @@
 """Alpine 系统优化"""
-import http.client, json, os, re, ssl, subprocess, threading, time, urllib.request, urllib.error
+import http.client, os, re, ssl, subprocess, threading, time, urllib.request, urllib.error
 from collections import deque
 from urllib.parse import urlsplit
 
 from .base import MIXED, PANEL_DIR, TESTS, UA, SafeRedirectHandler, dl_check
 from .data import load, update
-from .mihomo import build_config
-from .sb_common import active_core
-from .sb_config import build_singbox
 PROC_SYS = os.environ.get("PANEL_PROC_SYS", "/proc/sys")
 SYS_ROOT = os.environ.get("PANEL_SYS_ROOT", "/sys")
 ETC = os.environ.get("PANEL_ETC", "/etc")
@@ -395,37 +392,6 @@ def speed_test(proxy):
         return {"ok": True, "mbps": round(n * 8 / dt / 1e6, 1), "mb": round(n / 1e6, 1), "ttfb": int(ttfb * 1000)}
     except Exception as e:
         return {"ok": False, "error": str(e)[:120], "mb": round(n / 1e6, 1)}
-
-
-_MASK_WORDS = ("password", "passwd", "uuid", "token", "psk", "secret", "privatekey")
-
-
-def _mask_val(v):
-    """敏感值掩盖中间：长值露头 3 + 尾 2，短值全打码"""
-    s = str(v)
-    return f"{s[:3]}******{s[-2:]}" if len(s) > 6 else "******"
-
-
-def _mask_cfg(o):
-    """递归掩盖配置里的敏感字段（key 含 password/uuid/token/psk/secret/privatekey 等，去掉 -_ 后匹配）"""
-    if isinstance(o, dict):
-        return {k: (_mask_val(v) if isinstance(v, str) and any(w in k.lower().replace("-", "").replace("_", "")
-                                                              for w in _MASK_WORDS) else _mask_cfg(v))
-                for k, v in o.items()}
-    if isinstance(o, list):
-        return [_mask_cfg(x) for x in o]
-    return o
-
-
-def config_view(d=None, masked=True):
-    d = d or load()
-    if active_core(d) == "singbox":
-        cfg = build_singbox(d)[0]
-    else:
-        cfg = build_config(d)
-    if masked:
-        cfg = _mask_cfg(cfg)  # 原来只掩 secret，节点 password/uuid 等明文：名不副实，改为递归掩盖
-    return json.dumps(cfg, ensure_ascii=False, indent=2)
 
 
 _NFT = {"ok": None, "t": 0}

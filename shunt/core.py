@@ -1,49 +1,15 @@
 """核心交互"""
-import json, os, threading, time, urllib.request, urllib.error
+import os, threading, time
 
-from .base import CONF_DIR, CTRL, DATA_FILE, LOCK, SVC
+from .base import CONF_DIR, LOCK, SVC
+from .corehttp import core, core_json
 from .data import load, read_json, save
 from .groups import provider_nodes
 from .mihomo import build_config, check_config, write_config
-DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # 访问本机控制器绝不走系统代理
-
-
-_SECRET = [None, ""]
-
-
-def ctrl_secret():
-    """控制器密钥按 data.json 修改时间缓存：每秒的实时请求不再反复读取解析整份配置"""
-    try:
-        st = os.stat(DATA_FILE)
-        key = (st.st_mtime_ns, st.st_size)
-    except OSError:
-        key = None
-    if key is None or _SECRET[0] != key:
-        _SECRET[:] = [key, load()["secret"]]
-    return _SECRET[1]
-
-
-def core(method, path, body=None, timeout=10):
-    data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(CTRL + path, data=data, method=method,
-                                 headers={"Authorization": "Bearer " + ctrl_secret(), "Content-Type": "application/json"})
-    try:
-        with DIRECT_OPENER.open(req, timeout=timeout) as r:
-            return r.status, r.read()
-    except urllib.error.HTTPError as e:
-        return e.code, e.read()
-    except Exception as e:
-        return 502, json.dumps({"message": "mihomo 未运行或无法连接: %s" % e}).encode()
-
-
-def core_json(path, timeout=10):
-    code, raw = core("GET", path, timeout=timeout)
-    if code != 200:
-        return None
-    try:
-        return json.loads(raw)
-    except Exception:
-        return None
+from .sb_common import SB_CONF, active_core
+from .sb_config import build_singbox, check_sb_config, sb_hot_reload, sb_log_error, sb_rule_need, sb_sync_assets, write_sb_config
+from .sysopt import sh
+from .notify import WD, core_alive
 
 
 _CONN_SNAP = {}
@@ -155,11 +121,8 @@ def refresh_after_sub(name, wait=90):
 
 
 def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global SB_CONF, active_core, build_singbox, check_sb_config, sb_hot_reload, sb_log_error, sb_rule_need, sb_sync_assets, write_sb_config
-    global sh, WD, core_alive, retest_soon
-    from .sb_common import SB_CONF, active_core
-    from .sb_config import build_singbox, check_sb_config, sb_hot_reload, sb_log_error, sb_rule_need, sb_sync_assets, write_sb_config
-    from .sysopt import sh
-    from .notify import WD, core_alive
+    # 唯一的延迟绑定：core.reload_core() 在重载后调用 latency.retest_soon() 触发补测，
+    # 而 latency 的定时调度器又需要 core.refresh_regions() —— 真互递归，无法通过移动代码破环。
+    # latency 侧已改为顶层导入 core，这里只延迟绑定 retest_soon 这一个名字。
+    global retest_soon
     from .latency import retest_soon

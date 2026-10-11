@@ -4,6 +4,7 @@ import os
 from .errlog import log_err
 from .base import CONF_DIR, PANEL_DIR
 from .data import load
+from .sysopt import wfile
 # 面板数据（订阅、节点、规则、DNS、设备）两个内核共用；切换内核时按各自格式生成独立的配置文件：
 #   mihomo   → /etc/mihomo/config.yaml
 #   sing-box → /etc/sing-box/config.json
@@ -39,8 +40,3 @@ def write_core_file(kind):
     except OSError as e:
         log_err("记录当前内核", e)
 
-
-def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global wfile
-    from .sysopt import wfile

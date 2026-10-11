@@ -4,7 +4,7 @@ import copy, ipaddress, json, os, re, secrets, socket, threading, time
 from .base import CN_DNS, DEFAULT_FAKE_FILTER, DNS_DEFAULT, G_SEL, TPROXY_SH
 from .data import load
 from .mihomo import dns_cfg, dns_policy_of, policy_parts
-from .core import core
+from .corehttp import core
 from .sysopt import sh
 from .notify import core_alive
 from .unlock import fetch

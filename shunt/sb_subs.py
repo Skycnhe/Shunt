@@ -2,15 +2,15 @@
 import json, os, re, threading, time, urllib.request, urllib.error
 
 from .base import CONF_DIR, DEFAULT_EXCLUDE, PANEL_DIR, dl_check
-from .data import load, read_json, safe, write_json
-from .links import b64d, parse_link, reserved_names
-from .groups import PROV, rx
-from .sb_common import SB_SUB_DIR, SB_UA
+from .data import load, safe, write_json
+from .links import b64d, parse_link
+from .groups import PROV, rx, sub_cache_path
+from .sb_common import SB_UA
 from .sb_yaml import yaml_lite
+from .sysopt import proxy_opener
+from .notify import core_alive
 
 _DEBUG_LOCK = threading.Lock()  # sub-debug.txt 并发写保护
-def sub_cache_path(name):
-    return os.path.join(SB_SUB_DIR, safe(name) + ".json")
 
 
 def _yaml_full(text):
@@ -222,31 +222,6 @@ def sb_fetch_sub(s, gh=""):
     raise IOError(last or "下载失败")
 
 
-def sb_sub_cache(name):
-    return read_json(sub_cache_path(name), {}) or {}
-
-
-def sb_provider_nodes(d):
-    """{订阅名: [节点名]}，名称已按全局去重（与生成的 sing-box 配置一致）"""
-    return {k: [n for n, _ in v] for k, v in sb_sub_outbounds(d).items()}
-
-
-def sb_sub_outbounds(d):
-    taken = {n["proxy"]["name"] for n in d.get("nodes", [])} | reserved_names(d)
-    out = {}
-    for s in d["subs"]:
-        lst = []
-        for p in sb_sub_cache(s["name"]).get("nodes") or []:
-            base = str(p.get("name") or "").strip() or "node"
-            name, k = base, 2
-            while name in taken:
-                name, k = f"{base} ({k})", k + 1
-            taken.add(name)
-            lst.append((name, p))
-        out[s["name"]] = lst
-    return out
-
-
 def sb_update_subs(names=None, d=None):
     """并发更新订阅：每个订阅一个线程（单个订阅仍串行走 UA/代理/直连回退），整体耗时取决于最慢的一个"""
     d = d or load()
@@ -273,9 +248,3 @@ def sb_update_subs(names=None, d=None):
     return ok, bad
 
 
-def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global proxy_opener, core_alive, fetch
-    from .sysopt import proxy_opener
-    from .notify import core_alive
-    from .unlock import fetch

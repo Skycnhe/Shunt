@@ -2,9 +2,11 @@
 import os, re, time
 
 from .errlog import log_err
-from .base import BUILTIN_POLICIES, GROUPS_DEFAULT, GROUP_TYPES, G_OTHER, PANEL_DIR, PRIMARY_REGIONS, REGIONS
-from .data import load, read_json, write_json
+from .base import GROUPS_DEFAULT, GROUP_TYPES, G_OTHER, PANEL_DIR, PRIMARY_REGIONS, REGIONS
+from .corehttp import core_json
+from .data import load, read_json, safe, write_json
 from .links import reserved_names
+from .sb_common import SB_SUB_DIR, active_core
 PROV_FILE = os.path.join(PANEL_DIR, "provider_nodes.json")
 PROV = {"t": 0, "data": None}
 RX_CACHE = {}
@@ -18,6 +20,35 @@ def rx(pattern):
         except re.error:
             RX_CACHE[pattern] = None
     return RX_CACHE[pattern]
+
+
+def sub_cache_path(name):
+    return os.path.join(SB_SUB_DIR, safe(name) + ".json")
+
+
+def sb_sub_cache(name):
+    return read_json(sub_cache_path(name), {}) or {}
+
+
+def sb_provider_nodes(d):
+    """{订阅名: [节点名]}，名称已按全局去重（与生成的 sing-box 配置一致）"""
+    return {k: [n for n, _ in v] for k, v in sb_sub_outbounds(d).items()}
+
+
+def sb_sub_outbounds(d):
+    taken = {n["proxy"]["name"] for n in d.get("nodes", [])} | reserved_names(d)
+    out = {}
+    for s in d["subs"]:
+        lst = []
+        for p in sb_sub_cache(s["name"]).get("nodes") or []:
+            base = str(p.get("name") or "").strip() or "node"
+            name, k = base, 2
+            while name in taken:
+                name, k = f"{base} ({k})", k + 1
+            taken.add(name)
+            lst.append((name, p))
+        out[s["name"]] = lst
+    return out
 
 
 def provider_nodes(fresh=False):
@@ -102,34 +133,6 @@ def all_node_names(d):
     return [n["proxy"]["name"] for n in d.get("nodes", [])] + [n for s in d["subs"] for n in pn.get(s["name"], [])]
 
 
-def find_cycle(groups):
-    """策略组之间的循环引用，返回环路径或 None"""
-    gmap = {g["name"]: [m for m in g.get("proxies", [])] for g in groups}
-    state, stack = {}, []
-
-    def dfs(n):
-        state[n] = 1
-        stack.append(n)
-        for m in gmap.get(n, []):
-            if m in gmap:
-                if state.get(m) == 1:
-                    return stack[stack.index(m):] + [m]
-                if not state.get(m):
-                    c = dfs(m)
-                    if c:
-                        return c
-        state[n] = 2
-        stack.pop()
-        return None
-
-    for n in gmap:
-        if not state.get(n):
-            c = dfs(n)
-            if c:
-                return c
-    return None
-
-
 NAME_BAD = re.compile(r"[,#\n\r\t\"]")
 
 
@@ -170,41 +173,3 @@ def clean_custom_group(b):
         if t == "load-balance":
             g["strategy"] = "consistent-hashing"  # 只支持一致性哈希
     return g
-
-
-def validate_groups(d):
-    """生成配置后检查自定义组：重名、成员不存在、循环引用"""
-    errs = []
-    nodes = all_node_names(d)
-    fixed = reserved_names()
-    seen = set()
-    for cg in d.get("custom_groups") or []:
-        n = cg["name"]
-        if n in seen:
-            errs.append(f"策略组重名：{n}")
-        if n in fixed:
-            errs.append(f"「{n}」与内置策略组或策略同名")
-        if n in nodes:
-            errs.append(f"「{n}」与节点同名")
-        seen.add(n)
-    cfg = build_config(d, strict=True)
-    names = {g["name"] for g in cfg["proxy-groups"]} | BUILTIN_POLICIES | {p["name"] for p in cfg["proxies"]}
-    for cg in d.get("custom_groups") or []:
-        miss = [m for m in cg["proxies"] if m not in names]
-        if miss:
-            errs.append(f"「{cg['name']}」的成员不存在：" + "、".join(miss[:5]))
-        if cg["name"] in cg["proxies"]:
-            errs.append(f"「{cg['name']}」不能包含自己")
-    cyc = find_cycle(cfg["proxy-groups"])
-    if cyc:
-        errs.append("策略组循环引用：" + " → ".join(cyc) + "（加入分流组候选的自定义组不能再引用 YouTube / Google 等分流组，可关闭“加入分流组候选”）")
-    return errs
-
-
-def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global build_config, core_json, active_core, sb_provider_nodes
-    from .mihomo import build_config
-    from .core import core_json
-    from .sb_common import active_core
-    from .sb_subs import sb_provider_nodes

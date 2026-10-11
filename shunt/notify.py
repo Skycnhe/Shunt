@@ -3,10 +3,9 @@ import json, socket, threading, time, urllib.request, urllib.error
 from collections import deque
 from urllib.parse import quote
 
-from .base import G_MANUAL, HC, NOTIFY_FILE, SVC, TPROXY_SH
+from .base import CORE_UPD, G_MANUAL, HC, NOTIFY_FILE, SVC, TPROXY_SH
 from .data import load, read_json, write_json
-from .core import core, core_json
-from .core_update import CORE_UPD
+from .corehttp import core, core_json
 from .sysopt import proxy_opener, sh
 def tg_send(text, d=None):
     d = d or load()

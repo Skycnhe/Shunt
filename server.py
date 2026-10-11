@@ -4,14 +4,16 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.4.5"
+PANEL_VERSION = "7.4.6"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
 _SRC['shunt'] = '''"""Shunt 分流面板后端。
 
 设备上运行的是仓库根目录的 server.py：它由 tools/build.py 生成，内嵌了本目录全部模块的源码，所以部署时仍然只有一个文件。
-模块之间：引用前面模块的名字直接 from-import；引用后面模块的名字写在各模块末尾的 _link() 里，由 load() 在全部模块加载后调用。
+模块之间直接 from-import，依赖无环（tools/build.py 生成前可用文末的 SCC 脚本验证）。
+唯一的例外是 core.py 末尾的 _link()：core.reload_core() 需要 latency.retest_soon()，
+而 latency 的定时器又需要 core.refresh_regions()，真互递归，只能延迟绑定这一个名字。
 """
 import importlib
 import os
@@ -22,9 +24,11 @@ MODULES = [
     "errlog",
     "data",
     "links",
+    "ruleutil",
     "groups",
     "mihomo",
     "core",
+    "corehttp",
     "sb_common",
     "sb_yaml",
     "sb_subs",
@@ -86,14 +90,52 @@ _SRC['shunt.base'] = '''"""基础常量与通用工具"""
 import shunt
 import ipaddress
 import os, threading, re
+import secrets
 import socket
+import time
 import urllib.error
 import urllib.request
+from collections import deque
 from urllib.parse import urlsplit
 
 BASE = os.path.dirname(os.path.abspath(shunt.SERVER_FILE))  # 面板文件所在目录（index.html、tproxy.sh 等）
 CONF_DIR = os.environ.get("MIHOMO_DIR", "/etc/mihomo")
 DATA_FILE = os.environ.get("PANEL_DATA", "/etc/mihomo-panel/data.json")
+LGBM_URL = os.environ.get("SMART_REPO", "https://github.com/vernesong/mihomo/releases") + "/download/LightGBM-Model/Model.bin"
+UPD_STATE = {"busy": False}  # 面板在线更新忙标志：panel_update 与 core_update 共用，避免循环导入
+CORE_UPD = {"busy": False, "stage": "", "pct": 0, "ok": None, "message": "", "log": deque(maxlen=30), "t": 0}  # 内核更新状态：core_update 与 notify 共用
+
+
+def local_file(f):
+    """部署文件 f 的本地路径（init.d/ 下的优先用 /etc/init.d/ 的系统版本）"""
+    if f.startswith("init.d/"):
+        sysf = "/etc/init.d/" + f[7:]
+        return sysf if BASE == "/opt/mihomo-panel" and os.path.isfile(sysf) else os.path.join(BASE, f)
+    return os.path.join(BASE, f)
+
+
+def udp_dns_query(name, port=1053, host="127.0.0.1", timeout=8):
+    """向本机 DNS 端口发一个 A 记录查询；收到同 ID 的应答（含 NXDOMAIN）即视为成功"""
+    qid = secrets.randbits(16)
+    pkt = qid.to_bytes(2, "big") + b"\\x01\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00"
+    for lab in name.strip(".").split("."):
+        b = lab.encode("idna") if lab else b""
+        pkt += bytes([len(b)]) + b
+    pkt += b"\\x00\\x00\\x01\\x00\\x01"
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.settimeout(timeout)
+    try:
+        s.sendto(pkt, (host, port))
+        end = time.time() + timeout
+        while time.time() < end:
+            data = s.recv(1500)
+            if len(data) >= 12 and int.from_bytes(data[:2], "big") == qid and data[2] & 0x80:
+                return True
+    except Exception:
+        return False
+    finally:
+        s.close()
+    return False
 PANEL_DIR = os.path.dirname(DATA_FILE)
 STATS_FILE = os.path.join(PANEL_DIR, "stats.json")
 NOTIFY_FILE = os.path.join(PANEL_DIR, "notify.json")
@@ -187,7 +229,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.4.5"
+PANEL_VERSION = "7.4.6"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -307,6 +349,7 @@ from .base import (
     AUTO_SUFFIX, AUTO_TAIL, AUTO_TAIL_OLD, DATA_FILE, DEFAULT, G_AUTO, G_OTHER, LB_PREFIX, LB_SUFFIX, LB_TAIL, LEGACY_AUTO, LOCK,
     PANEL_DIR, PROXY_MODES, REGIONS, SCHEMA, TESTS
 )
+from .ruleutil import dns_policy_of, rule_policy_index
 OLD_PW_KEYS = ("password", "pw_hash", "pw_default")
 
 
@@ -593,11 +636,6 @@ def write_json(path, obj, mode=0o600):
 def safe(name):
     return re.sub(r"[^\\w\\-]", "_", name) or "sub"
 
-
-def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global dns_policy_of, rule_policy_index
-    from .mihomo import dns_policy_of, rule_policy_index
 '''
 _SRC['shunt.links'] = '''"""单节点链接解析"""
 import base64, json, re
@@ -875,13 +913,81 @@ def reserved_names(d=None):
         out |= {g["name"] for g in d.get("custom_groups") or []}
     return out
 '''
+_SRC['shunt.ruleutil'] = '''"""规则工具（叶子模块）：从 mihomo.py / adblock.py 抽出的纯函数与常量。
+
+只依赖 base、os、re；data.py、mihomo.py、adblock.py 都从这里导入，
+打破 data→mihomo、mihomo→adblock 的循环。
+"""
+import os
+import re
+
+from .base import AB_DIR
+
+DOMAIN_RX = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9_](?:[a-z0-9_\\-]{0,61}[a-z0-9_])?\\.)+(?:[a-z]{2,63}|xn--[a-z0-9\\-]{1,59})$")
+
+
+def rule_policy_index(parts):
+    i = len(parts) - 1
+    while i > 0 and parts[i].strip().lower() in ("no-resolve", "src"):
+        i -= 1
+    return i
+
+
+def dns_policy_of(server):
+    _, sep, tail = server.partition("#")
+    if not sep:
+        return ""
+    # "#节点" 或 "#节点&h3=true" 之类的参数
+    return tail.split("&")[0] if "=" not in tail.split("&")[0] else ""
+
+
+def _mh_domain(x):
+    """mihomo 域名通配（+.a.com / *.a.com / a.*.com）→ (sing-box 字段, 值)"""
+    x = x.strip().lower()
+    if x.startswith("+."):
+        return "domain_suffix", x[2:]
+    if x.startswith("."):
+        return "domain_suffix", x[1:]
+    if "*" in x:
+        return "domain_regex", "^" + re.escape(x).replace(r"\\*", r"[^.]+") + "$"
+    return "domain", x
+
+
+def _rs_tag(kind, name):
+    return f"{kind}-{name}".lower() if kind in ("geosite", "geoip") else name
+
+
+def adblock_providers(d):
+    ab = d.get("adblock") or {}
+    if not ab.get("enabled"):
+        return {}, []
+    prov = {}
+
+    def add(name, fn):
+        path = os.path.join(AB_DIR, fn)
+        if os.path.isfile(path) and os.path.getsize(path) > 0:
+            prov[name] = {"type": "file", "behavior": "domain", "format": "text", "path": "./adblock/" + fn}
+    add("ad-allow", "allow.txt")
+    add("ad-custom", "custom.txt")
+    for l in ab.get("lists", []):
+        if l.get("enabled", True) and re.fullmatch(r"[0-9a-f]{8}", l.get("id", "")):
+            add("ad-" + l["id"], l["id"] + ".txt")
+    rules = []
+    for k in prov:
+        if k == "ad-allow":
+            continue
+        rules.append(f"AND,((RULE-SET,{k}),(NOT,((RULE-SET,ad-allow)))),REJECT" if "ad-allow" in prov else f"RULE-SET,{k},REJECT")
+    return prov, rules
+'''
 _SRC['shunt.groups'] = '''"""策略组"""
 import os, re, time
 
 from .errlog import log_err
-from .base import BUILTIN_POLICIES, GROUPS_DEFAULT, GROUP_TYPES, G_OTHER, PANEL_DIR, PRIMARY_REGIONS, REGIONS
-from .data import load, read_json, write_json
+from .base import GROUPS_DEFAULT, GROUP_TYPES, G_OTHER, PANEL_DIR, PRIMARY_REGIONS, REGIONS
+from .corehttp import core_json
+from .data import load, read_json, safe, write_json
 from .links import reserved_names
+from .sb_common import SB_SUB_DIR, active_core
 PROV_FILE = os.path.join(PANEL_DIR, "provider_nodes.json")
 PROV = {"t": 0, "data": None}
 RX_CACHE = {}
@@ -895,6 +1001,35 @@ def rx(pattern):
         except re.error:
             RX_CACHE[pattern] = None
     return RX_CACHE[pattern]
+
+
+def sub_cache_path(name):
+    return os.path.join(SB_SUB_DIR, safe(name) + ".json")
+
+
+def sb_sub_cache(name):
+    return read_json(sub_cache_path(name), {}) or {}
+
+
+def sb_provider_nodes(d):
+    """{订阅名: [节点名]}，名称已按全局去重（与生成的 sing-box 配置一致）"""
+    return {k: [n for n, _ in v] for k, v in sb_sub_outbounds(d).items()}
+
+
+def sb_sub_outbounds(d):
+    taken = {n["proxy"]["name"] for n in d.get("nodes", [])} | reserved_names(d)
+    out = {}
+    for s in d["subs"]:
+        lst = []
+        for p in sb_sub_cache(s["name"]).get("nodes") or []:
+            base = str(p.get("name") or "").strip() or "node"
+            name, k = base, 2
+            while name in taken:
+                name, k = f"{base} ({k})", k + 1
+            taken.add(name)
+            lst.append((name, p))
+        out[s["name"]] = lst
+    return out
 
 
 def provider_nodes(fresh=False):
@@ -979,34 +1114,6 @@ def all_node_names(d):
     return [n["proxy"]["name"] for n in d.get("nodes", [])] + [n for s in d["subs"] for n in pn.get(s["name"], [])]
 
 
-def find_cycle(groups):
-    """策略组之间的循环引用，返回环路径或 None"""
-    gmap = {g["name"]: [m for m in g.get("proxies", [])] for g in groups}
-    state, stack = {}, []
-
-    def dfs(n):
-        state[n] = 1
-        stack.append(n)
-        for m in gmap.get(n, []):
-            if m in gmap:
-                if state.get(m) == 1:
-                    return stack[stack.index(m):] + [m]
-                if not state.get(m):
-                    c = dfs(m)
-                    if c:
-                        return c
-        state[n] = 2
-        stack.pop()
-        return None
-
-    for n in gmap:
-        if not state.get(n):
-            c = dfs(n)
-            if c:
-                return c
-    return None
-
-
 NAME_BAD = re.compile(r"[,#\\n\\r\\t\\"]")
 
 
@@ -1047,55 +1154,20 @@ def clean_custom_group(b):
         if t == "load-balance":
             g["strategy"] = "consistent-hashing"  # 只支持一致性哈希
     return g
-
-
-def validate_groups(d):
-    """生成配置后检查自定义组：重名、成员不存在、循环引用"""
-    errs = []
-    nodes = all_node_names(d)
-    fixed = reserved_names()
-    seen = set()
-    for cg in d.get("custom_groups") or []:
-        n = cg["name"]
-        if n in seen:
-            errs.append(f"策略组重名：{n}")
-        if n in fixed:
-            errs.append(f"「{n}」与内置策略组或策略同名")
-        if n in nodes:
-            errs.append(f"「{n}」与节点同名")
-        seen.add(n)
-    cfg = build_config(d, strict=True)
-    names = {g["name"] for g in cfg["proxy-groups"]} | BUILTIN_POLICIES | {p["name"] for p in cfg["proxies"]}
-    for cg in d.get("custom_groups") or []:
-        miss = [m for m in cg["proxies"] if m not in names]
-        if miss:
-            errs.append(f"「{cg['name']}」的成员不存在：" + "、".join(miss[:5]))
-        if cg["name"] in cg["proxies"]:
-            errs.append(f"「{cg['name']}」不能包含自己")
-    cyc = find_cycle(cfg["proxy-groups"])
-    if cyc:
-        errs.append("策略组循环引用：" + " → ".join(cyc) + "（加入分流组候选的自定义组不能再引用 YouTube / Google 等分流组，可关闭“加入分流组候选”）")
-    return errs
-
-
-def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global build_config, core_json, active_core, sb_provider_nodes
-    from .mihomo import build_config
-    from .core import core_json
-    from .sb_common import active_core
-    from .sb_subs import sb_provider_nodes
 '''
 _SRC['shunt.mihomo'] = '''"""生成配置"""
 import ipaddress, json, os, re
 
 from .base import (
     AUTO_ORDER, BUILTIN_POLICIES, CONF_DIR, CTRL_HOST, CTRL_PORT, DEFAULT_EXCLUDE, DNS_DEFAULT, DNS_LISTS, DOH_DOMAINS, DOH_IPS, G_AI,
-    G_AUTO, G_DIRECT, G_FINAL, G_GG, G_MANUAL, G_NF, G_SEL, G_TG, G_YT, HC, LAN_IN, LB_ORDER, MIHOMO_BIN, MIXED, SIDE_GROUPS, SMART_BIN,
+    G_AUTO, G_DIRECT, G_FINAL, G_GG, G_MANUAL, G_NF, G_SEL, G_TG, G_YT, HC, LAN_IN, LB_ORDER, LGBM_URL, MIHOMO_BIN, MIXED, SIDE_GROUPS, SMART_BIN,
     TUN_DEFAULT, TUN_STACKS
 )
 from .data import LB_KINDS, auto_name, lb_name, region_label, safe
 from .groups import clean_custom_group, gcfg, group_opts, region_plan, rx
+from .ruleutil import DOMAIN_RX, adblock_providers, dns_policy_of, rule_policy_index
+from .sb_common import active_core
+from .sysopt import sh
 def build_config(d, strict=False):
     providers = {}
     for s in d["subs"]:
@@ -1336,24 +1408,26 @@ def mihomo_hosts(dc):
     return hosts
 
 
-def mihomo_tun(d):
+def tun_params(d):
+    """TUN 参数归一化：mihomo_tun 与 sing-box sb_inbounds 共用同一决策（是否启用、协议栈回退、设备名、开关量）。"""
     tc = d.get("tun") or TUN_DEFAULT
-    if d.get("proxy_mode") == "tun":
-        tun = {"enable": True, "stack": tc.get("stack") if tc.get("stack") in TUN_STACKS else "mixed",
-               "device": safe_dev(tc.get("device")), "auto-route": True, "auto-redirect": bool(tc.get("auto_redirect", True)),
-               "auto-detect-interface": True, "dns-hijack": ["any:53", "tcp://any:53"],
-               "strict-route": bool(tc.get("strict_route", False))}
-    else:
-        tun = {"enable": False}
-    return tun
+    return {
+        "enable": d.get("proxy_mode") == "tun",
+        "stack": tc.get("stack") if tc.get("stack") in TUN_STACKS else "mixed",
+        "device": safe_dev(tc.get("device")),
+        "auto_redirect": bool(tc.get("auto_redirect", True)),
+        "strict_route": bool(tc.get("strict_route", False)),
+    }
 
 
+def mihomo_tun(d):
+    p = tun_params(d)
+    if not p["enable"]:
+        return {"enable": False}
+    return {"enable": True, "stack": p["stack"], "device": p["device"], "auto-route": True,
+            "auto-redirect": p["auto_redirect"], "auto-detect-interface": True, "dns-hijack": ["any:53", "tcp://any:53"],
+            "strict-route": p["strict_route"]}
 
-def rule_policy_index(parts):
-    i = len(parts) - 1
-    while i > 0 and parts[i].strip().lower() in ("no-resolve", "src"):
-        i -= 1
-    return i
 
 
 def fix_rule_policy(rule, policies):
@@ -1431,14 +1505,6 @@ def dns_cfg(d):
                          "servers": [str(x).strip() for x in sv if str(x).strip()]})
     dc["policies"] = pols
     return dc
-
-
-def dns_policy_of(server):
-    _, sep, tail = server.partition("#")
-    if not sep:
-        return ""
-    # "#节点" 或 "#节点&h3=true" 之类的参数
-    return tail.split("&")[0] if "=" not in tail.split("&")[0] else ""
 
 
 def fix_dns_policy(server, policies):
@@ -1543,61 +1609,19 @@ def check_config(path, kind=None):
     lines = [l for l in out.splitlines() if "level=error" in l or "level=fatal" in l or "test failed" in l.lower() or l.startswith("panic:")]
     return False, "\\n".join(lines[-3:]) or out[-400:]
 
-
-def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global active_core, LGBM_URL, sh, DOMAIN_RX, adblock_providers
-    from .sb_common import active_core
-    from .core_update import LGBM_URL
-    from .sysopt import sh
-    from .adblock import DOMAIN_RX, adblock_providers
 '''
 _SRC['shunt.core'] = '''"""核心交互"""
-import json, os, threading, time, urllib.request, urllib.error
+import os, threading, time
 
-from .base import CONF_DIR, CTRL, DATA_FILE, LOCK, SVC
+from .base import CONF_DIR, LOCK, SVC
+from .corehttp import core, core_json
 from .data import load, read_json, save
 from .groups import provider_nodes
 from .mihomo import build_config, check_config, write_config
-DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # 访问本机控制器绝不走系统代理
-
-
-_SECRET = [None, ""]
-
-
-def ctrl_secret():
-    """控制器密钥按 data.json 修改时间缓存：每秒的实时请求不再反复读取解析整份配置"""
-    try:
-        st = os.stat(DATA_FILE)
-        key = (st.st_mtime_ns, st.st_size)
-    except OSError:
-        key = None
-    if key is None or _SECRET[0] != key:
-        _SECRET[:] = [key, load()["secret"]]
-    return _SECRET[1]
-
-
-def core(method, path, body=None, timeout=10):
-    data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(CTRL + path, data=data, method=method,
-                                 headers={"Authorization": "Bearer " + ctrl_secret(), "Content-Type": "application/json"})
-    try:
-        with DIRECT_OPENER.open(req, timeout=timeout) as r:
-            return r.status, r.read()
-    except urllib.error.HTTPError as e:
-        return e.code, e.read()
-    except Exception as e:
-        return 502, json.dumps({"message": "mihomo 未运行或无法连接: %s" % e}).encode()
-
-
-def core_json(path, timeout=10):
-    code, raw = core("GET", path, timeout=timeout)
-    if code != 200:
-        return None
-    try:
-        return json.loads(raw)
-    except Exception:
-        return None
+from .sb_common import SB_CONF, active_core
+from .sb_config import build_singbox, check_sb_config, sb_hot_reload, sb_log_error, sb_rule_need, sb_sync_assets, write_sb_config
+from .sysopt import sh
+from .notify import WD, core_alive
 
 
 _CONN_SNAP = {}
@@ -1709,14 +1733,63 @@ def refresh_after_sub(name, wait=90):
 
 
 def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global SB_CONF, active_core, build_singbox, check_sb_config, sb_hot_reload, sb_log_error, sb_rule_need, sb_sync_assets, write_sb_config
-    global sh, WD, core_alive, retest_soon
-    from .sb_common import SB_CONF, active_core
-    from .sb_config import build_singbox, check_sb_config, sb_hot_reload, sb_log_error, sb_rule_need, sb_sync_assets, write_sb_config
-    from .sysopt import sh
-    from .notify import WD, core_alive
+    # 唯一的延迟绑定：core.reload_core() 在重载后调用 latency.retest_soon() 触发补测，
+    # 而 latency 的定时调度器又需要 core.refresh_regions() —— 真互递归，无法通过移动代码破环。
+    # latency 侧已改为顶层导入 core，这里只延迟绑定 retest_soon 这一个名字。
+    global retest_soon
     from .latency import retest_soon
+'''
+_SRC['shunt.corehttp'] = '''"""核心控制器 HTTP（叶子模块）：与 mihomo/sing-box 控制器 API 对话。
+
+从 core.py 拆出：只依赖 base、data，无环；core.py 及其他模块从这里导入。
+"""
+import json
+import os
+import urllib.request
+import urllib.error
+
+from .base import CTRL, DATA_FILE
+from .data import load
+
+DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # 访问本机控制器绝不走系统代理
+
+
+_SECRET=[None, ""]
+
+
+def ctrl_secret():
+    """控制器密钥按 data.json 修改时间缓存：每秒的实时请求不再反复读取解析整份配置"""
+    try:
+        st = os.stat(DATA_FILE)
+        key = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = None
+    if key is None or _SECRET[0] != key:
+        _SECRET[:] = [key, load()["secret"]]
+    return _SECRET[1]
+
+
+def core(method, path, body=None, timeout=10):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(CTRL + path, data=data, method=method,
+                                 headers={"Authorization": "Bearer " + ctrl_secret(), "Content-Type": "application/json"})
+    try:
+        with DIRECT_OPENER.open(req, timeout=timeout) as r:
+            return r.status, r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
+    except Exception as e:
+        return 502, json.dumps({"message": "mihomo 未运行或无法连接: %s" % e}).encode()
+
+
+def core_json(path, timeout=10):
+    code, raw = core("GET", path, timeout=timeout)
+    if code != 200:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
 '''
 _SRC['shunt.sb_common'] = '''"""sing-box 内核"""
 import os
@@ -1724,6 +1797,7 @@ import os
 from .errlog import log_err
 from .base import CONF_DIR, PANEL_DIR
 from .data import load
+from .sysopt import wfile
 # 面板数据（订阅、节点、规则、DNS、设备）两个内核共用；切换内核时按各自格式生成独立的配置文件：
 #   mihomo   → /etc/mihomo/config.yaml
 #   sing-box → /etc/sing-box/config.json
@@ -1759,11 +1833,6 @@ def write_core_file(kind):
     except OSError as e:
         log_err("记录当前内核", e)
 
-
-def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global wfile
-    from .sysopt import wfile
 '''
 _SRC['shunt.sb_yaml'] = '''"""极简 YAML 读取（只为解析 Clash 订阅里的 proxies 列表；面板保持零依赖）"""
 import json, re
@@ -1968,15 +2037,15 @@ _SRC['shunt.sb_subs'] = '''"""订阅：sing-box 不能自己拉取订阅，由�
 import json, os, re, threading, time, urllib.request, urllib.error
 
 from .base import CONF_DIR, DEFAULT_EXCLUDE, PANEL_DIR, dl_check
-from .data import load, read_json, safe, write_json
-from .links import b64d, parse_link, reserved_names
-from .groups import PROV, rx
-from .sb_common import SB_SUB_DIR, SB_UA
+from .data import load, safe, write_json
+from .links import b64d, parse_link
+from .groups import PROV, rx, sub_cache_path
+from .sb_common import SB_UA
 from .sb_yaml import yaml_lite
+from .sysopt import proxy_opener
+from .notify import core_alive
 
 _DEBUG_LOCK = threading.Lock()  # sub-debug.txt 并发写保护
-def sub_cache_path(name):
-    return os.path.join(SB_SUB_DIR, safe(name) + ".json")
 
 
 def _yaml_full(text):
@@ -2188,31 +2257,6 @@ def sb_fetch_sub(s, gh=""):
     raise IOError(last or "下载失败")
 
 
-def sb_sub_cache(name):
-    return read_json(sub_cache_path(name), {}) or {}
-
-
-def sb_provider_nodes(d):
-    """{订阅名: [节点名]}，名称已按全局去重（与生成的 sing-box 配置一致）"""
-    return {k: [n for n, _ in v] for k, v in sb_sub_outbounds(d).items()}
-
-
-def sb_sub_outbounds(d):
-    taken = {n["proxy"]["name"] for n in d.get("nodes", [])} | reserved_names(d)
-    out = {}
-    for s in d["subs"]:
-        lst = []
-        for p in sb_sub_cache(s["name"]).get("nodes") or []:
-            base = str(p.get("name") or "").strip() or "node"
-            name, k = base, 2
-            while name in taken:
-                name, k = f"{base} ({k})", k + 1
-            taken.add(name)
-            lst.append((name, p))
-        out[s["name"]] = lst
-    return out
-
-
 def sb_update_subs(names=None, d=None):
     """并发更新订阅：每个订阅一个线程（单个订阅仍串行走 UA/代理/直连回退），整体耗时取决于最慢的一个"""
     d = d or load()
@@ -2239,12 +2283,6 @@ def sb_update_subs(names=None, d=None):
     return ok, bad
 
 
-def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global proxy_opener, core_alive, fetch
-    from .sysopt import proxy_opener
-    from .notify import core_alive
-    from .unlock import fetch
 '''
 _SRC['shunt.sb_nodes'] = '''"""节点：mihomo 字段 → sing-box outbound"""
 import re
@@ -2412,22 +2450,14 @@ def sb_outbound(p, tag):
 _SRC['shunt.sb_rules'] = '''"""规则：mihomo 规则字符串 → sing-box 路由规则"""
 import re
 
-from .mihomo import rule_policy_index
+from .ruleutil import _mh_domain, _rs_tag, rule_policy_index
 from .sb_common import SB_GEO
-def _mh_domain(x):
-    """mihomo 域名通配（+.a.com / *.a.com / a.*.com）→ (字段, 值)"""
-    x = x.strip().lower()
-    if x.startswith("+."):
-        return "domain_suffix", x[2:]
-    if x.startswith("."):
-        return "domain_suffix", x[1:]
-    if "*" in x:
-        return "domain_regex", "^" + re.escape(x).replace(r"\\*", r"[^.]+") + "$"
-    return "domain", x
 
 
-def _rs_tag(kind, name):
-    return f"{kind}-{name}".lower() if kind in ("geosite", "geoip") else name
+def geo_srs_entry(kind, name):
+    """GEOIP/GEOSITE → (tag, 规则集条目)。SBRules.use_geo 与 sb_geo_rule_sets 共用，避免两处硬编码同一 URL 格式。"""
+    tag = _rs_tag(kind, name)
+    return tag, {"kind": "geo", "url": f"{SB_GEO}/{kind}/{name.lower()}.srs", "path": f"{kind}-{name.lower()}.srs"}
 
 
 def _split_top(s):
@@ -2456,9 +2486,9 @@ class SBRules:
         self.warn = []
 
     def use_geo(self, kind, name):
-        tag = _rs_tag(kind, name)
+        tag, entry = geo_srs_entry(kind, name)
         if tag not in self.rule_sets:
-            self.rule_sets[tag] = {"kind": "geo", "url": f"{SB_GEO}/{kind}/{name.lower()}.srs", "path": f"{kind}-{name.lower()}.srs"}
+            self.rule_sets[tag] = entry
         return tag
 
     def cond(self, typ, val):
@@ -2581,8 +2611,8 @@ import re
 from urllib.parse import urlsplit
 
 from .base import DNS_DEFAULT
-from .mihomo import dns_cfg, dns_policy_of, fix_dns_policy, is_ip_addr, policy_parts
-from .sb_rules import _mh_domain
+from .mihomo import dns_cfg, fix_dns_policy, is_ip_addr, policy_parts
+from .ruleutil import _mh_domain, dns_policy_of
 def _sb_dns_server(addr, tag, boot, warn):
     """mihomo DNS 地址（含 #策略组）→ sing-box DNS server"""
     addr = addr.strip()
@@ -2716,29 +2746,27 @@ def sb_dns(d, cfg, policies, rs, alias, v6):
            "cache_capacity": 4096}
     return out, t_node, t_direct, t_proxy
 
-
-def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global ab_sets
-    from .adblock import ab_sets
 '''
 _SRC['shunt.sb_config'] = '''"""生成 sing-box 配置"""
 import ipaddress, json, os, re, signal, threading, time, urllib.request, urllib.error
 
 from .base import (
-    AB_DIR, BUILTIN_POLICIES, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, SVC, TUN_DEFAULT, TUN_STACKS, UA,
+    AB_DIR, BUILTIN_POLICIES, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, SVC, UA,
     dl_check,
 )
 from .data import auto_name, lb_dropped_names, lb_names, lb_old_name, load, safe, write_json
 from .groups import PROV, gcfg, rx
-from .mihomo import BUILTIN_GEO, build_config, build_rule_providers, dns_cfg, policy_parts, safe_dev, write_config
-from .core import core_json
-from .sb_common import CORE_PID, SB_BIN, SB_CONF, SB_DIR, SB_GEO, SB_RULE_DIR, SB_STATE, active_core
+from .mihomo import BUILTIN_GEO, build_config, build_rule_providers, dns_cfg, policy_parts, tun_params, write_config
+from .corehttp import core_json
+from .sb_common import CORE_PID, SB_BIN, SB_CONF, SB_DIR, SB_RULE_DIR, SB_STATE, active_core
 from .sb_yaml import yaml_lite
-from .sb_subs import sb_provider_nodes, sb_sub_cache, sb_sub_outbounds
+from .groups import sb_provider_nodes, sb_sub_cache, sb_sub_outbounds
 from .sb_nodes import sb_outbound
-from .sb_rules import SBRules, _mh_domain, _rs_tag
+from .sb_rules import SBRules, geo_srs_entry
+from .ruleutil import _mh_domain
 from .sb_dns import sb_dns
+from .sysopt import nft_ok, proxy_opener, sh
+from .notify import core_alive
 def build_singbox(d):
     """把 build_config 生成的 mihomo 结构翻译成 sing-box 配置；返回 (配置, 警告列表, 需要的规则集文件)"""
     sub_out = sb_sub_outbounds(d)
@@ -2769,7 +2797,8 @@ def build_singbox(d):
     final = "DIRECT"
     for line in cfg["rules"]:
         if line.upper().startswith("MATCH,"):
-            final = tr.action(line.split(",", 1)[1]).get("outbound", "DIRECT") if tr.action(line.split(",", 1)[1]) else "DIRECT"
+            act = tr.action(line.split(",", 1)[1])
+            final = act.get("outbound", "DIRECT") if act else "DIRECT"
             continue
         r, needs = tr.rule(line)
         if r is None:
@@ -2887,11 +2916,11 @@ def sb_inbounds(d, v6):
                 {"type": "direct", "tag": "dns-in", "listen": lis, "listen_port": 1053}]
     if d.get("proxy_mode") == "tproxy":  # 透明代理（tproxy.sh 把流量转到 7893）
         inbounds.insert(1, {"type": "tproxy", "tag": "tproxy-in", "listen": lis, "listen_port": 7893})
-    tc = d.get("tun") or TUN_DEFAULT
-    if d.get("proxy_mode") == "tun":
-        tun = {"type": "tun", "tag": "tun-in", "interface_name": safe_dev(tc.get("device")), "address": ["172.19.0.1/30"] + (["fdfe:dcba:9876::1/126"] if v6 else []),
-               "auto_route": True, "auto_redirect": bool(tc.get("auto_redirect", True)) and nft_ok(), "strict_route": bool(tc.get("strict_route", False)),
-               "stack": tc.get("stack") if tc.get("stack") in TUN_STACKS else "mixed"}
+    tp = tun_params(d)  # TUN 决策与 mihomo_tun 共用；auto_redirect 另需 nftables 可用
+    if tp["enable"]:
+        tun = {"type": "tun", "tag": "tun-in", "interface_name": tp["device"], "address": ["172.19.0.1/30"] + (["fdfe:dcba:9876::1/126"] if v6 else []),
+               "auto_route": True, "auto_redirect": tp["auto_redirect"] and nft_ok(), "strict_route": tp["strict_route"],
+               "stack": tp["stack"]}
         inbounds.append(tun)
     return inbounds
 
@@ -2909,10 +2938,9 @@ def sb_geo_rule_sets(d, dc=None):
     def add(kind, name):
         if kind == "geoip" and name.lower() in ("private", "lan"):
             return  # 翻译成 ip_is_private，不产生规则集条目
-        tag = _rs_tag(kind, name)
+        tag, entry = geo_srs_entry(kind, name)
         if tag not in geos:
-            geos[tag] = {"kind": "geo", "url": f"{SB_GEO}/{kind}/{name.lower()}.srs",
-                         "path": f"{kind}-{name.lower()}.srs"}
+            geos[tag] = entry
 
     for kind, name in BUILTIN_GEO:  # mihomo_rules 末尾硬编码分流规则
         add(kind, name)
@@ -3252,23 +3280,21 @@ def sb_fake_rule_providers(d):
                           "ruleCount": 0, "updatedAt": iso_utc(mt) if mt else ""}
     return {"providers": out}
 
-
-def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global nft_ok, proxy_opener, sh, core_alive
-    from .sysopt import nft_ok, proxy_opener, sh
-    from .notify import core_alive
 '''
 _SRC['shunt.sb_switch'] = '''"""内核切换"""
 import hashlib, io, json, os, re, shutil, threading, time
 
-from .base import CONF_DIR, MIHOMO_LOG, SMART_BIN, SVC
+from .base import CONF_DIR, CORE_UPD, MIHOMO_LOG, SMART_BIN, SVC
 from .data import load, update
 from .groups import PROV, gcfg
 from .mihomo import check_config, mh_bin, write_config
 from .sb_common import CORES, SB_API, SB_BIN, SB_CONF, SB_REPO, SB_STATE, active_core, write_core_file
 from .sb_subs import sb_update_subs
 from .sb_config import check_sb_config, sb_sync_assets, sb_version, write_sb_config
+from .core_update import LGBM_FILE, _cu, bin_version, lgbm_fetch, mh_fetch, open_url, release_digest
+from .sysopt import sh
+from .notify import WD, core_alive, notify
+from .migrate import restore_selections, snapshot_selections
 def sb_arch():
     m = os.uname().machine
     return {"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64", "armv7l": "armv7", "armv8l": "armv7", "armv6l": "armv6",
@@ -3477,23 +3503,18 @@ def sb_update_job(channel, gh, force=False):
         CORE_UPD["busy"] = False
 
 
-def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global CORE_UPD, LGBM_FILE, _cu, bin_version, lgbm_fetch, mh_fetch, open_url, release_digest
-    global sh, WD, core_alive, notify, restore_selections, snapshot_selections
-    from .core_update import CORE_UPD, LGBM_FILE, _cu, bin_version, lgbm_fetch, mh_fetch, open_url, release_digest
-    from .sysopt import sh
-    from .notify import WD, core_alive, notify
-    from .migrate import restore_selections, snapshot_selections
 '''
 _SRC['shunt.panel_update'] = '''"""面板在线更新"""
-import hashlib, json, os, re, shlex, shutil, time, urllib.request, urllib.error
+import hashlib, os, re, shlex, shutil, time, urllib.request, urllib.error
 
 from .errlog import log_err
-from .base import BASE, PANEL_VERSION, UA, dl_check
+from .base import BASE, PANEL_VERSION, UA, UPD_STATE, dl_check, local_file
+from .core_update import gh_api
+from .sysopt import proxy_opener, sh
+from .https import restart_self
+from .update_guard import start_update_guard
 PANEL_RAW = os.environ.get("PANEL_RAW", "https://raw.githubusercontent.com/Skycnhe/Shunt/Hk001")
 UPD_FILES = ["server.py", "index.html", "tproxy.sh", "selftest.sh", "init.d/mihomo", "init.d/mihomo-panel"]
-UPD_STATE = {"busy": False}
 UPD_LIST = "update-files.txt"  # 仓库里的部署文件清单：以后增减文件只改清单，不用再改更新程序
 
 
@@ -3516,19 +3537,6 @@ def remote_file_list(gh, commit, shas):
         if need not in out:
             raise ValueError(f"部署清单缺少 {need}")
     return out
-
-
-def local_file(f):
-    if f.startswith("init.d/"):
-        sysf = "/etc/init.d/" + f[7:]
-        return sysf if BASE == "/opt/mihomo-panel" and os.path.isfile(sysf) else os.path.join(BASE, f)
-    return os.path.join(BASE, f)
-
-
-def gh_api(path, timeout=15):
-    """直连或经 mihomo 代理访问 GitHub API（绝不走第三方加速镜像：校验值必须来自 GitHub 本身）"""
-    with open_url("https://api.github.com" + path, "", timeout=timeout) as r:
-        return json.loads(r.read(8 << 20))
 
 
 def panel_manifest():
@@ -3659,33 +3667,24 @@ def self_update(apply=False, gh=""):
     finally:
         UPD_STATE["busy"] = False
 
-
-def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global open_url, proxy_opener, sh, restart_self, start_update_guard
-    from .core_update import open_url
-    from .sysopt import proxy_opener, sh
-    from .https import restart_self
-    from .update_guard import start_update_guard
 '''
 _SRC['shunt.core_update'] = '''"""内核（mihomo）更新"""
-import hashlib, os, re, shutil, sys, threading, time, urllib.request, urllib.error
+import hashlib, json, os, re, shutil, sys, threading, time, urllib.request, urllib.error
 from collections import deque
 from urllib.parse import quote
 
 from .errlog import log_err
-from .base import CONF_DIR, MIHOMO_LOG, SVC, UA, dl_check
+from .base import CONF_DIR, CORE_UPD, LGBM_URL, MIHOMO_LOG, SVC, UA, UPD_STATE, dl_check
 from .data import load
 from .mihomo import mh_bin, write_config
 from .core import reload_core
 from .sb_common import CORES, active_core
-from .panel_update import UPD_STATE, gh_api
+from .sysopt import proxy_opener, sh
+from .notify import core_alive, notify
 CORE_REPO = os.environ.get("CORE_REPO", "https://github.com/MetaCubeX/mihomo/releases")
 CORE_CHANNELS = {"stable": "latest/download", "alpha": "download/Prerelease-Alpha"}
 SMART_REPO = os.environ.get("SMART_REPO", "https://github.com/vernesong/mihomo/releases")  # 只发布 Alpha 预览版
-LGBM_URL = SMART_REPO + "/download/LightGBM-Model/Model.bin"
 LGBM_FILE = os.path.join(CONF_DIR, "Model.bin")
-CORE_UPD = {"busy": False, "stage": "", "pct": 0, "ok": None, "message": "", "log": deque(maxlen=30), "t": 0}
 
 
 def core_arch():
@@ -3725,6 +3724,12 @@ def open_url(url, gh, timeout=20):
         except Exception as e:
             err = f"{u.split('/')[2]}{'(代理)' if use_proxy else ''}: {str(e)[:120]}"
     raise IOError(err)
+
+
+def gh_api(path, timeout=15):
+    """直连或经 mihomo 代理访问 GitHub API（绝不走第三方加速镜像：校验值必须来自 GitHub 本身）"""
+    with open_url("https://api.github.com" + path, "", timeout=timeout) as r:
+        return json.loads(r.read(8 << 20))
 
 
 def release_digest(repo_url, tag, name):
@@ -3974,23 +3979,14 @@ def core_job_start(fn, *args):
 def core_upd_status():
     return {k: (list(v) if isinstance(v, deque) else v) for k, v in CORE_UPD.items()}
 
-
-def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global proxy_opener, sh, core_alive, notify
-    from .sysopt import proxy_opener, sh
-    from .notify import core_alive, notify
 '''
 _SRC['shunt.sysopt'] = '''"""Alpine 系统优化"""
-import http.client, json, os, re, ssl, subprocess, threading, time, urllib.request, urllib.error
+import http.client, os, re, ssl, subprocess, threading, time, urllib.request, urllib.error
 from collections import deque
 from urllib.parse import urlsplit
 
 from .base import MIXED, PANEL_DIR, TESTS, UA, SafeRedirectHandler, dl_check
 from .data import load, update
-from .mihomo import build_config
-from .sb_common import active_core
-from .sb_config import build_singbox
 PROC_SYS = os.environ.get("PANEL_PROC_SYS", "/proc/sys")
 SYS_ROOT = os.environ.get("PANEL_SYS_ROOT", "/sys")
 ETC = os.environ.get("PANEL_ETC", "/etc")
@@ -4380,37 +4376,6 @@ def speed_test(proxy):
         return {"ok": False, "error": str(e)[:120], "mb": round(n / 1e6, 1)}
 
 
-_MASK_WORDS = ("password", "passwd", "uuid", "token", "psk", "secret", "privatekey")
-
-
-def _mask_val(v):
-    """敏感值掩盖中间：长值露头 3 + 尾 2，短值全打码"""
-    s = str(v)
-    return f"{s[:3]}******{s[-2:]}" if len(s) > 6 else "******"
-
-
-def _mask_cfg(o):
-    """递归掩盖配置里的敏感字段（key 含 password/uuid/token/psk/secret/privatekey 等，去掉 -_ 后匹配）"""
-    if isinstance(o, dict):
-        return {k: (_mask_val(v) if isinstance(v, str) and any(w in k.lower().replace("-", "").replace("_", "")
-                                                              for w in _MASK_WORDS) else _mask_cfg(v))
-                for k, v in o.items()}
-    if isinstance(o, list):
-        return [_mask_cfg(x) for x in o]
-    return o
-
-
-def config_view(d=None, masked=True):
-    d = d or load()
-    if active_core(d) == "singbox":
-        cfg = build_singbox(d)[0]
-    else:
-        cfg = build_config(d)
-    if masked:
-        cfg = _mask_cfg(cfg)  # 原来只掩 secret，节点 password/uuid 等明文：名不副实，改为递归掩盖
-    return json.dumps(cfg, ensure_ascii=False, indent=2)
-
-
 _NFT = {"ok": None, "t": 0}
 
 
@@ -4573,10 +4538,9 @@ import json, socket, threading, time, urllib.request, urllib.error
 from collections import deque
 from urllib.parse import quote
 
-from .base import G_MANUAL, HC, NOTIFY_FILE, SVC, TPROXY_SH
+from .base import CORE_UPD, G_MANUAL, HC, NOTIFY_FILE, SVC, TPROXY_SH
 from .data import load, read_json, write_json
-from .core import core, core_json
-from .core_update import CORE_UPD
+from .corehttp import core, core_json
 from .sysopt import proxy_opener, sh
 def tg_send(text, d=None):
     d = d or load()
@@ -4694,7 +4658,8 @@ from urllib.parse import quote
 from .errlog import log_err
 from .base import G_MANUAL, G_SEL, HC, NOTIFY_FILE, PANEL_DIR, UA, WD_INTERVAL, dl_check
 from .data import load, read_json, write_json
-from .core import core, core_json, refresh_regions
+from .core import refresh_regions
+from .corehttp import core, core_json
 from .sb_common import active_core
 from .sb_config import sb_fake_providers
 from .sysopt import proxy_opener
@@ -5176,7 +5141,8 @@ import ipaddress, json, re, socket, threading, time
 from urllib.parse import quote
 
 from .base import MIXED
-from .core import core_json
+from .corehttp import core_json
+from .logstream import core_stream
 def clean_target(t):
     t = t.strip()
     t = re.sub(r"^[a-z]+://", "", t, flags=re.I).split("/")[0].split("?")[0]
@@ -5339,11 +5305,6 @@ def rule_test(target):
     res["host"] = host
     return res
 
-
-def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global core_stream
-    from .logstream import core_stream
 '''
 _SRC['shunt.logstream'] = '''"""实时日志 (SSE)"""
 import secrets, socket, time
@@ -5415,20 +5376,21 @@ from collections import deque
 from urllib.parse import quote
 
 from .errlog import log_err
-from .base import AB_DIR, AB_STATS_FILE, CONF_DIR, UA, dl_check
+from .base import AB_DIR, AB_STATS_FILE, CONF_DIR, UA, dl_check, udp_dns_query
 from .data import load, read_json, write_json
 from .mihomo import build_config
-from .core import core, reload_core
+from .core import reload_core
+from .corehttp import core
 from .sb_common import active_core
 from .sb_config import sb_sync_assets
 from .sysopt import proxy_opener
 from .ruletest import clean_target
 from .logstream import core_stream
+from .ruleutil import DOMAIN_RX, adblock_providers
 # 订阅 AdGuard/ABP（||domain^、@@||domain^）、hosts（0.0.0.0 domain）与纯域名列表，转换为 mihomo
 # behavior=domain / format=text 的本地 rule-provider 文件：
 #   ||a.com^ → "+.a.com"（含子域）；hosts / 纯域名 → "a.com"（仅该域名，与 AdGuard Home 语义一致）
 # 规则：AND,((RULE-SET,ad-xxx),(NOT,((RULE-SET,ad-allow)))),REJECT  —— 白名单优先，且被放行的域名继续走正常分流
-DOMAIN_RX = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9_](?:[a-z0-9_\\-]{0,61}[a-z0-9_])?\\.)+(?:[a-z]{2,63}|xn--[a-z0-9\\-]{1,59})$")
 CLASH_RX = re.compile(r"^(domain|domain-suffix),([^,\\s]+)(?:,.*)?$")
 ABP_RX = re.compile(r"^(@@)?\\|\\|([^\\^/|$]+)\\^\\|?(?:\\$(.*))?$")
 HOSTS_IPS = {"0.0.0.0", "127.0.0.1", "::", "::1", "0:0:0:0:0:0:0:0", "::0", "0", "255.255.255.255"}
@@ -5609,29 +5571,6 @@ def ab_compose(d):
         except OSError:
             pass
     write_lines(os.path.join(AB_DIR, "allow.txt"), domain_lines(suffix, exact)[0])
-
-
-def adblock_providers(d):
-    ab = d.get("adblock") or {}
-    if not ab.get("enabled"):
-        return {}, []
-    prov = {}
-
-    def add(name, fn):
-        path = os.path.join(AB_DIR, fn)
-        if os.path.isfile(path) and os.path.getsize(path) > 0:
-            prov[name] = {"type": "file", "behavior": "domain", "format": "text", "path": "./adblock/" + fn}
-    add("ad-allow", "allow.txt")
-    add("ad-custom", "custom.txt")
-    for l in ab.get("lists", []):
-        if l.get("enabled", True) and re.fullmatch(r"[0-9a-f]{8}", l.get("id", "")):
-            add("ad-" + l["id"], l["id"] + ".txt")
-    rules = []
-    for k in prov:
-        if k == "ad-allow":
-            continue
-        rules.append(f"AND,((RULE-SET,{k}),(NOT,((RULE-SET,ad-allow)))),REJECT" if "ad-allow" in prov else f"RULE-SET,{k},REJECT")
-    return prov, rules
 
 
 def config_text(d):
@@ -5971,40 +5910,13 @@ class AdStats:
 
 AD_STATS = None
 
-
-def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global udp_dns_query
-    from .live import udp_dns_query
 '''
 _SRC['shunt.live'] = '''"""实时速率 / 内存（订阅 /traffic 与 /memory 流）"""
-import json, secrets, socket, time
+import json, socket, time
 
 from .errlog import log_err
 from .core import conns_snapshot
 from .logstream import core_stream
-def udp_dns_query(name, port=1053, host="127.0.0.1", timeout=8):
-    """向本机 DNS 端口发一个 A 记录查询；收到同 ID 的应答（含 NXDOMAIN）即视为成功"""
-    qid = secrets.randbits(16)
-    pkt = qid.to_bytes(2, "big") + b"\\x01\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00"
-    for lab in name.strip(".").split("."):
-        b = lab.encode("idna") if lab else b""
-        pkt += bytes([len(b)]) + b
-    pkt += b"\\x00\\x00\\x01\\x00\\x01"
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.settimeout(timeout)
-    try:
-        s.sendto(pkt, (host, port))
-        end = time.time() + timeout
-        while time.time() < end:
-            data = s.recv(1500)
-            if len(data) >= 12 and int.from_bytes(data[:2], "big") == qid and data[2] & 0x80:
-                return True
-    except Exception:
-        return False
-    finally:
-        s.close()
-    return False
 
 
 LIVE = {"up": 0, "down": 0, "upTotal": 0, "downTotal": 0, "inuse": 0, "oslimit": 0, "t": 0}
@@ -6126,9 +6038,11 @@ from urllib.parse import quote
 from .errlog import log_err
 from .base import G_MANUAL, HC, SVC
 from .data import load
-from .core import core, core_json, refresh_regions, reload_core
+from .core import refresh_regions, reload_core
+from .corehttp import core, core_json
 from .sb_common import active_core
-from .sb_subs import sb_sub_cache, sb_update_subs
+from .groups import sb_sub_cache
+from .sb_subs import sb_update_subs
 from .sb_config import sb_sync_assets
 from .sysopt import sh
 from .notify import WD
@@ -6355,7 +6269,7 @@ from .errlog import ERRS
 from .base import CONF_DIR, TPROXY_SH
 from .data import load
 from .mihomo import check_config, mh_bin, safe_dev
-from .core import core
+from .corehttp import core
 from .sb_common import CORES, SB_BIN, SB_CONF, SB_STATE, active_core
 from .sb_config import check_sb_config
 from .sysopt import proxy_opener, sh
@@ -6491,7 +6405,7 @@ import copy, ipaddress, json, os, re, secrets, socket, threading, time
 from .base import CN_DNS, DEFAULT_FAKE_FILTER, DNS_DEFAULT, G_SEL, TPROXY_SH
 from .data import load
 from .mihomo import dns_cfg, dns_policy_of, policy_parts
-from .core import core
+from .corehttp import core
 from .sysopt import sh
 from .notify import core_alive
 from .unlock import fetch
@@ -6729,7 +6643,8 @@ from urllib.parse import quote
 
 from .base import CONF_DIR, PANEL_DIR
 from .data import legacy_map, load, read_json, write_json
-from .core import core, core_json, reload_core
+from .core import reload_core
+from .corehttp import core, core_json
 from .sb_common import active_core
 from .notify import core_alive
 SEL_FILE = os.path.join(PANEL_DIR, "selected.json")
@@ -6901,9 +6816,8 @@ _SRC['shunt.update_guard'] = '''"""面板更新失败自动回滚"""
 import os
 
 from .errlog import log_err
-from .base import AUTO_TAIL, BASE, G_AUTO, G_DIRECT, G_MANUAL, G_SEL, LB_PREFIX, LB_TAIL, PANEL_VERSION, PORT, SIDE_GROUPS
+from .base import AUTO_TAIL, BASE, G_AUTO, G_DIRECT, G_MANUAL, G_SEL, LB_PREFIX, LB_TAIL, PANEL_VERSION, PORT, SIDE_GROUPS, local_file
 from .data import LB_ALL, map_refs
-from .panel_update import local_file
 from .sysopt import sh
 GUARD = os.path.join(BASE, ".update-guard.sh")
 ROLLBACK_NOTE = os.path.join(BASE, ".rollback-note")
@@ -7036,10 +6950,11 @@ from .base import (
     TUN_STACKS
 )
 from .data import HISTORY_FILE, HISTORY_SKIP, auto_name, config_version, lb_names, load, migrate_names, read_json, region_lb_set, save, update
-from .links import add_links, q1
-from .groups import all_node_names, clean_custom_group, gcfg, region_plan, rx, validate_groups
+from .links import add_links, q1, reserved_names
+from .groups import all_node_names, clean_custom_group, gcfg, region_plan, rx
 from .mihomo import bad_rule_policies, build_config, dns_cfg, safe_dev, validate_dns
-from .core import conns_snapshot, core, core_json, refresh_after_sub, refresh_regions, reload_core
+from .core import conns_snapshot, refresh_after_sub, refresh_regions, reload_core
+from .corehttp import core, core_json
 from .sb_common import CORES, SB_BIN, SB_STATE, active_core, core_conf_path
 from .sb_subs import sb_update_subs
 from .sb_config import build_singbox, sb_ab_loaded, sb_fake_providers, sb_fake_rule_providers, sb_rule_need, sb_sync_assets, sb_version, write_active_config
@@ -7049,7 +6964,7 @@ from .core_update import (
     CORE_CHANNELS, CORE_UPD, LGBM_FILE, bin_version, core_check, core_job_start, core_rollback_job, core_upd_status, core_update_job,
     lgbm_fetch, lgbm_fetch_reload
 )
-from .sysopt import config_view, delay_test, favicon, nft_ok, opt_apply, opt_status, sh, speed_test
+from .sysopt import delay_test, favicon, nft_ok, opt_apply, opt_status, sh, speed_test
 from .notify import WD, tg_send
 from .latency import BG_FILE, RETEST, bg_fetch, bg_meta, bg_meta_save, bg_save, bg_type, fix_global, proxies_merged, retest_soon
 from .stats import arp_table
@@ -7099,6 +7014,95 @@ def api_route(path, *methods):
             ROUTES[(m, path)] = fn
         return fn
     return deco
+
+
+_MASK_WORDS = ("password", "passwd", "uuid", "token", "psk", "secret", "privatekey")
+
+
+def _mask_val(v):
+    """敏感值掩盖中间：长值露头 3 + 尾 2，短值全打码"""
+    s = str(v)
+    return f"{s[:3]}******{s[-2:]}" if len(s) > 6 else "******"
+
+
+def _mask_cfg(o):
+    """递归掩盖配置里的敏感字段（key 含 password/uuid/token/psk/secret/privatekey 等，去掉 -_ 后匹配）"""
+    if isinstance(o, dict):
+        return {k: (_mask_val(v) if isinstance(v, str) and any(w in k.lower().replace("-", "").replace("_", "")
+                                                              for w in _MASK_WORDS) else _mask_cfg(v))
+                for k, v in o.items()}
+    if isinstance(o, list):
+        return [_mask_cfg(x) for x in o]
+    return o
+
+
+def config_view(d=None, masked=True):
+    """配置文本视图（/api/config）：masked=True 时递归掩盖节点 password/uuid 等敏感字段"""
+    d = d or load()
+    if active_core(d) == "singbox":
+        cfg = build_singbox(d)[0]
+    else:
+        cfg = build_config(d)
+    if masked:
+        cfg = _mask_cfg(cfg)
+    return json.dumps(cfg, ensure_ascii=False, indent=2)
+
+
+def find_cycle(groups):
+    """策略组之间的循环引用，返回环路径或 None"""
+    gmap = {g["name"]: [m for m in g.get("proxies", [])] for g in groups}
+    state, stack = {}, []
+
+    def dfs(n):
+        state[n] = 1
+        stack.append(n)
+        for m in gmap.get(n, []):
+            if m in gmap:
+                if state.get(m) == 1:
+                    return stack[stack.index(m):] + [m]
+                if not state.get(m):
+                    c = dfs(m)
+                    if c:
+                        return c
+        state[n] = 2
+        stack.pop()
+        return None
+
+    for n in gmap:
+        if not state.get(n):
+            c = dfs(n)
+            if c:
+                return c
+    return None
+
+
+def validate_groups(d):
+    """生成配置后检查自定义组：重名、成员不存在、循环引用"""
+    errs = []
+    nodes = all_node_names(d)
+    fixed = reserved_names()
+    seen = set()
+    for cg in d.get("custom_groups") or []:
+        n = cg["name"]
+        if n in seen:
+            errs.append(f"策略组重名：{n}")
+        if n in fixed:
+            errs.append(f"「{n}」与内置策略组或策略同名")
+        if n in nodes:
+            errs.append(f"「{n}」与节点同名")
+        seen.add(n)
+    cfg = build_config(d, strict=True)
+    names = {g["name"] for g in cfg["proxy-groups"]} | BUILTIN_POLICIES | {p["name"] for p in cfg["proxies"]}
+    for cg in d.get("custom_groups") or []:
+        miss = [m for m in cg["proxies"] if m not in names]
+        if miss:
+            errs.append(f"「{cg['name']}」的成员不存在：" + "、".join(miss[:5]))
+        if cg["name"] in cg["proxies"]:
+            errs.append(f"「{cg['name']}」不能包含自己")
+    cyc = find_cycle(cfg["proxy-groups"])
+    if cyc:
+        errs.append("策略组循环引用：" + " → ".join(cyc) + "（加入分流组候选的自定义组不能再引用 YouTube / Google 等分流组，可关闭“加入分流组候选”）")
+    return errs
 
 
 class H(BaseHTTPRequestHandler):

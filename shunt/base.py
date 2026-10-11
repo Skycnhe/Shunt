@@ -2,14 +2,52 @@
 import shunt
 import ipaddress
 import os, threading, re
+import secrets
 import socket
+import time
 import urllib.error
 import urllib.request
+from collections import deque
 from urllib.parse import urlsplit
 
 BASE = os.path.dirname(os.path.abspath(shunt.SERVER_FILE))  # 面板文件所在目录（index.html、tproxy.sh 等）
 CONF_DIR = os.environ.get("MIHOMO_DIR", "/etc/mihomo")
 DATA_FILE = os.environ.get("PANEL_DATA", "/etc/mihomo-panel/data.json")
+LGBM_URL = os.environ.get("SMART_REPO", "https://github.com/vernesong/mihomo/releases") + "/download/LightGBM-Model/Model.bin"
+UPD_STATE = {"busy": False}  # 面板在线更新忙标志：panel_update 与 core_update 共用，避免循环导入
+CORE_UPD = {"busy": False, "stage": "", "pct": 0, "ok": None, "message": "", "log": deque(maxlen=30), "t": 0}  # 内核更新状态：core_update 与 notify 共用
+
+
+def local_file(f):
+    """部署文件 f 的本地路径（init.d/ 下的优先用 /etc/init.d/ 的系统版本）"""
+    if f.startswith("init.d/"):
+        sysf = "/etc/init.d/" + f[7:]
+        return sysf if BASE == "/opt/mihomo-panel" and os.path.isfile(sysf) else os.path.join(BASE, f)
+    return os.path.join(BASE, f)
+
+
+def udp_dns_query(name, port=1053, host="127.0.0.1", timeout=8):
+    """向本机 DNS 端口发一个 A 记录查询；收到同 ID 的应答（含 NXDOMAIN）即视为成功"""
+    qid = secrets.randbits(16)
+    pkt = qid.to_bytes(2, "big") + b"\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
+    for lab in name.strip(".").split("."):
+        b = lab.encode("idna") if lab else b""
+        pkt += bytes([len(b)]) + b
+    pkt += b"\x00\x00\x01\x00\x01"
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.settimeout(timeout)
+    try:
+        s.sendto(pkt, (host, port))
+        end = time.time() + timeout
+        while time.time() < end:
+            data = s.recv(1500)
+            if len(data) >= 12 and int.from_bytes(data[:2], "big") == qid and data[2] & 0x80:
+                return True
+    except Exception:
+        return False
+    finally:
+        s.close()
+    return False
 PANEL_DIR = os.path.dirname(DATA_FILE)
 STATS_FILE = os.path.join(PANEL_DIR, "stats.json")
 NOTIFY_FILE = os.path.join(PANEL_DIR, "notify.json")
@@ -103,7 +141,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.4.5"
+PANEL_VERSION = "7.4.6"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),

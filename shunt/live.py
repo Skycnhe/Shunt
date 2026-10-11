@@ -1,31 +1,9 @@
 """实时速率 / 内存（订阅 /traffic 与 /memory 流）"""
-import json, secrets, socket, time
+import json, socket, time
 
 from .errlog import log_err
 from .core import conns_snapshot
 from .logstream import core_stream
-def udp_dns_query(name, port=1053, host="127.0.0.1", timeout=8):
-    """向本机 DNS 端口发一个 A 记录查询；收到同 ID 的应答（含 NXDOMAIN）即视为成功"""
-    qid = secrets.randbits(16)
-    pkt = qid.to_bytes(2, "big") + b"\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
-    for lab in name.strip(".").split("."):
-        b = lab.encode("idna") if lab else b""
-        pkt += bytes([len(b)]) + b
-    pkt += b"\x00\x00\x01\x00\x01"
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.settimeout(timeout)
-    try:
-        s.sendto(pkt, (host, port))
-        end = time.time() + timeout
-        while time.time() < end:
-            data = s.recv(1500)
-            if len(data) >= 12 and int.from_bytes(data[:2], "big") == qid and data[2] & 0x80:
-                return True
-    except Exception:
-        return False
-    finally:
-        s.close()
-    return False
 
 
 LIVE = {"up": 0, "down": 0, "upTotal": 0, "downTotal": 0, "inuse": 0, "oslimit": 0, "t": 0}

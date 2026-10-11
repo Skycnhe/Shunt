@@ -2,19 +2,22 @@
 import ipaddress, json, os, re, signal, threading, time, urllib.request, urllib.error
 
 from .base import (
-    AB_DIR, BUILTIN_POLICIES, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, SVC, TUN_DEFAULT, TUN_STACKS, UA,
+    AB_DIR, BUILTIN_POLICIES, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, SVC, UA,
     dl_check,
 )
 from .data import auto_name, lb_dropped_names, lb_names, lb_old_name, load, safe, write_json
 from .groups import PROV, gcfg, rx
-from .mihomo import BUILTIN_GEO, build_config, build_rule_providers, dns_cfg, policy_parts, safe_dev, write_config
-from .core import core_json
-from .sb_common import CORE_PID, SB_BIN, SB_CONF, SB_DIR, SB_GEO, SB_RULE_DIR, SB_STATE, active_core
+from .mihomo import BUILTIN_GEO, build_config, build_rule_providers, dns_cfg, policy_parts, tun_params, write_config
+from .corehttp import core_json
+from .sb_common import CORE_PID, SB_BIN, SB_CONF, SB_DIR, SB_RULE_DIR, SB_STATE, active_core
 from .sb_yaml import yaml_lite
-from .sb_subs import sb_provider_nodes, sb_sub_cache, sb_sub_outbounds
+from .groups import sb_provider_nodes, sb_sub_cache, sb_sub_outbounds
 from .sb_nodes import sb_outbound
-from .sb_rules import SBRules, _mh_domain, _rs_tag
+from .sb_rules import SBRules, geo_srs_entry
+from .ruleutil import _mh_domain
 from .sb_dns import sb_dns
+from .sysopt import nft_ok, proxy_opener, sh
+from .notify import core_alive
 def build_singbox(d):
     """把 build_config 生成的 mihomo 结构翻译成 sing-box 配置；返回 (配置, 警告列表, 需要的规则集文件)"""
     sub_out = sb_sub_outbounds(d)
@@ -45,7 +48,8 @@ def build_singbox(d):
     final = "DIRECT"
     for line in cfg["rules"]:
         if line.upper().startswith("MATCH,"):
-            final = tr.action(line.split(",", 1)[1]).get("outbound", "DIRECT") if tr.action(line.split(",", 1)[1]) else "DIRECT"
+            act = tr.action(line.split(",", 1)[1])
+            final = act.get("outbound", "DIRECT") if act else "DIRECT"
             continue
         r, needs = tr.rule(line)
         if r is None:
@@ -163,11 +167,11 @@ def sb_inbounds(d, v6):
                 {"type": "direct", "tag": "dns-in", "listen": lis, "listen_port": 1053}]
     if d.get("proxy_mode") == "tproxy":  # 透明代理（tproxy.sh 把流量转到 7893）
         inbounds.insert(1, {"type": "tproxy", "tag": "tproxy-in", "listen": lis, "listen_port": 7893})
-    tc = d.get("tun") or TUN_DEFAULT
-    if d.get("proxy_mode") == "tun":
-        tun = {"type": "tun", "tag": "tun-in", "interface_name": safe_dev(tc.get("device")), "address": ["172.19.0.1/30"] + (["fdfe:dcba:9876::1/126"] if v6 else []),
-               "auto_route": True, "auto_redirect": bool(tc.get("auto_redirect", True)) and nft_ok(), "strict_route": bool(tc.get("strict_route", False)),
-               "stack": tc.get("stack") if tc.get("stack") in TUN_STACKS else "mixed"}
+    tp = tun_params(d)  # TUN 决策与 mihomo_tun 共用；auto_redirect 另需 nftables 可用
+    if tp["enable"]:
+        tun = {"type": "tun", "tag": "tun-in", "interface_name": tp["device"], "address": ["172.19.0.1/30"] + (["fdfe:dcba:9876::1/126"] if v6 else []),
+               "auto_route": True, "auto_redirect": tp["auto_redirect"] and nft_ok(), "strict_route": tp["strict_route"],
+               "stack": tp["stack"]}
         inbounds.append(tun)
     return inbounds
 
@@ -185,10 +189,9 @@ def sb_geo_rule_sets(d, dc=None):
     def add(kind, name):
         if kind == "geoip" and name.lower() in ("private", "lan"):
             return  # 翻译成 ip_is_private，不产生规则集条目
-        tag = _rs_tag(kind, name)
+        tag, entry = geo_srs_entry(kind, name)
         if tag not in geos:
-            geos[tag] = {"kind": "geo", "url": f"{SB_GEO}/{kind}/{name.lower()}.srs",
-                         "path": f"{kind}-{name.lower()}.srs"}
+            geos[tag] = entry
 
     for kind, name in BUILTIN_GEO:  # mihomo_rules 末尾硬编码分流规则
         add(kind, name)
@@ -528,9 +531,3 @@ def sb_fake_rule_providers(d):
                           "ruleCount": 0, "updatedAt": iso_utc(mt) if mt else ""}
     return {"providers": out}
 
-
-def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global nft_ok, proxy_opener, sh, core_alive
-    from .sysopt import nft_ok, proxy_opener, sh
-    from .notify import core_alive

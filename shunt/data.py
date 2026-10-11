@@ -5,6 +5,7 @@ from .base import (
     AUTO_SUFFIX, AUTO_TAIL, AUTO_TAIL_OLD, DATA_FILE, DEFAULT, G_AUTO, G_OTHER, LB_PREFIX, LB_SUFFIX, LB_TAIL, LEGACY_AUTO, LOCK,
     PANEL_DIR, PROXY_MODES, REGIONS, SCHEMA, TESTS
 )
+from .ruleutil import dns_policy_of, rule_policy_index
 OLD_PW_KEYS = ("password", "pw_hash", "pw_default")
 
 
@@ -291,8 +292,3 @@ def write_json(path, obj, mode=0o600):
 def safe(name):
     return re.sub(r"[^\w\-]", "_", name) or "sub"
 
-
-def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global dns_policy_of, rule_policy_index
-    from .mihomo import dns_policy_of, rule_policy_index

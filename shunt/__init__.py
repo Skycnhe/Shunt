@@ -1,7 +1,9 @@
 """Shunt 分流面板后端。
 
 设备上运行的是仓库根目录的 server.py：它由 tools/build.py 生成，内嵌了本目录全部模块的源码，所以部署时仍然只有一个文件。
-模块之间：引用前面模块的名字直接 from-import；引用后面模块的名字写在各模块末尾的 _link() 里，由 load() 在全部模块加载后调用。
+模块之间直接 from-import，依赖无环（tools/build.py 生成前可用文末的 SCC 脚本验证）。
+唯一的例外是 core.py 末尾的 _link()：core.reload_core() 需要 latency.retest_soon()，
+而 latency 的定时器又需要 core.refresh_regions()，真互递归，只能延迟绑定这一个名字。
 """
 import importlib
 import os
@@ -12,9 +14,11 @@ MODULES = [
     "errlog",
     "data",
     "links",
+    "ruleutil",
     "groups",
     "mihomo",
     "core",
+    "corehttp",
     "sb_common",
     "sb_yaml",
     "sb_subs",

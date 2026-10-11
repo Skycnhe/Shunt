@@ -12,10 +12,11 @@ from .base import (
     TUN_STACKS
 )
 from .data import HISTORY_FILE, HISTORY_SKIP, auto_name, config_version, lb_names, load, migrate_names, read_json, region_lb_set, save, update
-from .links import add_links, q1
-from .groups import all_node_names, clean_custom_group, gcfg, region_plan, rx, validate_groups
+from .links import add_links, q1, reserved_names
+from .groups import all_node_names, clean_custom_group, gcfg, region_plan, rx
 from .mihomo import bad_rule_policies, build_config, dns_cfg, safe_dev, validate_dns
-from .core import conns_snapshot, core, core_json, refresh_after_sub, refresh_regions, reload_core
+from .core import conns_snapshot, refresh_after_sub, refresh_regions, reload_core
+from .corehttp import core, core_json
 from .sb_common import CORES, SB_BIN, SB_STATE, active_core, core_conf_path
 from .sb_subs import sb_update_subs
 from .sb_config import build_singbox, sb_ab_loaded, sb_fake_providers, sb_fake_rule_providers, sb_rule_need, sb_sync_assets, sb_version, write_active_config
@@ -25,7 +26,7 @@ from .core_update import (
     CORE_CHANNELS, CORE_UPD, LGBM_FILE, bin_version, core_check, core_job_start, core_rollback_job, core_upd_status, core_update_job,
     lgbm_fetch, lgbm_fetch_reload
 )
-from .sysopt import config_view, delay_test, favicon, nft_ok, opt_apply, opt_status, sh, speed_test
+from .sysopt import delay_test, favicon, nft_ok, opt_apply, opt_status, sh, speed_test
 from .notify import WD, tg_send
 from .latency import BG_FILE, RETEST, bg_fetch, bg_meta, bg_meta_save, bg_save, bg_type, fix_global, proxies_merged, retest_soon
 from .stats import arp_table
@@ -75,6 +76,95 @@ def api_route(path, *methods):
             ROUTES[(m, path)] = fn
         return fn
     return deco
+
+
+_MASK_WORDS = ("password", "passwd", "uuid", "token", "psk", "secret", "privatekey")
+
+
+def _mask_val(v):
+    """敏感值掩盖中间：长值露头 3 + 尾 2，短值全打码"""
+    s = str(v)
+    return f"{s[:3]}******{s[-2:]}" if len(s) > 6 else "******"
+
+
+def _mask_cfg(o):
+    """递归掩盖配置里的敏感字段（key 含 password/uuid/token/psk/secret/privatekey 等，去掉 -_ 后匹配）"""
+    if isinstance(o, dict):
+        return {k: (_mask_val(v) if isinstance(v, str) and any(w in k.lower().replace("-", "").replace("_", "")
+                                                              for w in _MASK_WORDS) else _mask_cfg(v))
+                for k, v in o.items()}
+    if isinstance(o, list):
+        return [_mask_cfg(x) for x in o]
+    return o
+
+
+def config_view(d=None, masked=True):
+    """配置文本视图（/api/config）：masked=True 时递归掩盖节点 password/uuid 等敏感字段"""
+    d = d or load()
+    if active_core(d) == "singbox":
+        cfg = build_singbox(d)[0]
+    else:
+        cfg = build_config(d)
+    if masked:
+        cfg = _mask_cfg(cfg)
+    return json.dumps(cfg, ensure_ascii=False, indent=2)
+
+
+def find_cycle(groups):
+    """策略组之间的循环引用，返回环路径或 None"""
+    gmap = {g["name"]: [m for m in g.get("proxies", [])] for g in groups}
+    state, stack = {}, []
+
+    def dfs(n):
+        state[n] = 1
+        stack.append(n)
+        for m in gmap.get(n, []):
+            if m in gmap:
+                if state.get(m) == 1:
+                    return stack[stack.index(m):] + [m]
+                if not state.get(m):
+                    c = dfs(m)
+                    if c:
+                        return c
+        state[n] = 2
+        stack.pop()
+        return None
+
+    for n in gmap:
+        if not state.get(n):
+            c = dfs(n)
+            if c:
+                return c
+    return None
+
+
+def validate_groups(d):
+    """生成配置后检查自定义组：重名、成员不存在、循环引用"""
+    errs = []
+    nodes = all_node_names(d)
+    fixed = reserved_names()
+    seen = set()
+    for cg in d.get("custom_groups") or []:
+        n = cg["name"]
+        if n in seen:
+            errs.append(f"策略组重名：{n}")
+        if n in fixed:
+            errs.append(f"「{n}」与内置策略组或策略同名")
+        if n in nodes:
+            errs.append(f"「{n}」与节点同名")
+        seen.add(n)
+    cfg = build_config(d, strict=True)
+    names = {g["name"] for g in cfg["proxy-groups"]} | BUILTIN_POLICIES | {p["name"] for p in cfg["proxies"]}
+    for cg in d.get("custom_groups") or []:
+        miss = [m for m in cg["proxies"] if m not in names]
+        if miss:
+            errs.append(f"「{cg['name']}」的成员不存在：" + "、".join(miss[:5]))
+        if cg["name"] in cg["proxies"]:
+            errs.append(f"「{cg['name']}」不能包含自己")
+    cyc = find_cycle(cfg["proxy-groups"])
+    if cyc:
+        errs.append("策略组循环引用：" + " → ".join(cyc) + "（加入分流组候选的自定义组不能再引用 YouTube / Google 等分流组，可关闭“加入分流组候选”）")
+    return errs
 
 
 class H(BaseHTTPRequestHandler):

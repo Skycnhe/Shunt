@@ -4,7 +4,8 @@ from urllib.parse import quote
 
 from .base import CONF_DIR, PANEL_DIR
 from .data import legacy_map, load, read_json, write_json
-from .core import core, core_json, reload_core
+from .core import reload_core
+from .corehttp import core, core_json
 from .sb_common import active_core
 from .notify import core_alive
 SEL_FILE = os.path.join(PANEL_DIR, "selected.json")

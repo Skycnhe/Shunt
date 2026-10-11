@@ -5,7 +5,8 @@ from urllib.parse import quote
 from .errlog import log_err
 from .base import G_MANUAL, G_SEL, HC, NOTIFY_FILE, PANEL_DIR, UA, WD_INTERVAL, dl_check
 from .data import load, read_json, write_json
-from .core import core, core_json, refresh_regions
+from .core import refresh_regions
+from .corehttp import core, core_json
 from .sb_common import active_core
 from .sb_config import sb_fake_providers
 from .sysopt import proxy_opener

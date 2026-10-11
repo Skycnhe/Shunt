@@ -1,11 +1,14 @@
 """面板在线更新"""
-import hashlib, json, os, re, shlex, shutil, time, urllib.request, urllib.error
+import hashlib, os, re, shlex, shutil, time, urllib.request, urllib.error
 
 from .errlog import log_err
-from .base import BASE, PANEL_VERSION, UA, dl_check
+from .base import BASE, PANEL_VERSION, UA, UPD_STATE, dl_check, local_file
+from .core_update import gh_api
+from .sysopt import proxy_opener, sh
+from .https import restart_self
+from .update_guard import start_update_guard
 PANEL_RAW = os.environ.get("PANEL_RAW", "https://raw.githubusercontent.com/Skycnhe/Shunt/Hk001")
 UPD_FILES = ["server.py", "index.html", "tproxy.sh", "selftest.sh", "init.d/mihomo", "init.d/mihomo-panel"]
-UPD_STATE = {"busy": False}
 UPD_LIST = "update-files.txt"  # 仓库里的部署文件清单：以后增减文件只改清单，不用再改更新程序
 
 
@@ -28,19 +31,6 @@ def remote_file_list(gh, commit, shas):
         if need not in out:
             raise ValueError(f"部署清单缺少 {need}")
     return out
-
-
-def local_file(f):
-    if f.startswith("init.d/"):
-        sysf = "/etc/init.d/" + f[7:]
-        return sysf if BASE == "/opt/mihomo-panel" and os.path.isfile(sysf) else os.path.join(BASE, f)
-    return os.path.join(BASE, f)
-
-
-def gh_api(path, timeout=15):
-    """直连或经 mihomo 代理访问 GitHub API（绝不走第三方加速镜像：校验值必须来自 GitHub 本身）"""
-    with open_url("https://api.github.com" + path, "", timeout=timeout) as r:
-        return json.loads(r.read(8 << 20))
 
 
 def panel_manifest():
@@ -171,11 +161,3 @@ def self_update(apply=False, gh=""):
     finally:
         UPD_STATE["busy"] = False
 
-
-def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global open_url, proxy_opener, sh, restart_self, start_update_guard
-    from .core_update import open_url
-    from .sysopt import proxy_opener, sh
-    from .https import restart_self
-    from .update_guard import start_update_guard
