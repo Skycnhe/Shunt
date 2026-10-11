@@ -76,7 +76,7 @@ GROUPS_DEFAULT = {"type": "url-test", "lb": True, "auto": True, "strategy": "con
                   "tolerance": 0, "url": "https://www.gstatic.com/generate_204", "extra": True, "other": True, "lazy": True,
                   "lgbm": False}
 SCHED_DEFAULT = {"sub_update": "", "core_restart": "", "geo_update": "", "latency": 0}
-DEFAULT = {"password": "admin", "pw_hash": "", "pw_default": False, "secret": "", "mode": "rule", "tproxy": True, "subs": [], "rules": [],
+DEFAULT = {"secret": "", "mode": "rule", "tproxy": True, "subs": [], "rules": [],
            "rulesets": [], "bypass": [], "tests": None, "sub_interval": 86400, "region_groups": True,
            "nodes": [], "ipv6": False, "https": False, "allow_public": False, "allow_hosts": [], "watchdog": True, "tg_token": "", "tg_chat": "",
            "proxy_mode": "", "tun": TUN_DEFAULT, "log_limit": 5, "adblock": AB_DEFAULT, "dns": DNS_DEFAULT,
@@ -98,7 +98,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.3.0"
+PANEL_VERSION = "7.4.0"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
