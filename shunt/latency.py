@@ -3,7 +3,7 @@ import base64, json, os, re, threading, time, urllib.request, urllib.error
 from urllib.parse import quote
 
 from .errlog import log_err
-from .base import G_MANUAL, G_SEL, HC, NOTIFY_FILE, PANEL_DIR, UA, WD_INTERVAL
+from .base import G_MANUAL, G_SEL, HC, NOTIFY_FILE, PANEL_DIR, UA, WD_INTERVAL, dl_check
 from .data import load, read_json, write_json
 from .core import core, core_json, refresh_regions
 from .sb_common import active_core
@@ -145,6 +145,10 @@ def bg_fetch(url):
     url = str(url or "").strip()
     if not re.match(r"https?://\S+$", url):
         return False, "请输入 http(s) 开头的图片链接"
+    try:
+        dl_check(url)  # SSRF 防护：禁止内网目标
+    except IOError as e:
+        return False, str(e)
     raw, err = None, ""
     for proxy in (True, False):
         # 每次新建 Request：走代理时 urllib 会把代理地址写进 Request，复用会让直连也连到代理端口

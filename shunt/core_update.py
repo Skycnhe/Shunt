@@ -4,7 +4,7 @@ from collections import deque
 from urllib.parse import quote
 
 from .errlog import log_err
-from .base import CONF_DIR, MIHOMO_LOG, SVC, UA
+from .base import CONF_DIR, MIHOMO_LOG, SVC, UA, dl_check
 from .data import load
 from .mihomo import mh_bin, write_config
 from .core import reload_core
@@ -48,6 +48,7 @@ def open_url(url, gh, timeout=20):
     err = ""
     for u, use_proxy in tries:
         try:
+            dl_check(u)  # SSRF 防护：禁止内网目标
             req = urllib.request.Request(u, headers={"User-Agent": UA})
             return proxy_opener(use_proxy and core_alive()).open(req, timeout=timeout)
         except Exception as e:

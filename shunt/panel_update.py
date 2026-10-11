@@ -2,7 +2,7 @@
 import hashlib, json, os, re, shutil, time, urllib.request, urllib.error
 
 from .errlog import log_err
-from .base import BASE, PANEL_VERSION, UA
+from .base import BASE, PANEL_VERSION, UA, dl_check
 PANEL_RAW = os.environ.get("PANEL_RAW", "https://raw.githubusercontent.com/Skycnhe/Shunt/Hk001")
 UPD_FILES = ["server.py", "index.html", "tproxy.sh", "selftest.sh", "init.d/mihomo", "init.d/mihomo-panel"]
 UPD_STATE = {"busy": False}
@@ -74,6 +74,7 @@ def fetch_raw(f, gh, commit=None, sha=None):
     err = ""
     for u, use_proxy in tries:
         try:
+            dl_check(u)  # SSRF 防护：禁止内网目标
             req = urllib.request.Request(u + ("&" if "?" in u else "?") + "t=" + str(int(time.time())), headers={"User-Agent": UA})
             with proxy_opener(use_proxy).open(req, timeout=20) as r:
                 data = r.read(4 << 20)

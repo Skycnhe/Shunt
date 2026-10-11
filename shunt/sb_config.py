@@ -2,7 +2,8 @@
 import ipaddress, json, os, re, signal, time, urllib.request, urllib.error
 
 from .base import (
-    AB_DIR, BUILTIN_POLICIES, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, SVC, TUN_DEFAULT, TUN_STACKS, UA
+    AB_DIR, BUILTIN_POLICIES, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, SVC, TUN_DEFAULT, TUN_STACKS, UA,
+    dl_check,
 )
 from .data import auto_name, lb_dropped_names, lb_names, lb_old_name, load, safe, write_json
 from .groups import PROV, gcfg, rx
@@ -327,6 +328,11 @@ def sb_sync_assets(d, force=False, need=None):
             urls = ([gh + "/" + rsd["url"]] if gh and "github" in rsd["url"] else []) + [rsd["url"]]
             data, err = None, ""
             for u in urls:
+                try:
+                    dl_check(u)  # SSRF 防护：禁止内网目标
+                except IOError as e:
+                    err = str(e)[:120]
+                    continue
                 for use_proxy in ((True, False) if core_alive() else (False,)):
                     try:
                         with proxy_opener(use_proxy).open(urllib.request.Request(u, headers={"User-Agent": UA}), timeout=30) as r:
