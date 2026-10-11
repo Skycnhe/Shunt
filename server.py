@@ -103,7 +103,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.0.0"
+PANEL_VERSION = "7.0.1"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -3308,6 +3308,57 @@ def cpu_govs():
     return sorted(glob_paths(os.path.join(SYS_ROOT, "devices/system/cpu/cpu[0-9]*/cpufreq/scaling_governor")))
 
 
+_CT = {}
+
+
+def in_container():
+    """LXC / Docker 等容器：内核由宿主机共用，大部分全局参数、/sys、系统时间都无权修改"""
+    if "v" not in _CT:
+        v = rfile("/run/systemd/container")
+        if not v and (os.path.exists("/dev/.lxc-boot-id") or " lxcfs " in rfile("/proc/self/mountinfo")
+                      or re.search(r"/lxc", rfile("/proc/1/cgroup"))):
+            v = "lxc"
+        if not v and (os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
+                      or re.search(r"/(docker|kubepods)", rfile("/proc/1/cgroup"))):
+            v = "docker"
+        _CT["v"] = v
+    return _CT["v"]
+
+
+def path_writable(path):
+    """把当前值原样写回，判断是否有权修改（容器里 /proc/sys、/sys 多数只读）"""
+    try:
+        with open(path) as f:
+            cur = f.read().strip()
+        with open(path, "w") as f:
+            f.write(cur)
+        return True
+    except OSError:
+        return False
+
+
+_SYSW = {}
+
+
+def sys_writable(key):
+    if key not in _SYSW:
+        path = os.path.join(PROC_SYS, key.replace(".", "/"))
+        if not os.path.exists(path):
+            return False  # 模块未加载时参数不存在，不缓存，加载后再判断
+        _SYSW[key] = path_writable(path)
+    return _SYSW[key]
+
+
+def nofile_target():
+    """mihomo 文件句柄目标值：不能超过本机（容器）的硬上限，否则 rc_ulimit 会让核心启动失败"""
+    try:
+        import resource
+        hard = resource.getrlimit(resource.RLIMIT_NOFILE)[1]
+    except Exception:
+        hard = -1
+    return 1048576 if hard < 0 or hard >= 1048576 else hard
+
+
 def glob_paths(pat):
     import glob
     return glob.glob(pat)
@@ -3323,8 +3374,18 @@ def opt_items():
         glob_paths(f"/lib/modules/{os.uname().release}/kernel/net/ipv4/tcp_bbr.ko*"))
     govs = cpu_govs()
     gov_ok = bool(govs) and "performance" in rfile(os.path.join(os.path.dirname(govs[0]), "scaling_available_governors")) if govs else False
-    return [
-        {"id": "bbr", "name": "BBR 拥塞控制", "rec": True, "ok": bbr_ok, "why": "" if bbr_ok else "内核没有 tcp_bbr 模块",
+    ct_name = in_container()
+    if ct_name:  # 容器里没有自己的内核：模块要在宿主机上加载
+        bbr_ok = "bbr" in (rsys("net.ipv4.tcp_available_congestion_control") or "")
+    gov_ok = gov_ok and path_writable(govs[0])
+    nof = nofile_target()
+    rpsq = [q for q in glob_paths(os.path.join(SYS_ROOT, "class/net/*/queues/rx-*/rps_cpus"))
+            if q.split("/class/net/")[1].split("/")[0] in net_ifaces()]
+    rps_ok = ncpu > 1 and bool(rpsq) and path_writable(rpsq[0])
+    host = "宿主机" + ("（PVE / LXC）" if ct_name == "lxc" else "")
+    items = [
+        {"id": "bbr", "name": "BBR 拥塞控制", "rec": True, "ok": bbr_ok,
+         "why": "" if bbr_ok else f"宿主机内核未加载 tcp_bbr，请在{host}上执行 modprobe tcp_bbr" if ct_name else "内核没有 tcp_bbr 模块",
          "desc": "TCP 改用 BBR + fq 队列，丢包或长距离线路下的下载速度明显更高",
          "sysctl": {"net.core.default_qdisc": "fq", "net.ipv4.tcp_congestion_control": "bbr"}},
         {"id": "buf", "name": "网络缓冲区", "rec": True, "ok": True,
@@ -3342,19 +3403,33 @@ def opt_items():
          "why": "nf_conntrack 未加载", "desc": f"连接数上限提高到 {ct}，已建立连接的超时从 5 天缩短到 2 小时，避免设备多时连接表被占满导致断流",
          "sysctl": {"net.netfilter.nf_conntrack_max": ct, "net.netfilter.nf_conntrack_tcp_timeout_established": 7200,
                     "net.netfilter.nf_conntrack_udp_timeout": 60, "net.netfilter.nf_conntrack_udp_timeout_stream": 180}},
-        {"id": "fd", "name": "文件句柄上限", "rec": True, "ok": True,
-         "desc": "mihomo 可同时打开的连接数从 1024 提高到 1048576，设备多或 BT 下载时不再报 too many open files（下次重启核心生效）",
+        {"id": "fd", "name": "文件句柄上限", "rec": True, "ok": nof > 1024, "why": "本机文件句柄硬上限只有 1024，需在宿主机上调高",
+         "desc": f"mihomo 可同时打开的连接数从 1024 提高到 {nof}，设备多或 BT 下载时不再报 too many open files（下次重启核心生效）",
          "sysctl": {"fs.file-max": 1048576, "fs.nr_open": 1048576}},
-        {"id": "rps", "name": "多核网络分流 (RPS)", "rec": ncpu > 1, "ok": ncpu > 1 and bool(net_ifaces()),
-         "why": "单核 CPU 无需开启" if ncpu <= 1 else "未找到物理网卡",
+        {"id": "rps", "name": "多核网络分流 (RPS)", "rec": ncpu > 1, "ok": rps_ok,
+         "why": "单核 CPU 无需开启" if ncpu <= 1 else "未找到物理网卡" if not rpsq else f"网卡参数只读，请在{host}上设置",
          "desc": f"把网卡收包分摊到全部 {ncpu} 个 CPU 核心，单队列网卡（树莓派、多数 ARM 盒子、虚拟机）满速时不再单核 100%",
          "sysctl": {"net.core.rps_sock_flow_entries": 32768}},
-        {"id": "gov", "name": "CPU 性能模式", "rec": False, "ok": gov_ok, "why": "CPU 不支持调频或没有 performance 模式",
+        {"id": "gov", "name": "CPU 性能模式", "rec": False, "ok": gov_ok,
+         "why": f"CPU 调频由{host}控制" if govs and ct_name else "CPU 不支持调频或没有 performance 模式",
          "desc": "CPU 一直跑在最高频率，延迟更低更稳定；功耗和发热会增加，散热差的设备慎开", "sysctl": {}},
-        {"id": "ntp", "name": "时间同步", "rec": True, "ok": True,
+        {"id": "ntp", "name": "时间同步", "rec": True, "ok": not ct_name, "why": "容器和宿主机共用系统时钟，请在宿主机上校时",
          "desc": "安装并开机启动 chrony 自动校时。系统时间不准会导致 TLS 握手失败、VMess / Trojan 等节点全部不可用",
          "sysctl": {}},
     ]
+    for it in items:  # 只保留有权修改的参数；容器里 net.core.*、fs.* 等全局参数由宿主机决定
+        allk = it["sysctl"]
+        if not allk or not it["ok"]:
+            continue
+        w = {k: v for k, v in allk.items() if sys_writable(k)}
+        it["skipped"] = [k for k in allk if k not in w]
+        it["sysctl"] = w
+        if not w and it["id"] != "fd":
+            it["ok"] = False
+            it["why"] = f"这些内核参数在容器里只读，由{host}决定" if ct_name else "内核参数只读"
+        elif it["skipped"]:
+            it["part"] = f"有 {len(it['skipped'])}/{len(allk)} 个参数只读（{'由' + host + '决定' if ct_name else '内核不允许修改'}），已跳过"
+    return items
 
 
 def ntp_running():
@@ -3374,7 +3449,7 @@ def opt_status():
                 hit += 1
         live = bool(it["sysctl"]) and hit == len(it["sysctl"])
         if it["id"] == "fd":
-            live = live and 'rc_ulimit="-n 1048576"' in rfile(OPT_CONFD)
+            live = (live or not it["sysctl"]) and f'rc_ulimit="-n {nofile_target()}"' in rfile(OPT_CONFD)
         elif it["id"] == "rps":
             live = live and it["ok"] and all(int(rfile(q, "0").replace(",", "") or "0", 16) != 0
                                             for q in glob_paths(os.path.join(SYS_ROOT, "class/net/*/queues/rx-*/rps_cpus"))
@@ -3393,8 +3468,17 @@ def opt_status():
         elif it["id"] == "gov" and it["ok"]:
             show = {"当前": rfile(cpu_govs()[0])}
         out.append({k: it[k] for k in ("id", "name", "desc", "rec", "ok")} | {
-            "why": "" if it["ok"] else it.get("why", ""), "enabled": it["id"] in on, "active": live, "show": show})
-    return {"items": out, "mem": mem_mb(), "cpu": os.cpu_count() or 1, "kernel": os.uname().release}
+            "why": "" if it["ok"] else it.get("why", ""), "enabled": it["id"] in on, "active": live, "show": show,
+            "part": it.get("part", "") if it["ok"] else ""})
+    return {"items": out, "mem": mem_mb(), "cpu": os.cpu_count() or 1, "kernel": os.uname().release, "container": in_container()}
+
+
+def opt_fix_ulimit():
+    """旧版写死 rc_ulimit="-n 1048576"：在硬上限更低的 LXC 容器里会让核心启动失败，按实际上限改小"""
+    txt = rfile(OPT_CONFD)
+    m = re.search(r'^rc_ulimit="-n (\d+)"', txt, re.M)
+    if m and int(m.group(1)) > nofile_target():
+        wfile(OPT_CONFD, txt.replace(m.group(0), f'rc_ulimit="-n {nofile_target()}"') + ("" if txt.endswith("\n") else "\n"))
 
 
 def _opt_locald(on):
@@ -3428,7 +3512,7 @@ def opt_apply(ids):
         orig = dict(d.get("sysopt_orig") or {})
         mods = list(d.get("sysopt_mods") or [])
         errs = []
-        if "bbr" in want:
+        if "bbr" in want and not in_container():
             sh("modprobe tcp_bbr; modprobe sch_fq")
             mf = os.path.join(ETC, "modules")
             if "tcp_bbr" not in rfile(mf).split():
@@ -3438,7 +3522,7 @@ def opt_apply(ids):
                     mods.append("tcp_bbr")
                 except OSError as e:
                     errs.append(f"写入 /etc/modules 失败：{e}")
-        if "conntrack" in want:
+        if "conntrack" in want and not in_container():
             sh("modprobe nf_conntrack")
         # sysctl：先记住原值，再写入；取消的项恢复原值
         conf = ["# 由 Shunt 面板生成：系统优化（取消请在面板「设置 → 系统优化」中关闭）"]
@@ -3467,7 +3551,7 @@ def opt_apply(ids):
             txt = rfile(OPT_CONFD)
             txt = "\n".join(l for l in txt.splitlines() if not l.startswith("rc_ulimit=")).strip()
             if "fd" in want:
-                txt = (txt + "\n" if txt else "") + 'rc_ulimit="-n 1048576"'
+                txt = (txt + "\n" if txt else "") + f'rc_ulimit="-n {nofile_target()}"'
             if txt or os.path.exists(OPT_CONFD):
                 os.makedirs(os.path.dirname(OPT_CONFD), exist_ok=True)
                 with open(OPT_CONFD, "w") as f:
@@ -6971,6 +7055,10 @@ if __name__ == "__main__":
         print(tp_env())
         sys.exit(0)
     if "--gen" in sys.argv:  # init.d/mihomo 启动前调用：按当前内核生成配置
+        try:
+            opt_fix_ulimit()
+        except Exception:
+            pass
         dd = load()
         write_core_file(active_core(dd))
         print(write_active_config(dd))
@@ -6990,6 +7078,10 @@ if __name__ == "__main__":
     for target, args in ((STATS.loop, ()), (monitor_loop, ()), (AD_STATS.loop, ()), (AD_STATS.dns_loop, ()), (live_loop, ("/traffic",)),
                          (live_loop, ("/memory",)), (log_loop, ()), (sched_loop, ()), (rdns_loop, ()), (startup_migrate, ())):
         threading.Thread(target=target, args=args, daemon=True).start()
+    try:
+        opt_fix_ulimit()
+    except Exception as e:
+        print("ulimit fix", e, flush=True)
     srv = Server(("0.0.0.0", PORT), H)
     scheme = "http"
     if https_ready(d):
