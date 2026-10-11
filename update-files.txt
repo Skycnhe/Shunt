@@ -1,0 +1,10 @@
+# 在线更新时下载并替换的文件（相对仓库根目录）。新增要部署到设备上的文件时加在这里
+server.py
+index.html
+tproxy.sh
+selftest.sh
+init.d/mihomo
+init.d/mihomo-panel
+icon.svg
+icon-180.png
+icon-512.png
