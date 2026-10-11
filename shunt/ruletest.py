@@ -84,7 +84,7 @@ def live_rule(host):
         stop["stop"] = True
         try:
             stop["sock"].shutdown(socket.SHUT_RDWR)
-        except Exception:
+        except (KeyError, OSError):
             pass
 
 
