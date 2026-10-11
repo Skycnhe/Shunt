@@ -103,7 +103,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.4.3"
+PANEL_VERSION = "7.4.4"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -140,11 +140,13 @@ HC = "https://www.gstatic.com/generate_204"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 
 
-def url_host_forbidden(url):
+def url_host_forbidden(url, via_proxy=False):
     """SSRF 防护：下载类 URL 的目标主机必须解析到公网地址。
 
-    命中以下任一情况返回 True（禁止）：无主机名 / localhost / DNS 解析失败 /
-    解析出的任一 IP 不是公网地址（内网、回环、链路本地、保留、组播等）。
+    命中以下任一情况返回 True（禁止）：无主机名 / localhost / 字面内网 IP /
+    （直连时）DNS 解析失败或解析出的任一 IP 不是公网地址（内网、回环、链路本地、保留、组播等）。
+    via_proxy=True（经 mihomo 代理下载）时跳过 DNS 校验：DNS 由代理自己解析，
+    本地校验无意义，且在 DNS 受干扰的环境（如国内）会误伤合法下载；字面 IP 仍拦截。
     注意：检查与实际建连之间存在 DNS TOCTOU 窗口，这里只防住直接的内网目标。"""
     try:
         host = (urlsplit(url).hostname or "").strip().lower().rstrip(".")
@@ -152,6 +154,12 @@ def url_host_forbidden(url):
         return True
     if not host or host == "localhost":
         return True
+    try:
+        return not ipaddress.ip_address(host).is_global  # 字面 IP：无需 DNS，直接判定
+    except ValueError:
+        pass
+    if via_proxy:
+        return False
     try:
         addrs = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
     except OSError:
@@ -166,16 +174,19 @@ def url_host_forbidden(url):
     return False
 
 
-def dl_check(url):
+def dl_check(url, via_proxy=False):
     """下载入口统一校验：目标非公网地址时抛 IOError（调用方已有通用异常处理）"""
-    if url_host_forbidden(url):
+    if url_host_forbidden(url, via_proxy=via_proxy):
         raise IOError(f"目标地址非公网，已拦截（SSRF 防护）：{urlsplit(url).hostname}")
 
 
 class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
     """跟随重定向前校验目标主机，防止 302 跳到内网（urllib 默认无条件跟随）"""
 
+    def __init__(self, via_proxy=False):
+        self._via_proxy = via_proxy
+
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        if url_host_forbidden(newurl):
+        if url_host_forbidden(newurl, via_proxy=self._via_proxy):
             raise urllib.error.HTTPError(newurl, 403, "重定向目标非公网地址，已拦截（SSRF 防护）", headers, fp)
         return super().redirect_request(req, fp, code, msg, headers, newurl)

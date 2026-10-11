@@ -74,7 +74,7 @@ def fetch_raw(f, gh, commit=None, sha=None):
     err = ""
     for u, use_proxy in tries:
         try:
-            dl_check(u)  # SSRF 防护：禁止内网目标
+            dl_check(u, via_proxy=use_proxy)  # SSRF 防护：直连时校验 DNS，走代理时由代理解析（字面内网 IP 永远拦截）
             req = urllib.request.Request(u + ("&" if "?" in u else "?") + "t=" + str(int(time.time())), headers={"User-Agent": UA})
             with proxy_opener(use_proxy).open(req, timeout=20) as r:
                 data = r.read(4 << 20)

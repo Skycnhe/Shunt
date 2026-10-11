@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.4.3"
+PANEL_VERSION = "7.4.4"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -187,7 +187,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.4.3"
+PANEL_VERSION = "7.4.4"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -224,11 +224,13 @@ HC = "https://www.gstatic.com/generate_204"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 
 
-def url_host_forbidden(url):
+def url_host_forbidden(url, via_proxy=False):
     """SSRF 防护：下载类 URL 的目标主机必须解析到公网地址。
 
-    命中以下任一情况返回 True（禁止）：无主机名 / localhost / DNS 解析失败 /
-    解析出的任一 IP 不是公网地址（内网、回环、链路本地、保留、组播等）。
+    命中以下任一情况返回 True（禁止）：无主机名 / localhost / 字面内网 IP /
+    （直连时）DNS 解析失败或解析出的任一 IP 不是公网地址（内网、回环、链路本地、保留、组播等）。
+    via_proxy=True（经 mihomo 代理下载）时跳过 DNS 校验：DNS 由代理自己解析，
+    本地校验无意义，且在 DNS 受干扰的环境（如国内）会误伤合法下载；字面 IP 仍拦截。
     注意：检查与实际建连之间存在 DNS TOCTOU 窗口，这里只防住直接的内网目标。"""
     try:
         host = (urlsplit(url).hostname or "").strip().lower().rstrip(".")
@@ -236,6 +238,12 @@ def url_host_forbidden(url):
         return True
     if not host or host == "localhost":
         return True
+    try:
+        return not ipaddress.ip_address(host).is_global  # 字面 IP：无需 DNS，直接判定
+    except ValueError:
+        pass
+    if via_proxy:
+        return False
     try:
         addrs = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
     except OSError:
@@ -250,17 +258,20 @@ def url_host_forbidden(url):
     return False
 
 
-def dl_check(url):
+def dl_check(url, via_proxy=False):
     """下载入口统一校验：目标非公网地址时抛 IOError（调用方已有通用异常处理）"""
-    if url_host_forbidden(url):
+    if url_host_forbidden(url, via_proxy=via_proxy):
         raise IOError(f"目标地址非公网，已拦截（SSRF 防护）：{urlsplit(url).hostname}")
 
 
 class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
     """跟随重定向前校验目标主机，防止 302 跳到内网（urllib 默认无条件跟随）"""
 
+    def __init__(self, via_proxy=False):
+        self._via_proxy = via_proxy
+
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        if url_host_forbidden(newurl):
+        if url_host_forbidden(newurl, via_proxy=self._via_proxy):
             raise urllib.error.HTTPError(newurl, 403, "重定向目标非公网地址，已拦截（SSRF 防护）", headers, fp)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 '''
@@ -2104,9 +2115,13 @@ def parse_sub_text(text, fetch=None, depth=0):
 
 def _sub_get(url, ua):
     """下载订阅里嵌套的 proxy-providers 地址：先代理后直连"""
-    dl_check(url)  # SSRF 防护：禁止内网目标
     last = None
     for use_proxy in ((True, False) if core_alive() else (False,)):
+        try:
+            dl_check(url, via_proxy=use_proxy)  # SSRF 防护：直连时校验 DNS，走代理时由代理解析（字面内网 IP 永远拦截）
+        except IOError as e:
+            last = e
+            continue
         req = urllib.request.Request(url, headers={"User-Agent": ua})
         try:
             with proxy_opener(use_proxy).open(req, timeout=30) as r:
@@ -2118,12 +2133,16 @@ def _sub_get(url, ua):
 
 def sb_fetch_sub(s, gh=""):
     """下载并解析一个订阅，写入缓存；返回 (节点数, 消息)"""
-    dl_check(s["url"])  # SSRF 防护：禁止内网目标
     last = ""
     for ua in SB_UA:
         try:
             data = None
             for use_proxy in ((True, False) if core_alive() else (False,)):
+                try:
+                    dl_check(s["url"], via_proxy=use_proxy)  # SSRF 防护：直连时校验 DNS，走代理时由代理解析（字面内网 IP 永远拦截）
+                except IOError as e:
+                    last = str(e)[:150]
+                    continue
                 # 每次新建 Request：走代理失败后 urllib 已把代理地址写进 Request，复用会让「直连重试」仍然连到代理
                 req = urllib.request.Request(s["url"], headers={"User-Agent": ua})
                 try:
@@ -3084,12 +3103,12 @@ def sb_sync_assets(d, force=False, need=None):
             urls = ([gh + "/" + rsd["url"]] if gh and "github" in rsd["url"] else []) + [rsd["url"]]
             data, err = None, ""
             for u in urls:
-                try:
-                    dl_check(u)  # SSRF 防护：禁止内网目标
-                except IOError as e:
-                    err = str(e)[:120]
-                    continue
                 for use_proxy in ((True, False) if core_alive() else (False,)):
+                    try:
+                        dl_check(u, via_proxy=use_proxy)  # SSRF 防护：直连时校验 DNS，走代理时由代理解析（字面内网 IP 永远拦截）
+                    except IOError as e:
+                        err = str(e)[:120]
+                        continue
                     try:
                         with proxy_opener(use_proxy).open(urllib.request.Request(u, headers={"User-Agent": UA}), timeout=30) as r:
                             data = r.read(40 << 20)
@@ -3543,7 +3562,7 @@ def fetch_raw(f, gh, commit=None, sha=None):
     err = ""
     for u, use_proxy in tries:
         try:
-            dl_check(u)  # SSRF 防护：禁止内网目标
+            dl_check(u, via_proxy=use_proxy)  # SSRF 防护：直连时校验 DNS，走代理时由代理解析（字面内网 IP 永远拦截）
             req = urllib.request.Request(u + ("&" if "?" in u else "?") + "t=" + str(int(time.time())), headers={"User-Agent": UA})
             with proxy_opener(use_proxy).open(req, timeout=20) as r:
                 data = r.read(4 << 20)
@@ -3699,9 +3718,10 @@ def open_url(url, gh, timeout=20):
     err = ""
     for u, use_proxy in tries:
         try:
-            dl_check(u)  # SSRF 防护：禁止内网目标
+            eff_proxy = use_proxy and core_alive()
+            dl_check(u, via_proxy=eff_proxy)  # SSRF 防护：直连时校验 DNS，走代理时由代理解析（字面内网 IP 永远拦截）
             req = urllib.request.Request(u, headers={"User-Agent": UA})
-            return proxy_opener(use_proxy and core_alive()).open(req, timeout=timeout)
+            return proxy_opener(eff_proxy).open(req, timeout=timeout)
         except Exception as e:
             err = f"{u.split('/')[2]}{'(代理)' if use_proxy else ''}: {str(e)[:120]}"
     raise IOError(err)
@@ -4418,8 +4438,9 @@ def sh(cmd, timeout=60):
 
 def proxy_opener(proxy=True):
     hs = [urllib.request.ProxyHandler({"http": f"http://127.0.0.1:{MIXED}", "https": f"http://127.0.0.1:{MIXED}"} if proxy else {})]
-    # SafeRedirectHandler 替换默认的重定向处理器：跟随 302 前校验目标为公网地址（SSRF 防护）
-    return urllib.request.build_opener(*hs, SafeRedirectHandler())
+    # SafeRedirectHandler 替换默认的重定向处理器：跟随 302 前校验目标为公网地址（SSRF 防护）；
+    # 走代理时跳过本地 DNS 校验（由代理自己解析），字面内网 IP 仍拦截
+    return urllib.request.build_opener(*hs, SafeRedirectHandler(via_proxy=proxy))
 
 
 _RTT_CTX = None  # site_rtt 复用：SSL context 创建含 CA 加载，约几十 ms；context 本身线程安全
@@ -4532,7 +4553,7 @@ def favicon(url):
     tries = [f"https://{host}/favicon.ico"] + ([f"https://{root}/favicon.ico", f"https://www.{root}/favicon.ico"] if root != host else [])
     for u in tries + [f"https://www.google.com/s2/favicons?domain={host}&sz=64"]:
         try:
-            dl_check(u)  # SSRF 防护：拦截非公网目标（注意：/api/favicon 走 <img> 请求，不能要求 X-Shunt 头）
+            dl_check(u, via_proxy=True)  # SSRF 防护：走代理下载，跳过本地 DNS 校验（字面内网 IP 仍拦截）
             with op.open(urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"}), timeout=8) as r:
                 b = r.read(256 * 1024)
             if len(b) > 60 and _is_img(b):
@@ -5535,9 +5556,13 @@ def ab_meta():
 
 def download(url, timeout=60, limit=40 << 20):
     """先经代理（mixed 端口）下载，失败再直连"""
-    dl_check(url)  # SSRF 防护：禁止内网目标
     err = ""
     for use_proxy in (True, False):
+        try:
+            dl_check(url, via_proxy=use_proxy)  # SSRF 防护：直连时校验 DNS，走代理时由代理解析（字面内网 IP 永远拦截）
+        except IOError as e:
+            err = str(e)[:160]
+            continue
         try:
             req = urllib.request.Request(url, headers={"User-Agent": UA})
             with proxy_opener(use_proxy).open(req, timeout=timeout) as r:

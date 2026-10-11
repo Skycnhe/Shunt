@@ -455,8 +455,9 @@ def sh(cmd, timeout=60):
 
 def proxy_opener(proxy=True):
     hs = [urllib.request.ProxyHandler({"http": f"http://127.0.0.1:{MIXED}", "https": f"http://127.0.0.1:{MIXED}"} if proxy else {})]
-    # SafeRedirectHandler 替换默认的重定向处理器：跟随 302 前校验目标为公网地址（SSRF 防护）
-    return urllib.request.build_opener(*hs, SafeRedirectHandler())
+    # SafeRedirectHandler 替换默认的重定向处理器：跟随 302 前校验目标为公网地址（SSRF 防护）；
+    # 走代理时跳过本地 DNS 校验（由代理自己解析），字面内网 IP 仍拦截
+    return urllib.request.build_opener(*hs, SafeRedirectHandler(via_proxy=proxy))
 
 
 _RTT_CTX = None  # site_rtt 复用：SSL context 创建含 CA 加载，约几十 ms；context 本身线程安全
@@ -569,7 +570,7 @@ def favicon(url):
     tries = [f"https://{host}/favicon.ico"] + ([f"https://{root}/favicon.ico", f"https://www.{root}/favicon.ico"] if root != host else [])
     for u in tries + [f"https://www.google.com/s2/favicons?domain={host}&sz=64"]:
         try:
-            dl_check(u)  # SSRF 防护：拦截非公网目标（注意：/api/favicon 走 <img> 请求，不能要求 X-Shunt 头）
+            dl_check(u, via_proxy=True)  # SSRF 防护：走代理下载，跳过本地 DNS 校验（字面内网 IP 仍拦截）
             with op.open(urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"}), timeout=8) as r:
                 b = r.read(256 * 1024)
             if len(b) > 60 and _is_img(b):

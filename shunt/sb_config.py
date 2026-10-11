@@ -379,12 +379,12 @@ def sb_sync_assets(d, force=False, need=None):
             urls = ([gh + "/" + rsd["url"]] if gh and "github" in rsd["url"] else []) + [rsd["url"]]
             data, err = None, ""
             for u in urls:
-                try:
-                    dl_check(u)  # SSRF 防护：禁止内网目标
-                except IOError as e:
-                    err = str(e)[:120]
-                    continue
                 for use_proxy in ((True, False) if core_alive() else (False,)):
+                    try:
+                        dl_check(u, via_proxy=use_proxy)  # SSRF 防护：直连时校验 DNS，走代理时由代理解析（字面内网 IP 永远拦截）
+                    except IOError as e:
+                        err = str(e)[:120]
+                        continue
                     try:
                         with proxy_opener(use_proxy).open(urllib.request.Request(u, headers={"User-Agent": UA}), timeout=30) as r:
                             data = r.read(40 << 20)

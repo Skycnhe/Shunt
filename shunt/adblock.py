@@ -145,9 +145,13 @@ def ab_meta():
 
 def download(url, timeout=60, limit=40 << 20):
     """先经代理（mixed 端口）下载，失败再直连"""
-    dl_check(url)  # SSRF 防护：禁止内网目标
     err = ""
     for use_proxy in (True, False):
+        try:
+            dl_check(url, via_proxy=use_proxy)  # SSRF 防护：直连时校验 DNS，走代理时由代理解析（字面内网 IP 永远拦截）
+        except IOError as e:
+            err = str(e)[:160]
+            continue
         try:
             req = urllib.request.Request(url, headers={"User-Agent": UA})
             with proxy_opener(use_proxy).open(req, timeout=timeout) as r:

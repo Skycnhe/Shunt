@@ -149,9 +149,13 @@ def parse_sub_text(text, fetch=None, depth=0):
 
 def _sub_get(url, ua):
     """下载订阅里嵌套的 proxy-providers 地址：先代理后直连"""
-    dl_check(url)  # SSRF 防护：禁止内网目标
     last = None
     for use_proxy in ((True, False) if core_alive() else (False,)):
+        try:
+            dl_check(url, via_proxy=use_proxy)  # SSRF 防护：直连时校验 DNS，走代理时由代理解析（字面内网 IP 永远拦截）
+        except IOError as e:
+            last = e
+            continue
         req = urllib.request.Request(url, headers={"User-Agent": ua})
         try:
             with proxy_opener(use_proxy).open(req, timeout=30) as r:
@@ -163,12 +167,16 @@ def _sub_get(url, ua):
 
 def sb_fetch_sub(s, gh=""):
     """下载并解析一个订阅，写入缓存；返回 (节点数, 消息)"""
-    dl_check(s["url"])  # SSRF 防护：禁止内网目标
     last = ""
     for ua in SB_UA:
         try:
             data = None
             for use_proxy in ((True, False) if core_alive() else (False,)):
+                try:
+                    dl_check(s["url"], via_proxy=use_proxy)  # SSRF 防护：直连时校验 DNS，走代理时由代理解析（字面内网 IP 永远拦截）
+                except IOError as e:
+                    last = str(e)[:150]
+                    continue
                 # 每次新建 Request：走代理失败后 urllib 已把代理地址写进 Request，复用会让「直连重试」仍然连到代理
                 req = urllib.request.Request(s["url"], headers={"User-Agent": ua})
                 try:

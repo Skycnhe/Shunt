@@ -48,9 +48,10 @@ def open_url(url, gh, timeout=20):
     err = ""
     for u, use_proxy in tries:
         try:
-            dl_check(u)  # SSRF 防护：禁止内网目标
+            eff_proxy = use_proxy and core_alive()
+            dl_check(u, via_proxy=eff_proxy)  # SSRF 防护：直连时校验 DNS，走代理时由代理解析（字面内网 IP 永远拦截）
             req = urllib.request.Request(u, headers={"User-Agent": UA})
-            return proxy_opener(use_proxy and core_alive()).open(req, timeout=timeout)
+            return proxy_opener(eff_proxy).open(req, timeout=timeout)
         except Exception as e:
             err = f"{u.split('/')[2]}{'(代理)' if use_proxy else ''}: {str(e)[:120]}"
     raise IOError(err)
