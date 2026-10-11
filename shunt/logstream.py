@@ -1,8 +1,12 @@
 """实时日志 (SSE)"""
-import socket
+import secrets, socket, time
 
 from .base import CTRL_HOST, CTRL_PORT
 from .data import load
+
+TICKETS = {}  # 日志流（EventSource 无法带请求头）用的一次性票据
+
+
 def core_stream(path, sink, stop, idle=None):
     """以原始 socket 读取 mihomo 的 chunked JSON 行流，逐行回调 sink；stop 被置位或连接断开时结束。
     idle: 超过该秒数没有数据视为断线（/traffic /memory 每秒推送，可用来发现半开连接）"""
@@ -42,3 +46,18 @@ def core_stream(path, sink, stop, idle=None):
             line, buf = buf.split(b"\n", 1)
             if line.strip():
                 sink(line.decode("utf-8", "ignore"))
+
+
+def ticket_new():
+    """日志流（EventSource 无法带请求头）用的一次性票据，60 秒有效"""
+    now = time.time()
+    for k in [k for k, v in TICKETS.items() if v <= now]:
+        TICKETS.pop(k, None)
+    t = secrets.token_urlsafe(18)
+    TICKETS[t] = now + 60
+    return t
+
+
+def ticket_use(t):
+    exp = TICKETS.pop(str(t or ""), 0)
+    return exp > time.time()
