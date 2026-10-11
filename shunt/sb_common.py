@@ -1,6 +1,7 @@
 """sing-box 内核"""
 import os
 
+from .errlog import log_err
 from .base import CONF_DIR, PANEL_DIR
 from .data import load
 # 面板数据（订阅、节点、规则、DNS、设备）两个内核共用；切换内核时按各自格式生成独立的配置文件：
@@ -35,8 +36,8 @@ def core_conf_path(kind=None):
 def write_core_file(kind):
     try:
         wfile(CORE_FILE, kind + "\n")
-    except Exception:
-        pass
+    except OSError as e:
+        log_err("记录当前内核", e)
 
 
 def _link():
