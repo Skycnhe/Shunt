@@ -3,6 +3,7 @@ import copy, hashlib, json, os, re, secrets, threading, time, urllib.request, ur
 from collections import deque
 from urllib.parse import quote
 
+from .errlog import log_err
 from .base import AB_DIR, AB_STATS_FILE, CONF_DIR, UA
 from .data import load, read_json, write_json
 from .mihomo import build_config
@@ -525,8 +526,10 @@ class AdStats:
             try:
                 sb = active_core() == "singbox"  # sing-box 的规则命中只在 debug 级别日志里
                 core_stream("/logs?level=debug" if sb else "/logs?level=info", self.sink_sb if sb else self.sink, {})
-            except Exception:
+            except OSError:  # 内核未运行 / 断线，稍后重连
                 pass
+            except Exception as e:
+                log_err("广告拦截统计", e)
             time.sleep(3)
 
 
@@ -535,6 +538,5 @@ AD_STATS = None
 
 def _link():
     """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global udp_dns_query, log_err
+    global udp_dns_query
     from .live import udp_dns_query
-    from .access import log_err
