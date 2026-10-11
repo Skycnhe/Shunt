@@ -18,7 +18,7 @@ from .mihomo import bad_rule_policies, build_config, dns_cfg, safe_dev, validate
 from .core import core, core_json, refresh_after_sub, refresh_regions, reload_core
 from .sb_common import CORES, SB_BIN, SB_STATE, active_core, core_conf_path
 from .sb_subs import sb_update_subs
-from .sb_config import build_singbox, sb_fake_providers, sb_fake_rule_providers, sb_sync_assets, sb_version, write_active_config
+from .sb_config import build_singbox, sb_ab_loaded, sb_fake_providers, sb_fake_rule_providers, sb_sync_assets, sb_version, write_active_config
 from .sb_switch import core_switch_job, sb_arch, sb_remote_version, sb_update_job
 from .panel_update import self_rollback, self_update
 from .core_update import (
@@ -919,11 +919,15 @@ class H(BaseHTTPRequestHandler):
         meta = ab_meta()
         rep = adblock.AD_STATS.report() if adblock.AD_STATS else {"today": 0, "top": [], "lists": {}, "days": []}
         lists = [dict(l, **{k: v for k, v in (meta.get(l["id"]) or {}).items()}, hits=rep["lists"].get(l["id"], 0)) for l in d["adblock"]["lists"]]
-        prov = (core_json("/providers/rules") or {}).get("providers") or {}
+        if active_core(d) == "singbox":  # sing-box 的 clash_api 没有规则集信息：按已转换好的规则集文件统计
+            loaded = sb_ab_loaded(d) if d["adblock"].get("enabled") else {}
+        else:
+            prov = (core_json("/providers/rules") or {}).get("providers") or {}
+            loaded = {k: v.get("ruleCount") for k, v in prov.items() if k.startswith("ad-")}
         return self.send(200, {**{k: v for k, v in d["adblock"].items() if k != "lists"}, "lists": lists,
                                "presets": AB_PRESETS, "stats": rep, "updating": AB_STATE["updating"], "msg": AB_STATE["msg"],
                                "custom_hits": rep["lists"].get("custom", 0),
-                               "loaded": {k: v.get("ruleCount") for k, v in prov.items() if k.startswith("ad-")}})
+                               "loaded": loaded})
 
     @api_route("/api/adblock", "PUT")
     def api_adblock_put(self, m, p, b, q):
