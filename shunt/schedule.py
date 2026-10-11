@@ -3,6 +3,7 @@ import json, time
 from collections import deque
 from urllib.parse import quote
 
+from .errlog import log_err
 from .base import G_MANUAL, HC, SVC
 from .data import load
 from .core import core, core_json, refresh_regions, reload_core
@@ -27,8 +28,8 @@ def run_task(name):
         ok, bad = sb_update_subs(d=d)
         try:
             refresh_regions()
-        except Exception:
-            pass
+        except Exception as e:
+            log_err("定时任务：刷新地区分组", e)
         return not bad, "订阅已更新" if not bad else "以下订阅更新失败：" + "；".join(bad)
     if name == "geo_update" and active_core(d) == "singbox":
         bad = sb_sync_assets(d, force=True)
@@ -42,8 +43,8 @@ def run_task(name):
                 bad.append(s["name"])
         try:
             refresh_regions()
-        except Exception:
-            pass
+        except Exception as e:
+            log_err("定时任务：刷新地区分组", e)
         return not bad, "订阅已更新" if not bad else "以下订阅更新失败：" + "、".join(bad)
     if name == "core_restart":
         WD["manual_stop"] = False
