@@ -71,6 +71,14 @@ sing-box=$BV
 built=$(date -u +%F)
 V
 cat "$W/offline/VERSION"
+
+# 发布前自测：三个内核分别校验面板生成的全部场景配置，任何一项失败就不发布
+echo ">> 自测 mihomo + sing-box"
+MIHOMO_BIN="$W/offline/bin/mihomo" GEO_DIR="$W/offline/geo" SB_BIN="$W/offline/bin/sing-box" SB_RULES="$W/offline/sb-rules" \
+  sh "$W/selftest.sh" || { echo "!! 自测失败，停止打包"; exit 1; }
+echo ">> 自测 mihomo Smart"
+MIHOMO_BIN="$W/offline/bin/mihomo-smart" GEO_DIR="$W/offline/geo" SB_BIN=/nonexistent \
+  sh "$W/selftest.sh" || { echo "!! mihomo Smart 自测失败，停止打包"; exit 1; }
 NAME="shunt-offline-$M-alpine$REL.tar.gz"
 tar -C /tmp -czf "$OUT/$NAME" shunt-offline
 ls -lh "$OUT/$NAME"
