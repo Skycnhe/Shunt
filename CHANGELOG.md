@@ -1,5 +1,8 @@
 # 更新记录与详细说明
 
+## v7.5.4 本地 IP 改用 1.1.1.1 trace（绕过 fake-ip DNS 污染）
+- 发现 sing-box 的 fake-ip DNS 把 api.ipify.org 解析到 198.18.x.x，导致直连取 IP 也走代理。现优先用 https://1.1.1.1/cdn-cgi/trace（固定 IP 无需 DNS），绑定物理网卡绕过 TUN
+
 ## v7.5.3 修复 TUN 接管默认路由时找不到物理网卡
 - v7.5.2 只从默认路由找物理网卡，但 TUN 模式下默认路由本身就指向 tun0，导致回退到走代理。现 TUN 接管时退化为枚举第一个 UP 的物理网卡（排除 lo/tun/docker/bridge/veth）
 

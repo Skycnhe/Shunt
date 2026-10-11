@@ -51,9 +51,18 @@ def _is_tun(dev):
 
 
 def _fetch_direct_ip():
-    """直连取公网 IP：优先 curl --interface 绑定物理网卡（绕过 TUN），失败回退普通直连"""
+    """直连取公网 IP：
+    1. 优先 https://1.1.1.1/cdn-cgi/trace（固定 IP 无需 DNS，不受 fake-ip 污染），绑定物理网卡绕过 TUN
+    2. 回退 api.ipify.org（DNS 可能被 fake-ip 污染）
+    3. 回退普通直连"""
     dev = _phys_iface()
     if dev:
+        code, out = sh(f"curl -s --interface {shlex.quote(dev)} --max-time 10 https://1.1.1.1/cdn-cgi/trace",
+                       timeout=15)
+        if code == 0:
+            m = re.search(r"^ip=([0-9a-fA-F:.]+)", out, re.M)
+            if m:
+                return m.group(1)
         code, out = sh(f"curl -s --interface {shlex.quote(dev)} --max-time 10 {IP_ECHO}", timeout=15)
         out = out.strip()
         if code == 0 and re.fullmatch(r"[0-9a-fA-F:.]+", out):
