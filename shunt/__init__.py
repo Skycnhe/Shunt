@@ -43,6 +43,7 @@ MODULES = [
     "devices",
     "diag",
     "dnsleak",
+    "ipinfo",
     "migrate",
     "https",
     "access",
