@@ -1,6 +1,11 @@
 """基础常量与通用工具"""
 import shunt
+import ipaddress
 import os, threading, re
+import socket
+import urllib.error
+import urllib.request
+from urllib.parse import urlsplit
 
 BASE = os.path.dirname(os.path.abspath(shunt.SERVER_FILE))  # 面板文件所在目录（index.html、tproxy.sh 等）
 CONF_DIR = os.environ.get("MIHOMO_DIR", "/etc/mihomo")
@@ -133,3 +138,44 @@ SIDE_GROUPS = [G_YT, G_GG, G_TG, G_AI, G_NF, G_FINAL]
 BUILTIN_POLICIES = {"DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE"}
 HC = "https://www.gstatic.com/generate_204"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+
+
+def url_host_forbidden(url):
+    """SSRF 防护：下载类 URL 的目标主机必须解析到公网地址。
+
+    命中以下任一情况返回 True（禁止）：无主机名 / localhost / DNS 解析失败 /
+    解析出的任一 IP 不是公网地址（内网、回环、链路本地、保留、组播等）。
+    注意：检查与实际建连之间存在 DNS TOCTOU 窗口，这里只防住直接的内网目标。"""
+    try:
+        host = (urlsplit(url).hostname or "").strip().lower().rstrip(".")
+    except Exception:
+        return True
+    if not host or host == "localhost":
+        return True
+    try:
+        addrs = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except OSError:
+        return True
+    for _, _, _, _, sa in addrs:
+        try:
+            ip = ipaddress.ip_address(sa[0])
+        except ValueError:
+            return True
+        if not ip.is_global:
+            return True
+    return False
+
+
+def dl_check(url):
+    """下载入口统一校验：目标非公网地址时抛 IOError（调用方已有通用异常处理）"""
+    if url_host_forbidden(url):
+        raise IOError(f"目标地址非公网，已拦截（SSRF 防护）：{urlsplit(url).hostname}")
+
+
+class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """跟随重定向前校验目标主机，防止 302 跳到内网（urllib 默认无条件跟随）"""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if url_host_forbidden(newurl):
+            raise urllib.error.HTTPError(newurl, 403, "重定向目标非公网地址，已拦截（SSRF 防护）", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)

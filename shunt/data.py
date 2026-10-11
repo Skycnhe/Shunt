@@ -9,6 +9,52 @@ OLD_PW_KEYS = ("password", "pw_hash", "pw_default")
 
 
 def load():
+    _fix_legacy_perms()
+    key = _data_key()
+    if key is not None and _DATA_CACHE.get("key") == key and _DATA_CACHE.get("data") is not None:
+        return copy.deepcopy(_DATA_CACHE["data"])
+    d = _load_uncached()
+    _DATA_CACHE["key"] = key
+    _DATA_CACHE["data"] = copy.deepcopy(d)
+    return d
+
+
+def _data_key():
+    """data.json 的缓存键：路径 + mtime + 大小。save() 必改 mtime，写后缓存自动失效"""
+    try:
+        st = os.stat(DATA_FILE)
+        return (DATA_FILE, st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+_DATA_CACHE = {}
+
+
+def _fix_legacy_perms():
+    """一次性收紧旧版留下的 644 敏感文件（含订阅/节点密码）：只跑一次"""
+    global _PERMS_FIXED
+    if _PERMS_FIXED:
+        return
+    _PERMS_FIXED = True
+    paths = [HISTORY_FILE, os.path.join(PANEL_DIR, "sub-debug.txt")]
+    try:
+        paths += [os.path.join(PANEL_DIR, "sb_subs", n) for n in os.listdir(os.path.join(PANEL_DIR, "sb_subs"))
+                  if n.endswith(".json")]
+    except OSError:
+        pass
+    for p in paths:
+        try:
+            if os.path.isfile(p):
+                os.chmod(p, 0o600)
+        except OSError:
+            pass
+
+
+_PERMS_FIXED = False
+
+
+def _load_uncached():
     try:
         with open(DATA_FILE) as f:
             d = json.load(f)
@@ -219,10 +265,12 @@ def read_json(path, default):
         return default
 
 
-def write_json(path, obj):
+def write_json(path, obj, mode=0o600):
+    """原子写 JSON。默认 600：经此函数落盘的文件多含订阅/节点等敏感信息，路由器本地非 root 用户不应可读"""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path + ".tmp", "w") as f:
         json.dump(obj, f, ensure_ascii=False)
+    os.chmod(path + ".tmp", mode)
     os.replace(path + ".tmp", path)
 
 

@@ -1,12 +1,14 @@
 """订阅：sing-box 不能自己拉取订阅，由面板下载、解析成节点后写进配置"""
-import json, os, re, time, urllib.request, urllib.error
+import json, os, re, threading, time, urllib.request, urllib.error
 
-from .base import CONF_DIR, DEFAULT_EXCLUDE, PANEL_DIR
+from .base import CONF_DIR, DEFAULT_EXCLUDE, PANEL_DIR, dl_check
 from .data import load, read_json, safe, write_json
 from .links import b64d, parse_link, reserved_names
 from .groups import PROV, rx
 from .sb_common import SB_SUB_DIR, SB_UA
 from .sb_yaml import yaml_lite
+
+_DEBUG_LOCK = threading.Lock()  # sub-debug.txt 并发写保护
 def sub_cache_path(name):
     return os.path.join(SB_SUB_DIR, safe(name) + ".json")
 
@@ -147,6 +149,7 @@ def parse_sub_text(text, fetch=None, depth=0):
 
 def _sub_get(url, ua):
     """下载订阅里嵌套的 proxy-providers 地址：先代理后直连"""
+    dl_check(url)  # SSRF 防护：禁止内网目标
     last = None
     for use_proxy in ((True, False) if core_alive() else (False,)):
         req = urllib.request.Request(url, headers={"User-Agent": ua})
@@ -160,6 +163,7 @@ def _sub_get(url, ua):
 
 def sb_fetch_sub(s, gh=""):
     """下载并解析一个订阅，写入缓存；返回 (节点数, 消息)"""
+    dl_check(s["url"])  # SSRF 防护：禁止内网目标
     last = ""
     for ua in SB_UA:
         try:
@@ -179,9 +183,12 @@ def sb_fetch_sub(s, gh=""):
             nodes, errs = parse_sub_text(data.decode("utf-8", "ignore"), lambda u, _ua=ua: _sub_get(u, _ua))
             if not nodes:
                 last = "没有解析出节点" + ("：" + errs[0] if errs else "")
-                try:  # 留一份原文方便排查（只保留最近一次）
-                    with open(os.path.join(PANEL_DIR, "sub-debug.txt"), "wb") as f:
-                        f.write(data[:2 << 20])
+                try:  # 留一份原文方便排查（只保留最近一次）；原文含节点密码，600 权限
+                    with _DEBUG_LOCK:
+                        dbg = os.path.join(PANEL_DIR, "sub-debug.txt")
+                        with open(dbg, "wb") as f:
+                            f.write(data[:2 << 20])
+                        os.chmod(dbg, 0o600)
                 except OSError:
                     pass
                 # mihomo 已下载过这个订阅时，用它的缓存兜底
@@ -233,17 +240,27 @@ def sb_sub_outbounds(d):
 
 
 def sb_update_subs(names=None, d=None):
+    """并发更新订阅：每个订阅一个线程（单个订阅仍串行走 UA/代理/直连回退），整体耗时取决于最慢的一个"""
     d = d or load()
     gh = d.get("gh_proxy") or ""
+    subs = [s for s in d["subs"] if not names or s["name"] in names]
     ok, bad = [], []
-    for s in d["subs"]:
-        if names and s["name"] not in names:
-            continue
+    res_lock = threading.Lock()
+
+    def one(s):
         try:
             n, msg = sb_fetch_sub(s, gh)
-            ok.append(f"{s['name']}：{msg}")
+            with res_lock:
+                ok.append(f"{s['name']}：{msg}")
         except Exception as e:
-            bad.append(f"{s['name']}：{e}")
+            with res_lock:
+                bad.append(f"{s['name']}：{e}")
+
+    ths = [threading.Thread(target=one, args=(s,)) for s in subs]
+    for t in ths:
+        t.start()
+    for t in ths:
+        t.join(180)
     PROV.update(t=0, data=None)
     return ok, bad
 

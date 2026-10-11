@@ -3,7 +3,7 @@ import http.client, json, os, re, ssl, subprocess, threading, time, urllib.reque
 from collections import deque
 from urllib.parse import urlsplit
 
-from .base import MIXED, PANEL_DIR, TESTS, UA
+from .base import MIXED, PANEL_DIR, TESTS, UA, SafeRedirectHandler
 from .data import load, update
 from .mihomo import build_config
 from .sb_common import active_core
@@ -435,7 +435,8 @@ def sh(cmd, timeout=60):
 
 def proxy_opener(proxy=True):
     hs = [urllib.request.ProxyHandler({"http": f"http://127.0.0.1:{MIXED}", "https": f"http://127.0.0.1:{MIXED}"} if proxy else {})]
-    return urllib.request.build_opener(*hs)
+    # SafeRedirectHandler 替换默认的重定向处理器：跟随 302 前校验目标为公网地址（SSRF 防护）
+    return urllib.request.build_opener(*hs, SafeRedirectHandler())
 
 
 def site_rtt(url, timeout=6):

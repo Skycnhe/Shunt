@@ -4,7 +4,7 @@ from collections import deque
 from urllib.parse import quote
 
 from .errlog import log_err
-from .base import AB_DIR, AB_STATS_FILE, CONF_DIR, UA
+from .base import AB_DIR, AB_STATS_FILE, CONF_DIR, UA, dl_check
 from .data import load, read_json, write_json
 from .mihomo import build_config
 from .core import core, reload_core
@@ -145,6 +145,7 @@ def ab_meta():
 
 def download(url, timeout=60, limit=40 << 20):
     """先经代理（mixed 端口）下载，失败再直连"""
+    dl_check(url)  # SSRF 防护：禁止内网目标
     err = ""
     for use_proxy in (True, False):
         try:
