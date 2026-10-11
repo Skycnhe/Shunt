@@ -791,7 +791,7 @@ async function renderLook(){renderSkins();bgApply();bgSync()}
 bgApply();
 
 async function api(path,method='GET',body){
-  const r=await fetch(path,{method,headers:{'X-Token':TOKEN,'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
+  const r=await fetch(path,{method,headers:{'X-Shunt':'1','X-Token':TOKEN,'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
   if(r.status===401&&path!=='/api/login'){showLogin();throw new Error('未登录')}
   const t=await r.text();let j;try{j=t?JSON.parse(t):{}}catch{j={message:t}}
   if(!r.ok)throw new Error(j.message||('HTTP '+r.status));return j}
