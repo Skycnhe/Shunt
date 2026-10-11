@@ -84,7 +84,12 @@ def setvar(name, value):
 '''
 _SRC['shunt.base'] = '''"""基础常量与通用工具"""
 import shunt
+import ipaddress
 import os, threading, re
+import socket
+import urllib.error
+import urllib.request
+from urllib.parse import urlsplit
 
 BASE = os.path.dirname(os.path.abspath(shunt.SERVER_FILE))  # 面板文件所在目录（index.html、tproxy.sh 等）
 CONF_DIR = os.environ.get("MIHOMO_DIR", "/etc/mihomo")
@@ -217,6 +222,47 @@ SIDE_GROUPS = [G_YT, G_GG, G_TG, G_AI, G_NF, G_FINAL]
 BUILTIN_POLICIES = {"DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE"}
 HC = "https://www.gstatic.com/generate_204"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+
+
+def url_host_forbidden(url):
+    """SSRF 防护：下载类 URL 的目标主机必须解析到公网地址。
+
+    命中以下任一情况返回 True（禁止）：无主机名 / localhost / DNS 解析失败 /
+    解析出的任一 IP 不是公网地址（内网、回环、链路本地、保留、组播等）。
+    注意：检查与实际建连之间存在 DNS TOCTOU 窗口，这里只防住直接的内网目标。"""
+    try:
+        host = (urlsplit(url).hostname or "").strip().lower().rstrip(".")
+    except Exception:
+        return True
+    if not host or host == "localhost":
+        return True
+    try:
+        addrs = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except OSError:
+        return True
+    for _, _, _, _, sa in addrs:
+        try:
+            ip = ipaddress.ip_address(sa[0])
+        except ValueError:
+            return True
+        if not ip.is_global:
+            return True
+    return False
+
+
+def dl_check(url):
+    """下载入口统一校验：目标非公网地址时抛 IOError（调用方已有通用异常处理）"""
+    if url_host_forbidden(url):
+        raise IOError(f"目标地址非公网，已拦截（SSRF 防护）：{urlsplit(url).hostname}")
+
+
+class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """跟随重定向前校验目标主机，防止 302 跳到内网（urllib 默认无条件跟随）"""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if url_host_forbidden(newurl):
+            raise urllib.error.HTTPError(newurl, 403, "重定向目标非公网地址，已拦截（SSRF 防护）", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 '''
 _SRC['shunt.errlog'] = '''"""错误记录：原本被吞掉的异常记到面板日志和「诊断」页"""
 import time
@@ -254,6 +300,52 @@ OLD_PW_KEYS = ("password", "pw_hash", "pw_default")
 
 
 def load():
+    _fix_legacy_perms()
+    key = _data_key()
+    if key is not None and _DATA_CACHE.get("key") == key and _DATA_CACHE.get("data") is not None:
+        return copy.deepcopy(_DATA_CACHE["data"])
+    d = _load_uncached()
+    _DATA_CACHE["key"] = key
+    _DATA_CACHE["data"] = copy.deepcopy(d)
+    return d
+
+
+def _data_key():
+    """data.json 的缓存键：路径 + mtime + 大小。save() 必改 mtime，写后缓存自动失效"""
+    try:
+        st = os.stat(DATA_FILE)
+        return (DATA_FILE, st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+_DATA_CACHE = {}
+
+
+def _fix_legacy_perms():
+    """一次性收紧旧版留下的 644 敏感文件（含订阅/节点密码）：只跑一次"""
+    global _PERMS_FIXED
+    if _PERMS_FIXED:
+        return
+    _PERMS_FIXED = True
+    paths = [HISTORY_FILE, os.path.join(PANEL_DIR, "sub-debug.txt")]
+    try:
+        paths += [os.path.join(PANEL_DIR, "sb_subs", n) for n in os.listdir(os.path.join(PANEL_DIR, "sb_subs"))
+                  if n.endswith(".json")]
+    except OSError:
+        pass
+    for p in paths:
+        try:
+            if os.path.isfile(p):
+                os.chmod(p, 0o600)
+        except OSError:
+            pass
+
+
+_PERMS_FIXED = False
+
+
+def _load_uncached():
     try:
         with open(DATA_FILE) as f:
             d = json.load(f)
@@ -464,10 +556,12 @@ def read_json(path, default):
         return default
 
 
-def write_json(path, obj):
+def write_json(path, obj, mode=0o600):
+    """原子写 JSON。默认 600：经此函数落盘的文件多含订阅/节点等敏感信息，路由器本地非 root 用户不应可读"""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path + ".tmp", "w") as f:
         json.dump(obj, f, ensure_ascii=False)
+    os.chmod(path + ".tmp", mode)
     os.replace(path + ".tmp", path)
 
 
@@ -1802,14 +1896,16 @@ def yaml_lite(text):
     return block(0, lines[0][0])[0]
 '''
 _SRC['shunt.sb_subs'] = '''"""订阅：sing-box 不能自己拉取订阅，由面板下载、解析成节点后写进配置"""
-import json, os, re, time, urllib.request, urllib.error
+import json, os, re, threading, time, urllib.request, urllib.error
 
-from .base import CONF_DIR, DEFAULT_EXCLUDE, PANEL_DIR
+from .base import CONF_DIR, DEFAULT_EXCLUDE, PANEL_DIR, dl_check
 from .data import load, read_json, safe, write_json
 from .links import b64d, parse_link, reserved_names
 from .groups import PROV, rx
 from .sb_common import SB_SUB_DIR, SB_UA
 from .sb_yaml import yaml_lite
+
+_DEBUG_LOCK = threading.Lock()  # sub-debug.txt 并发写保护
 def sub_cache_path(name):
     return os.path.join(SB_SUB_DIR, safe(name) + ".json")
 
@@ -1950,6 +2046,7 @@ def parse_sub_text(text, fetch=None, depth=0):
 
 def _sub_get(url, ua):
     """下载订阅里嵌套的 proxy-providers 地址：先代理后直连"""
+    dl_check(url)  # SSRF 防护：禁止内网目标
     last = None
     for use_proxy in ((True, False) if core_alive() else (False,)):
         req = urllib.request.Request(url, headers={"User-Agent": ua})
@@ -1963,6 +2060,7 @@ def _sub_get(url, ua):
 
 def sb_fetch_sub(s, gh=""):
     """下载并解析一个订阅，写入缓存；返回 (节点数, 消息)"""
+    dl_check(s["url"])  # SSRF 防护：禁止内网目标
     last = ""
     for ua in SB_UA:
         try:
@@ -1982,9 +2080,12 @@ def sb_fetch_sub(s, gh=""):
             nodes, errs = parse_sub_text(data.decode("utf-8", "ignore"), lambda u, _ua=ua: _sub_get(u, _ua))
             if not nodes:
                 last = "没有解析出节点" + ("：" + errs[0] if errs else "")
-                try:  # 留一份原文方便排查（只保留最近一次）
-                    with open(os.path.join(PANEL_DIR, "sub-debug.txt"), "wb") as f:
-                        f.write(data[:2 << 20])
+                try:  # 留一份原文方便排查（只保留最近一次）；原文含节点密码，600 权限
+                    with _DEBUG_LOCK:
+                        dbg = os.path.join(PANEL_DIR, "sub-debug.txt")
+                        with open(dbg, "wb") as f:
+                            f.write(data[:2 << 20])
+                        os.chmod(dbg, 0o600)
                 except OSError:
                     pass
                 # mihomo 已下载过这个订阅时，用它的缓存兜底
@@ -2036,17 +2137,27 @@ def sb_sub_outbounds(d):
 
 
 def sb_update_subs(names=None, d=None):
+    """并发更新订阅：每个订阅一个线程（单个订阅仍串行走 UA/代理/直连回退），整体耗时取决于最慢的一个"""
     d = d or load()
     gh = d.get("gh_proxy") or ""
+    subs = [s for s in d["subs"] if not names or s["name"] in names]
     ok, bad = [], []
-    for s in d["subs"]:
-        if names and s["name"] not in names:
-            continue
+    res_lock = threading.Lock()
+
+    def one(s):
         try:
             n, msg = sb_fetch_sub(s, gh)
-            ok.append(f"{s['name']}：{msg}")
+            with res_lock:
+                ok.append(f"{s['name']}：{msg}")
         except Exception as e:
-            bad.append(f"{s['name']}：{e}")
+            with res_lock:
+                bad.append(f"{s['name']}：{e}")
+
+    ths = [threading.Thread(target=one, args=(s,)) for s in subs]
+    for t in ths:
+        t.start()
+    for t in ths:
+        t.join(180)
     PROV.update(t=0, data=None)
     return ok, bad
 
@@ -2538,7 +2649,8 @@ _SRC['shunt.sb_config'] = '''"""生成 sing-box 配置"""
 import ipaddress, json, os, re, signal, time, urllib.request, urllib.error
 
 from .base import (
-    AB_DIR, BUILTIN_POLICIES, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, SVC, TUN_DEFAULT, TUN_STACKS, UA
+    AB_DIR, BUILTIN_POLICIES, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, SVC, TUN_DEFAULT, TUN_STACKS, UA,
+    dl_check,
 )
 from .data import auto_name, lb_dropped_names, lb_names, lb_old_name, load, safe, write_json
 from .groups import PROV, gcfg, rx
@@ -2863,6 +2975,11 @@ def sb_sync_assets(d, force=False, need=None):
             urls = ([gh + "/" + rsd["url"]] if gh and "github" in rsd["url"] else []) + [rsd["url"]]
             data, err = None, ""
             for u in urls:
+                try:
+                    dl_check(u)  # SSRF 防护：禁止内网目标
+                except IOError as e:
+                    err = str(e)[:120]
+                    continue
                 for use_proxy in ((True, False) if core_alive() else (False,)):
                     try:
                         with proxy_opener(use_proxy).open(urllib.request.Request(u, headers={"User-Agent": UA}), timeout=30) as r:
@@ -3238,7 +3355,7 @@ _SRC['shunt.panel_update'] = '''"""面板在线更新"""
 import hashlib, json, os, re, shutil, time, urllib.request, urllib.error
 
 from .errlog import log_err
-from .base import BASE, PANEL_VERSION, UA
+from .base import BASE, PANEL_VERSION, UA, dl_check
 PANEL_RAW = os.environ.get("PANEL_RAW", "https://raw.githubusercontent.com/Skycnhe/Shunt/Hk001")
 UPD_FILES = ["server.py", "index.html", "tproxy.sh", "selftest.sh", "init.d/mihomo", "init.d/mihomo-panel"]
 UPD_STATE = {"busy": False}
@@ -3310,6 +3427,7 @@ def fetch_raw(f, gh, commit=None, sha=None):
     err = ""
     for u, use_proxy in tries:
         try:
+            dl_check(u)  # SSRF 防护：禁止内网目标
             req = urllib.request.Request(u + ("&" if "?" in u else "?") + "t=" + str(int(time.time())), headers={"User-Agent": UA})
             with proxy_opener(use_proxy).open(req, timeout=20) as r:
                 data = r.read(4 << 20)
@@ -3421,7 +3539,7 @@ from collections import deque
 from urllib.parse import quote
 
 from .errlog import log_err
-from .base import CONF_DIR, MIHOMO_LOG, SVC, UA
+from .base import CONF_DIR, MIHOMO_LOG, SVC, UA, dl_check
 from .data import load
 from .mihomo import mh_bin, write_config
 from .core import reload_core
@@ -3465,6 +3583,7 @@ def open_url(url, gh, timeout=20):
     err = ""
     for u, use_proxy in tries:
         try:
+            dl_check(u)  # SSRF 防护：禁止内网目标
             req = urllib.request.Request(u, headers={"User-Agent": UA})
             return proxy_opener(use_proxy and core_alive()).open(req, timeout=timeout)
         except Exception as e:
@@ -3731,7 +3850,7 @@ import http.client, json, os, re, ssl, subprocess, threading, time, urllib.reque
 from collections import deque
 from urllib.parse import urlsplit
 
-from .base import MIXED, PANEL_DIR, TESTS, UA
+from .base import MIXED, PANEL_DIR, TESTS, UA, SafeRedirectHandler
 from .data import load, update
 from .mihomo import build_config
 from .sb_common import active_core
@@ -4163,7 +4282,8 @@ def sh(cmd, timeout=60):
 
 def proxy_opener(proxy=True):
     hs = [urllib.request.ProxyHandler({"http": f"http://127.0.0.1:{MIXED}", "https": f"http://127.0.0.1:{MIXED}"} if proxy else {})]
-    return urllib.request.build_opener(*hs)
+    # SafeRedirectHandler 替换默认的重定向处理器：跟随 302 前校验目标为公网地址（SSRF 防护）
+    return urllib.request.build_opener(*hs, SafeRedirectHandler())
 
 
 def site_rtt(url, timeout=6):
@@ -4396,7 +4516,7 @@ import base64, json, os, re, threading, time, urllib.request, urllib.error
 from urllib.parse import quote
 
 from .errlog import log_err
-from .base import G_MANUAL, G_SEL, HC, NOTIFY_FILE, PANEL_DIR, UA, WD_INTERVAL
+from .base import G_MANUAL, G_SEL, HC, NOTIFY_FILE, PANEL_DIR, UA, WD_INTERVAL, dl_check
 from .data import load, read_json, write_json
 from .core import core, core_json, refresh_regions
 from .sb_common import active_core
@@ -4538,6 +4658,10 @@ def bg_fetch(url):
     url = str(url or "").strip()
     if not re.match(r"https?://\\S+$", url):
         return False, "请输入 http(s) 开头的图片链接"
+    try:
+        dl_check(url)  # SSRF 防护：禁止内网目标
+    except IOError as e:
+        return False, str(e)
     raw, err = None, ""
     for proxy in (True, False):
         # 每次新建 Request：走代理时 urllib 会把代理地址写进 Request，复用会让直连也连到代理端口
@@ -5115,7 +5239,7 @@ from collections import deque
 from urllib.parse import quote
 
 from .errlog import log_err
-from .base import AB_DIR, AB_STATS_FILE, CONF_DIR, UA
+from .base import AB_DIR, AB_STATS_FILE, CONF_DIR, UA, dl_check
 from .data import load, read_json, write_json
 from .mihomo import build_config
 from .core import core, reload_core
@@ -5256,6 +5380,7 @@ def ab_meta():
 
 def download(url, timeout=60, limit=40 << 20):
     """先经代理（mixed 端口）下载，失败再直连"""
+    dl_check(url)  # SSRF 防护：禁止内网目标
     err = ""
     for use_proxy in (True, False):
         try:
@@ -6704,6 +6829,9 @@ from .update_guard import group_meta, rename_policy
 from .static import MANIFEST, STATIC_TYPES, static_file
 ROUTES = {}  # (方法, 路径) → H 的处理函数；api() 先处理前缀 / 条件路由，再查这张表
 
+# GET 也要求 X-Shunt 头的机密接口：返回内容含订阅 URL / 节点密码 / TG token 等机密，局域网零凭证可拖库
+SENSITIVE_GET = ("/api/backup", "/api/config", "/api/history")
+
 
 def api_route(path, *methods):
     def deco(fn):
@@ -6810,6 +6938,10 @@ class H(BaseHTTPRequestHandler):
                 return "跨站请求已拒绝"
             if "X-Shunt" not in self.headers and "X-Token" not in self.headers:  # X-Token：兼容旧版脚本
                 return "缺少 X-Shunt 请求头，跨站请求已拒绝（脚本调用接口请加上 -H 'X-Shunt: 1'）"
+        if m in ("GET", "HEAD") and p in SENSITIVE_GET:
+            # 机密类 GET：/api/backup、/api/config（含 ?download）、/api/history 返回订阅/节点密码等机密，同样要求请求头
+            if "X-Shunt" not in self.headers and "X-Token" not in self.headers:
+                return "缺少 X-Shunt 请求头，机密接口拒绝访问（脚本调用请加上 -H 'X-Shunt: 1'）"
         return ""
 
     def route(self, m):

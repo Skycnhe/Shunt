@@ -1356,7 +1356,7 @@ async function viewConfig(){const box=$('#cfg-box');if(!box.classList.contains('
 function findCfg(){const q=$('#cfg-q').value.trim().toLowerCase();const el=$('#cfg-view');
   if(!q){el.textContent=CFG_TXT;return}const ls=CFG_TXT.split('\n');const hit=ls.map((l,i)=>[i,l]).filter(([,l])=>l.toLowerCase().includes(q));
   el.textContent=hit.length?hit.slice(0,400).map(([i,l])=>String(i+1).padStart(5)+'  '+l).join('\n'):'无匹配'}
-async function downloadConfig(){try{const r=await fetch('/api/config?download=1');if(!r.ok)throw new Error('HTTP '+r.status);
+async function downloadConfig(){try{const r=await fetch('/api/config?download=1',{headers:{'X-Shunt':'1'}});if(!r.ok)throw new Error('HTTP '+r.status);
   const a=document.createElement('a');a.href=URL.createObjectURL(await r.blob());a.download=STATE.core==='singbox'?'config.json':'config.yaml';a.click()}catch(e){toast(e.message)}}
 async function saveGhProxy(){const v=$('#gh-proxy').value.trim();if(v!==(STATE.gh_proxy||'')){await api('/api/settings','PUT',{gh_proxy:v});await loadState()}}
 async function checkUpdate(){const b=$('#upd-chk');b.disabled=true;$('#upd-r').innerHTML='<span class="mut">正在检查…</span>';
