@@ -89,6 +89,12 @@ jobs:
             echo '```'
             echo
             echo "已安装的设备用离线包升级内核：\`sh shunt-offline/install.sh --update-core\`"
+            if [ -f ../CHANGELOG.md ]; then  # 附上本版更新记录：以后每次发版自动同步
+              echo
+              echo "**本版更新**"
+              echo
+              awk -v v="## v$PANEL " 'index($0, v)==1{p=1; next} /^## v/{p=0} p' ../CHANGELOG.md
+            fi
           } > notes.md
           if gh release view offline >/dev/null 2>&1; then
             gh release edit offline --title "离线安装包 · 面板 v$PANEL" --notes-file notes.md
