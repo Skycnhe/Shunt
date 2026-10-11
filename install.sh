@@ -70,13 +70,37 @@ fi
 for c in curl python3 nft ip gunzip; do command -v $c >/dev/null || { echo "!! 缺少 $c，安装中止"; exit 1; }; done
 update-ca-certificates >/dev/null 2>&1 || true
 
-# 通过 wget | sh 运行时本地没有项目文件：从 GitHub 拉取
+# 通过 wget | sh 运行时本地没有项目文件：从 GitHub 拉取（文件清单见仓库的 update-files.txt）
 if [ ! -f "$SRC/server.py" ]; then
-  SRC=$(mktemp -d); mkdir -p "$SRC/init.d"
-  RAW="${GH}https://raw.githubusercontent.com/$REPO/$BRANCH"
-  echo ">> 下载面板文件 ($REPO@$BRANCH)"
-  for f in server.py index.html tproxy.sh selftest.sh init.d/mihomo init.d/mihomo-panel; do
+  SRC=$(mktemp -d)
+  # 能连上 GitHub API 时锁定到具体提交，并按 Git blob SHA1 校验每个文件；连不上时只能不校验
+  MAN="$SRC/.manifest"
+  REF=$(python3 - "$REPO" "$BRANCH" "$MAN" <<'PY' 2>/dev/null
+import json, sys, urllib.request
+repo, br, out = sys.argv[1:4]
+get = lambda u: json.load(urllib.request.urlopen(urllib.request.Request(u, headers={"User-Agent": "shunt-install"}), timeout=15))
+c = get(f"https://api.github.com/repos/{repo}/commits/{br}")
+t = get(f"https://api.github.com/repos/{repo}/git/trees/{c['commit']['tree']['sha']}?recursive=1")
+open(out, "w").write("".join(f"{x['sha']} {x['path']}\n" for x in t["tree"] if x["type"] == "blob"))
+print(c["sha"])
+PY
+)
+  [ -n "$REF" ] || { REF="$BRANCH"; rm -f "$MAN"; echo "!! 无法访问 GitHub API，下载的文件不做完整性校验"; }
+  RAW="${GH}https://raw.githubusercontent.com/$REPO/$REF"
+  echo ">> 下载面板文件 ($REPO@$REF)"
+  FILES="server.py index.html tproxy.sh selftest.sh init.d/mihomo init.d/mihomo-panel"
+  if curl -fsSL --retry 3 -o "$SRC/update-files.txt" "$RAW/update-files.txt"; then
+    L=$(sed 's/#.*//' "$SRC/update-files.txt" | tr -s ' \t\r' '\n' | grep -E '^[A-Za-z0-9_][A-Za-z0-9_./-]*$' | grep -v '\.\.' | tr '\n' ' ')
+    [ -n "$L" ] && FILES="update-files.txt $L"
+  fi
+  for f in $FILES; do
+    mkdir -p "$SRC/$(dirname "$f")"
     curl -fsSL --retry 3 -o "$SRC/$f" "$RAW/$f" || { echo "!! 下载 $f 失败（国内请加 --cn 或设置 GH_PROXY）"; exit 1; }
+    if [ -f "$MAN" ]; then
+      want=$(awk -v f="$f" '$2==f{print $1}' "$MAN")
+      got=$({ printf 'blob %d\000' "$(wc -c < "$SRC/$f")"; cat "$SRC/$f"; } | sha1sum | cut -d' ' -f1)
+      [ -n "$want" ] && [ "$want" = "$got" ] || { echo "!! $f 校验失败（可能被篡改或下载不完整），安装中止"; exit 1; }
+    fi
   done
 fi
 
