@@ -3,9 +3,10 @@ import json, socket, threading, time, urllib.request, urllib.error
 from collections import deque
 from urllib.parse import quote
 
-from .base import CORE_UPD, G_MANUAL, HC, NOTIFY_FILE, SVC, TPROXY_SH
+from .base import CORE_UPD, G_MANUAL, HC, MASS_TEST, NOTIFY_FILE, SVC, TPROXY_SH
 from .data import load, read_json, write_json
 from .corehttp import core, core_json
+from .sb_common import CORES, active_core
 from .sysopt import proxy_opener, sh
 def tg_send(text, d=None):
     d = d or load()
@@ -58,10 +59,13 @@ def watchdog_tick():
     if not d.get("watchdog", True):
         WD["status"] = "off"
         return
+    if MASS_TEST["n"] > 0:  # 全节点测速进行中：核心高负载，/version 可能超时，暂停故障判定
+        return
     redirecting = d["proxy_mode"] != "off"  # TProxy 或 TUN（TUN 模式下 tproxy.sh 仍负责 DNS 重定向）
+    cname = CORES.get(active_core(d), "mihomo")
     if core_alive():
         if WD["status"] in ("restarting", "direct"):
-            msg = "mihomo 核心已恢复"
+            msg = f"{cname} 核心已恢复"
             if WD["tp_off"] and redirecting:
                 code, out = sh(TPROXY_SH + " apply")
                 msg += "，透明代理已重新开启" if code == 0 else "，但重新开启透明代理失败：" + out[-120:]
@@ -75,7 +79,7 @@ def watchdog_tick():
     WD["fails"] += 1
     if WD["fails"] <= 2:
         WD["status"] = "restarting"
-        wd_event(f"mihomo 核心无响应，第 {WD['fails']} 次自动重启", push=WD["fails"] == 1)
+        wd_event(f"{cname} 核心无响应，第 {WD['fails']} 次自动重启", push=WD["fails"] == 1)
         sh(SVC + " restart", timeout=60)
         return
     if WD["status"] != "direct":
@@ -83,7 +87,7 @@ def watchdog_tick():
         if redirecting:
             sh(TPROXY_SH + " stop")  # TUN 模式下核心退出时 TUN 设备与路由随之消失，这里再撤掉 DNS 重定向
             WD["tp_off"] = True
-        wd_event("mihomo 核心重启 2 次仍无响应，已关闭透明代理，局域网暂时直连上网")
+        wd_event(f"{cname} 核心重启 2 次仍无响应，已关闭透明代理，局域网暂时直连上网")
     elif WD["fails"] % 10 == 0:  # 直连状态下每 5 分钟再尝试拉起一次
         sh(SVC + " restart", timeout=60)
         if redirecting and core_alive():

@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.4.6"
+PANEL_VERSION = "7.4.7"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -104,6 +104,7 @@ DATA_FILE = os.environ.get("PANEL_DATA", "/etc/mihomo-panel/data.json")
 LGBM_URL = os.environ.get("SMART_REPO", "https://github.com/vernesong/mihomo/releases") + "/download/LightGBM-Model/Model.bin"
 UPD_STATE = {"busy": False}  # 面板在线更新忙标志：panel_update 与 core_update 共用，避免循环导入
 CORE_UPD = {"busy": False, "stage": "", "pct": 0, "ok": None, "message": "", "log": deque(maxlen=30), "t": 0}  # 内核更新状态：core_update 与 notify 共用
+MASS_TEST = {"n": 0}  # 进行中的全节点测速（/group/*/delay）计数：corehttp 置位，notify 看门狗据此暂停故障判定，避免高负载误判
 
 
 def local_file(f):
@@ -229,7 +230,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.4.6"
+PANEL_VERSION = "7.4.7"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -1748,7 +1749,7 @@ import os
 import urllib.request
 import urllib.error
 
-from .base import CTRL, DATA_FILE
+from .base import CTRL, DATA_FILE, MASS_TEST
 from .data import load
 
 DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # 访问本机控制器绝不走系统代理
@@ -1773,6 +1774,9 @@ def core(method, path, body=None, timeout=10):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(CTRL + path, data=data, method=method,
                                  headers={"Authorization": "Bearer " + ctrl_secret(), "Content-Type": "application/json"})
+    mass = method == "GET" and "/group/" in path and "/delay" in path  # 全节点测速：核心高负载，看门狗暂停判定
+    if mass:
+        MASS_TEST["n"] += 1
     try:
         with DIRECT_OPENER.open(req, timeout=timeout) as r:
             return r.status, r.read()
@@ -1780,6 +1784,9 @@ def core(method, path, body=None, timeout=10):
         return e.code, e.read()
     except Exception as e:
         return 502, json.dumps({"message": "mihomo 未运行或无法连接: %s" % e}).encode()
+    finally:
+        if mass:
+            MASS_TEST["n"] -= 1
 
 
 def core_json(path, timeout=10):
@@ -4538,9 +4545,10 @@ import json, socket, threading, time, urllib.request, urllib.error
 from collections import deque
 from urllib.parse import quote
 
-from .base import CORE_UPD, G_MANUAL, HC, NOTIFY_FILE, SVC, TPROXY_SH
+from .base import CORE_UPD, G_MANUAL, HC, MASS_TEST, NOTIFY_FILE, SVC, TPROXY_SH
 from .data import load, read_json, write_json
 from .corehttp import core, core_json
+from .sb_common import CORES, active_core
 from .sysopt import proxy_opener, sh
 def tg_send(text, d=None):
     d = d or load()
@@ -4593,10 +4601,13 @@ def watchdog_tick():
     if not d.get("watchdog", True):
         WD["status"] = "off"
         return
+    if MASS_TEST["n"] > 0:  # 全节点测速进行中：核心高负载，/version 可能超时，暂停故障判定
+        return
     redirecting = d["proxy_mode"] != "off"  # TProxy 或 TUN（TUN 模式下 tproxy.sh 仍负责 DNS 重定向）
+    cname = CORES.get(active_core(d), "mihomo")
     if core_alive():
         if WD["status"] in ("restarting", "direct"):
-            msg = "mihomo 核心已恢复"
+            msg = f"{cname} 核心已恢复"
             if WD["tp_off"] and redirecting:
                 code, out = sh(TPROXY_SH + " apply")
                 msg += "，透明代理已重新开启" if code == 0 else "，但重新开启透明代理失败：" + out[-120:]
@@ -4610,7 +4621,7 @@ def watchdog_tick():
     WD["fails"] += 1
     if WD["fails"] <= 2:
         WD["status"] = "restarting"
-        wd_event(f"mihomo 核心无响应，第 {WD['fails']} 次自动重启", push=WD["fails"] == 1)
+        wd_event(f"{cname} 核心无响应，第 {WD['fails']} 次自动重启", push=WD["fails"] == 1)
         sh(SVC + " restart", timeout=60)
         return
     if WD["status"] != "direct":
@@ -4618,7 +4629,7 @@ def watchdog_tick():
         if redirecting:
             sh(TPROXY_SH + " stop")  # TUN 模式下核心退出时 TUN 设备与路由随之消失，这里再撤掉 DNS 重定向
             WD["tp_off"] = True
-        wd_event("mihomo 核心重启 2 次仍无响应，已关闭透明代理，局域网暂时直连上网")
+        wd_event(f"{cname} 核心重启 2 次仍无响应，已关闭透明代理，局域网暂时直连上网")
     elif WD["fails"] % 10 == 0:  # 直连状态下每 5 分钟再尝试拉起一次
         sh(SVC + " restart", timeout=60)
         if redirecting and core_alive():

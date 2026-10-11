@@ -1,5 +1,9 @@
 # 更新记录与详细说明
 
+## v7.4.7 看门狗误判修复
+- 修复看门狗在全节点测速期间误判核心"无响应"：90+ 节点并发测速会把小路由打满，`/version` 5 秒超时触发重启，越帮越忙。现在 `core()` 检测到 `/group/*/delay`（全节点测速）时自动置位，测速结束清除；看门狗在测速进行中暂停故障判定
+- 看门狗通知文案不再写死"mihomo 核心"，改用实际运行的核心名（如 sing-box 用户会收到"sing-box 核心无响应"）
+
 ## v7.4.6 架构重构：消除循环导入、双内核去重
 - 消除 `_link()` 延迟绑定：22 个模块的大循环拆成无环导入。新建 `corehttp.py`（核心 HTTP 交互）、`ruleutil.py`（规则工具）两个叶子模块；`config_view`→webapi、`validate_groups`→webapi、`gh_api`→core_update、`sb_provider_nodes` 相关→groups；常量（`LGBM_URL`、`UPD_STATE` 等）下沉到 base。仅剩 core↔latency 一处有意的最小延迟绑定（真互递归）
 - 双内核翻译层去重：抽出 `geo_srs_entry`、`tun_params` 等共享函数，`_mh_domain`/`_rs_tag` 下沉到 ruleutil，删掉重复实现
