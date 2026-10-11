@@ -86,6 +86,12 @@ rc-service mihomo-panel restart    # 重启面板
 
 8080 面板 · 7890 HTTP/SOCKS 代理 · 7893 TProxy · 1053 DNS · 9090 控制器（仅本机）
 
+## 开发
+
+- 后端源码在 `shunt/`（Python 包），前端源码在 `web/`；设备上部署的单文件 `server.py`、`index.html` 由 `python3 tools/build.py` 生成，改完源码后一起提交
+- 测试：`python3 -m unittest discover -s tests -t .`（单元测试）、`sh selftest.sh`（端到端，需要内核二进制）
+- 详细说明见 [shunt/README.md](shunt/README.md)
+
 ## 特别鸣谢
 
 - [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo)：代理核心
