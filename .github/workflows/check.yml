@@ -1,4 +1,4 @@
-# 每次推送 / PR：server.py 必须与 src/ 一致，并做 Python、面板脚本、shell 语法检查和部署清单检查
+# 每次推送 / PR：server.py 必须与 shunt/ 一致，并做 Python、面板脚本、shell 语法检查和部署清单检查
 name: Check
 
 on:
@@ -12,10 +12,12 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: server.py 与 src/ 一致
+      - name: server.py 与 shunt/ 一致
         run: python3 tools/build.py --check
-      - name: Python 语法
-        run: python3 -m py_compile server.py tools/build.py
+      - name: Python 语法与未定义名字
+        run: |
+          python3 -m py_compile server.py tools/build.py shunt/*.py
+          pip install -q pyflakes && python3 -m pyflakes shunt/ tools/
       - name: 面板脚本语法
         run: |
           python3 - <<'PY'
