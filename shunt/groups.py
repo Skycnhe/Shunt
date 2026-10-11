@@ -1,6 +1,7 @@
 """策略组"""
 import os, re, time
 
+from .errlog import log_err
 from .base import BUILTIN_POLICIES, GROUPS_DEFAULT, GROUP_TYPES, G_OTHER, PANEL_DIR, PRIMARY_REGIONS, REGIONS
 from .data import load, read_json, write_json
 from .links import reserved_names
@@ -38,8 +39,8 @@ def provider_nodes(fresh=False):
         if data != read_json(PROV_FILE, None):
             try:
                 write_json(PROV_FILE, data)
-            except Exception:
-                pass
+            except OSError as e:
+                log_err("保存订阅节点列表", e)
     if data is None:
         data = read_json(PROV_FILE, {})
     PROV.update(t=now, data=data)
