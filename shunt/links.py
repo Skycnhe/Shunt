@@ -77,143 +77,171 @@ def transport(p, net, qs):
         raise ValueError(f"不支持的传输方式 {net}")
 
 
+def link_parts(line, first_port=False):
+    """URL 形式的链接 → (查询参数, 主机, 端口, 名称, 用户名, 密码)；first_port：端口范围只取第一个"""
+    u = urlsplit(line)
+    host, port = host_port(u.netloc)
+    if first_port:
+        port = re.split(r"[,\-]", port)[0]
+    pw = unquote(u.password) if u.password is not None else None
+    return parse_qs(u.query), host, port, unquote(u.fragment), unquote(u.username or ""), pw
+
+
+def parse_vmess(line):
+    j = json.loads(b64d(line[8:].split("#")[0]))
+    p = {"name": str(j.get("ps") or ""), "type": "vmess", "server": j["add"], "port": int(j["port"]),
+         "uuid": j["id"], "alterId": int(j.get("aid") or 0), "cipher": j.get("scy") or "auto", "udp": True}
+    if j.get("tls") in ("tls", True):
+        p["tls"] = True
+        sni = j.get("sni") or j.get("host")
+        if sni:
+            p["servername"] = sni
+        if j.get("alpn"):
+            p["alpn"] = str(j["alpn"]).split(",")
+        if j.get("fp"):
+            p["client-fingerprint"] = j["fp"]
+        if truthy(j.get("allowInsecure") or j.get("skip-cert-verify") or ""):
+            p["skip-cert-verify"] = True
+    qs = {k: [str(j.get(f) or "")] for k, f in (("path", "path"), ("host", "host"), ("serviceName", "path"), ("headerType", "type"))}
+    transport(p, j.get("net") or "tcp", qs)
+    return p
+
+
+def parse_ss(line):
+    body, _, frag = line[5:].partition("#")
+    if "@" in body:
+        userinfo, _, rest = body.rpartition("@")
+        userinfo = unquote(userinfo)
+        if ":" not in userinfo:
+            userinfo = b64d(userinfo)
+    else:  # 旧格式 ss://base64(method:pass@host:port)
+        b, sep, qpart = body.partition("?")
+        dec = b64d(b.rstrip("/"))
+        userinfo, _, hp = dec.rpartition("@")
+        rest = hp + (sep + qpart if qpart else "")
+    method, _, password = userinfo.partition(":")
+    u = urlsplit("ss://x@" + rest)
+    host, port = host_port(u.netloc)
+    p = {"name": unquote(frag), "type": "ss", "server": host, "port": int(port), "cipher": method,
+         "password": password, "udp": True}
+    plugin = q1(parse_qs(u.query), "plugin")
+    if plugin:
+        parts = plugin.split(";")
+        opts = dict((x.split("=", 1) + [""])[:2] for x in parts[1:])
+        if parts[0] in ("obfs-local", "simple-obfs", "obfs"):
+            p["plugin"] = "obfs"
+            p["plugin-opts"] = {"mode": opts.get("obfs", "http"), "host": opts.get("obfs-host", "bing.com")}
+        elif parts[0] == "v2ray-plugin":
+            p["plugin"] = "v2ray-plugin"
+            p["plugin-opts"] = {"mode": opts.get("mode", "websocket"), "host": opts.get("host", ""),
+                                "path": opts.get("path", "/"), "tls": "tls" in opts}
+        else:
+            raise ValueError(f"不支持的 ss 插件 {parts[0]}")
+    return p
+
+
+def parse_vless(line):
+    qs, host, port, name, user, pw = link_parts(line)
+    p = {"name": name, "type": "vless", "server": host, "port": int(port), "uuid": user, "udp": True}
+    sec = q1(qs, "security")
+    if sec in ("tls", "reality", "xtls"):
+        p["tls"] = True
+        common_tls(p, qs)
+    if sec == "reality":
+        p["reality-opts"] = {"public-key": q1(qs, "pbk"), "short-id": q1(qs, "sid")}
+        p.setdefault("client-fingerprint", "chrome")
+    flow = q1(qs, "flow")
+    if flow:
+        p["flow"] = flow
+    enc = q1(qs, "encryption")
+    if enc and enc != "none":
+        p["encryption"] = enc
+    transport(p, q1(qs, "type"), qs)
+    return p
+
+
+def parse_trojan(line):
+    qs, host, port, name, user, pw = link_parts(line)
+    p = {"name": name, "type": "trojan", "server": host, "port": int(port), "password": user, "udp": True}
+    common_tls(p, qs, "sni")
+    transport(p, q1(qs, "type"), qs)
+    return p
+
+
+def parse_hysteria2(line):
+    qs, host, port, name, user, pw = link_parts(line)
+    auth = user + (":" + pw if pw is not None else "")
+    first = re.split(r"[,\-]", port)[0]
+    p = {"name": name, "type": "hysteria2", "server": host, "port": int(first), "password": auth, "udp": True}
+    if not port.isdigit():
+        p["ports"] = port
+    common_tls(p, qs, "sni")
+    p.pop("client-fingerprint", None)
+    obfs = q1(qs, "obfs")
+    if obfs and obfs != "none":
+        p["obfs"] = obfs
+        p["obfs-password"] = q1(qs, "obfs-password")
+    return p
+
+
+def parse_tuic(line):
+    qs, host, port, name, user, pw = link_parts(line)
+    p = {"name": name, "type": "tuic", "server": host, "port": int(port), "uuid": user, "password": pw or "",
+         "udp": True, "alpn": ["h3"]}
+    common_tls(p, qs, "sni")
+    p.pop("client-fingerprint", None)
+    p["congestion-controller"] = q1(qs, "congestion_control", "congestion-control", default="bbr")
+    p["udp-relay-mode"] = q1(qs, "udp_relay_mode", "udp-relay-mode", default="native")
+    if truthy(q1(qs, "disable_sni")):
+        p["disable-sni"] = True
+    return p
+
+
+def parse_anytls(line):
+    qs, host, port, name, user, pw = link_parts(line, first_port=True)
+    p = {"name": name, "type": "anytls", "server": host, "port": int(port), "password": user, "udp": True}
+    common_tls(p, qs, "sni")
+    return p
+
+
+def parse_hysteria(line):
+    qs, host, port, name, user, pw = link_parts(line, first_port=True)
+    p = {"name": name, "type": "hysteria", "server": host, "port": int(port), "udp": True,
+         "up": q1(qs, "upmbps", "up", default="10"), "down": q1(qs, "downmbps", "down", default="50")}
+    auth = q1(qs, "auth", "auth_str") or user
+    if auth:
+        p["auth-str"] = auth
+    if q1(qs, "obfsParam", "obfs-password", "obfs"):
+        p["obfs"] = q1(qs, "obfsParam", "obfs-password", "obfs")
+    common_tls(p, qs, "sni")
+    p.pop("client-fingerprint", None)
+    return p
+
+
+def parse_socks(line):
+    qs, host, port, name, user, pw = link_parts(line, first_port=True)
+    if pw is None and user and ":" not in user:  # socks://base64(user:pass)@host:port
+        try:
+            user, _, pw = b64d(user).partition(":")
+        except ValueError:
+            pass
+    p = {"name": name, "type": "socks5", "server": host, "port": int(port), "udp": True}
+    if user:
+        p["username"], p["password"] = user, pw or ""
+    return p
+
+
+LINK_PARSERS = {"vmess": parse_vmess, "ss": parse_ss, "vless": parse_vless, "trojan": parse_trojan, "hysteria2": parse_hysteria2,
+                "hy2": parse_hysteria2, "tuic": parse_tuic, "anytls": parse_anytls, "hysteria": parse_hysteria, "hy": parse_hysteria,
+                "socks": parse_socks, "socks5": parse_socks, "socks5h": parse_socks}
+
+
 def parse_link(line):
     line = line.strip()
     scheme = line.split("://", 1)[0].lower()
-    if scheme == "vmess":
-        j = json.loads(b64d(line[8:].split("#")[0]))
-        p = {"name": str(j.get("ps") or ""), "type": "vmess", "server": j["add"], "port": int(j["port"]),
-             "uuid": j["id"], "alterId": int(j.get("aid") or 0), "cipher": j.get("scy") or "auto", "udp": True}
-        if j.get("tls") in ("tls", True):
-            p["tls"] = True
-            sni = j.get("sni") or j.get("host")
-            if sni:
-                p["servername"] = sni
-            if j.get("alpn"):
-                p["alpn"] = str(j["alpn"]).split(",")
-            if j.get("fp"):
-                p["client-fingerprint"] = j["fp"]
-            if truthy(j.get("allowInsecure") or j.get("skip-cert-verify") or ""):
-                p["skip-cert-verify"] = True
-        qs = {k: [str(j.get(f) or "")] for k, f in (("path", "path"), ("host", "host"), ("serviceName", "path"), ("headerType", "type"))}
-        transport(p, j.get("net") or "tcp", qs)
-        return p
-    if scheme == "ss":
-        body, _, frag = line[5:].partition("#")
-        if "@" in body:
-            userinfo, _, rest = body.rpartition("@")
-            userinfo = unquote(userinfo)
-            if ":" not in userinfo:
-                userinfo = b64d(userinfo)
-        else:  # 旧格式 ss://base64(method:pass@host:port)
-            b, sep, qpart = body.partition("?")
-            dec = b64d(b.rstrip("/"))
-            userinfo, _, hp = dec.rpartition("@")
-            rest = hp + (sep + qpart if qpart else "")
-        method, _, password = userinfo.partition(":")
-        u = urlsplit("ss://x@" + rest)
-        host, port = host_port(u.netloc)
-        p = {"name": unquote(frag), "type": "ss", "server": host, "port": int(port), "cipher": method,
-             "password": password, "udp": True}
-        plugin = q1(parse_qs(u.query), "plugin")
-        if plugin:
-            parts = plugin.split(";")
-            opts = dict((x.split("=", 1) + [""])[:2] for x in parts[1:])
-            if parts[0] in ("obfs-local", "simple-obfs", "obfs"):
-                p["plugin"] = "obfs"
-                p["plugin-opts"] = {"mode": opts.get("obfs", "http"), "host": opts.get("obfs-host", "bing.com")}
-            elif parts[0] == "v2ray-plugin":
-                p["plugin"] = "v2ray-plugin"
-                p["plugin-opts"] = {"mode": opts.get("mode", "websocket"), "host": opts.get("host", ""),
-                                    "path": opts.get("path", "/"), "tls": "tls" in opts}
-            else:
-                raise ValueError(f"不支持的 ss 插件 {parts[0]}")
-        return p
-    if scheme in ("vless", "trojan", "hysteria2", "hy2", "tuic"):
-        u = urlsplit(line)
-        qs = parse_qs(u.query)
-        host, port = host_port(u.netloc)
-        name = unquote(u.fragment)
-        user = unquote(u.username or "")
-        pw = unquote(u.password) if u.password is not None else None
-        if scheme == "vless":
-            p = {"name": name, "type": "vless", "server": host, "port": int(port), "uuid": user, "udp": True}
-            sec = q1(qs, "security")
-            if sec in ("tls", "reality", "xtls"):
-                p["tls"] = True
-                common_tls(p, qs)
-            if sec == "reality":
-                p["reality-opts"] = {"public-key": q1(qs, "pbk"), "short-id": q1(qs, "sid")}
-                p.setdefault("client-fingerprint", "chrome")
-            flow = q1(qs, "flow")
-            if flow:
-                p["flow"] = flow
-            enc = q1(qs, "encryption")
-            if enc and enc != "none":
-                p["encryption"] = enc
-            transport(p, q1(qs, "type"), qs)
-            return p
-        if scheme == "trojan":
-            p = {"name": name, "type": "trojan", "server": host, "port": int(port), "password": user, "udp": True}
-            common_tls(p, qs, "sni")
-            transport(p, q1(qs, "type"), qs)
-            return p
-        if scheme in ("hysteria2", "hy2"):
-            auth = user + (":" + pw if pw is not None else "")
-            first = re.split(r"[,\-]", port)[0]
-            p = {"name": name, "type": "hysteria2", "server": host, "port": int(first), "password": auth, "udp": True}
-            if not port.isdigit():
-                p["ports"] = port
-            common_tls(p, qs, "sni")
-            p.pop("client-fingerprint", None)
-            obfs = q1(qs, "obfs")
-            if obfs and obfs != "none":
-                p["obfs"] = obfs
-                p["obfs-password"] = q1(qs, "obfs-password")
-            return p
-        if scheme == "tuic":
-            p = {"name": name, "type": "tuic", "server": host, "port": int(port), "uuid": user, "password": pw or "",
-                 "udp": True, "alpn": ["h3"]}
-            common_tls(p, qs, "sni")
-            p.pop("client-fingerprint", None)
-            p["congestion-controller"] = q1(qs, "congestion_control", "congestion-control", default="bbr")
-            p["udp-relay-mode"] = q1(qs, "udp_relay_mode", "udp-relay-mode", default="native")
-            if truthy(q1(qs, "disable_sni")):
-                p["disable-sni"] = True
-            return p
-    if scheme in ("anytls", "hysteria", "hy", "socks", "socks5", "socks5h"):
-        u = urlsplit(line)
-        qs = parse_qs(u.query)
-        host, port = host_port(u.netloc)
-        port = re.split(r"[,\-]", port)[0]
-        name = unquote(u.fragment)
-        user = unquote(u.username or "")
-        pw = unquote(u.password) if u.password is not None else None
-        if scheme == "anytls":
-            p = {"name": name, "type": "anytls", "server": host, "port": int(port), "password": user, "udp": True}
-            common_tls(p, qs, "sni")
-            return p
-        if scheme in ("hysteria", "hy"):
-            p = {"name": name, "type": "hysteria", "server": host, "port": int(port), "udp": True,
-                 "up": q1(qs, "upmbps", "up", default="10"), "down": q1(qs, "downmbps", "down", default="50")}
-            auth = q1(qs, "auth", "auth_str") or user
-            if auth:
-                p["auth-str"] = auth
-            if q1(qs, "obfsParam", "obfs-password", "obfs"):
-                p["obfs"] = q1(qs, "obfsParam", "obfs-password", "obfs")
-            common_tls(p, qs, "sni")
-            p.pop("client-fingerprint", None)
-            return p
-        if pw is None and user and ":" not in user:  # socks://base64(user:pass)@host:port
-            try:
-                user, _, pw = b64d(user).partition(":")
-            except Exception:
-                pass
-        p = {"name": name, "type": "socks5", "server": host, "port": int(port), "udp": True}
-        if user:
-            p["username"], p["password"] = user, pw or ""
-        return p
-    raise ValueError(f"不支持的链接类型 {scheme}://")
+    if scheme not in LINK_PARSERS:
+        raise ValueError(f"不支持的链接类型 {scheme}://")
+    return LINK_PARSERS[scheme](line)
 
 
 def add_links(text, existing, d=None):
