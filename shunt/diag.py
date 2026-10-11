@@ -1,6 +1,7 @@
 """网络诊断"""
 import json, os, secrets, shutil, socket, threading, time, urllib.request, urllib.error
 
+from .errlog import ERRS
 from .base import CONF_DIR, TPROXY_SH
 from .data import load
 from .mihomo import check_config, mh_bin, safe_dev
@@ -125,9 +126,3 @@ def diagnose():
     except OSError:
         pass
     return out
-
-
-def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global ERRS
-    from .access import ERRS
