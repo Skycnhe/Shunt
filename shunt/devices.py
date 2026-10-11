@@ -47,7 +47,7 @@ def rdns_loop():
             name = ""
             try:  # 不再改全局 socket 超时：那会让同时建立的订阅下载、核心更新等连接也只剩 2 秒
                 name = socket.gethostbyaddr(ip)[0]
-            except Exception:
+            except OSError:
                 pass
             if name and (name == ip or name.endswith(".in-addr.arpa")):
                 name = ""
