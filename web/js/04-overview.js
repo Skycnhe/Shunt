@@ -45,8 +45,19 @@ async function loadAdStat(){let a;try{a=await api('/api/adblock')}catch(e){retur
   </div>${a.dns&&a.enabled?'<div class="mut small" style="margin-top:8px">已开启 DNS 层拦截：直接返回 NXDOMAIN 的请求不经过连接，不计入拦截次数</div>':''}`}
 function renderMode(){document.querySelectorAll('#mode button').forEach(b=>{b.classList.toggle('on',b.dataset.m===STATE.mode);
   b.onclick=async()=>{try{await api('/api/mode','PUT',{mode:b.dataset.m});STATE.mode=b.dataset.m;renderMode();toast('已切换模式')}catch(e){toast(e.message)}}})}
-const WDS={ok:['ok','正常'],restarting:['warn','正在重启核心'],direct:['bad','已切换直连'],stopped:['mut','核心已手动停止'],off:['mut','已关闭']};
-function renderWD(){const w=STATE.wd||{};const s=WDS[w.status]||['mut',w.status||'-'];
+const WDS={ok:['ok','正常'],restarting:['warn','正在重启核心'],direct:['bad','已切换直连'],stopped:['mut','核心已手动停止'],off:['mut','已关闭']};function renderWD(){const w=STATE.wd||{};const s=WDS[w.status]||['mut',w.status||'-'];
   $('#wd-status').innerHTML=`<span class="${s[0]}">● ${s[1]}</span>`+(w.last_check?` <span class="mut small">上次检查 ${new Date(w.last_check*1000).toLocaleTimeString('zh-CN',{hour12:false})}</span>`:'');
   $('#wd-events').innerHTML=(w.events||[]).map(e=>`<div class="ev"><span class="mut">${new Date(e.t*1000).toLocaleString('zh-CN',{hour12:false})}</span> ${esc(e.msg)}</div>`).join('')||'<div class="mut small">暂无事件</div>'}
 
+// IP 信息：本地公网 / 代理出口 + 归属地；IP 可脱敏隐藏，归属地始终显示
+let IPMASK=localStorage.getItem('ipmask')==='1';
+function maskIp(ip){if(!ip)return '-';if(!IPMASK)return ip;
+  const v4=ip.split('.');if(v4.length===4)return v4[0]+'.'+v4[1]+'.*.*';
+  const v6=ip.split(':');if(v6.length>2)return v6.slice(0,2).join(':')+'::****';
+  return '****'}
+async function loadIpInfo(){let j;try{j=await api('/api/ipinfo')}catch(e){return}
+  const set=(ipEl,locEl,d)=>{const el=$(ipEl);el.textContent=maskIp(d.ip);el.title=d.ip||'';
+    $(locEl).textContent=d.loc||''};
+  set('#ip-direct','#loc-direct',j.direct||{});set('#ip-proxy','#loc-proxy',j.proxy||{});
+  $('#ipmask-btn').textContent=IPMASK?'显示 IP':'隐藏 IP'}
+function toggleIpMask(){IPMASK=!IPMASK;localStorage.setItem('ipmask',IPMASK?'1':'0');loadIpInfo()}

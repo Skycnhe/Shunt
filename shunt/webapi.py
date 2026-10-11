@@ -1147,6 +1147,11 @@ class H(BaseHTTPRequestHandler):
     def api_diag_get(self, m, p, b, q):
         return self.send(200, diagnose())
 
+    @api_route("/api/ipinfo", "GET")
+    def api_ipinfo_get(self, m, p, b, q):
+        from .ipinfo import get_ipinfo
+        return self.send(200, get_ipinfo())
+
     @api_route("/api/schedule", "PUT")
     def api_schedule_put(self, m, p, b, q):
         sc = {}

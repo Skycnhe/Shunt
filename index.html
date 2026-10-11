@@ -325,6 +325,7 @@ nav button{font-size:15.5px;font-weight:600;opacity:.85}nav button.on{font-weigh
 @media (max-width:720px){
   .chip{padding:4px 6px;min-width:0}.chip .k{font-size:11px}.chip b{font-size:13px}
   nav button{font-size:14.5px;padding:6px 12px}.pill{font-size:13.5px}}
+.iplist{display:grid;gap:8px;margin-top:8px}.ipr{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}.ipr .k{color:var(--mut);min-width:64px}.ipr b{font-variant-numeric:tabular-nums}
 </style>
 </head>
 <body><div id="bgimg"></div><div id="bgdim"></div>
@@ -361,6 +362,12 @@ nav button{font-size:15.5px;font-weight:600;opacity:.85}nav button.on{font-weigh
       <div class="card stat" style="margin:0"><div class="k">活动连接</div><div class="v" id="s-conn">-</div><div class="s" id="s-devs"></div></div>
       <div class="card stat" style="margin:0"><div class="k">今日拦截广告</div><div class="v" id="s-ad">-</div><div class="s" id="s-ad2"></div></div>
     </div>
+    <div class="o1 card" style="margin-bottom:16px"><div class="row"><h3 class="sp" style="margin:0">IP 信息</h3><button class="btn g sm" id="ipmask-btn" onclick="toggleIpMask()">隐藏 IP</button></div>
+      <div class="iplist">
+        <div class="ipr"><span class="k">本地公网</span><b id="ip-direct">-</b><span class="mut small" id="loc-direct"></span></div>
+        <div class="ipr"><span class="k">代理出口</span><b id="ip-proxy">-</b><span class="mut small" id="loc-proxy"></span></div>
+      </div>
+      <div class="mut small" style="margin-top:6px">归属地始终显示；IP 可一键隐藏（仅前端脱敏）</div></div>
     <div class="o3 card"><div class="row"><h3 class="sp" style="margin:0">实时流量（近 2 分钟）</h3><span class="small" style="color:var(--pri)">● 下载</span><span class="small" style="color:var(--ok)">● 上传</span></div>
       <div class="spd"><span class="dn"><span class="k">↓</span><b id="ov-down">-</b></span><span class="upx"><span class="k">↑</span><b id="ov-up">-</b></span><span class="monly mut small" id="ov-tot" style="margin-left:auto"></span></div>
       <canvas id="chart" height="110" style="width:100%;margin-top:8px;display:block"></canvas></div>
@@ -817,7 +824,7 @@ function renderHdr(l){$('#h-up').textContent=fmt(l.up)+'/s';$('#h-down').textCon
   $('#ov-up').textContent=fmt(l.up)+'/s';$('#ov-down').textContent=fmt(l.down)+'/s';
   $('#ov-tot').textContent=`累计 ↑${fmt(l.upTotal)} ↓${fmt(l.downTotal)} · 内存 ${l.inuse?fmt(l.inuse):'-'}`;
   if(l.running!==undefined&&l.running!==STATE.running){STATE.running=l.running;renderCore(l.running)}}
-function renderOverview(){renderMode();renderWD();renderPMStat();loadDevs();loadAdStat();loadQS()}
+function renderOverview(){renderMode();renderWD();renderPMStat();loadDevs();loadAdStat();loadQS();loadIpInfo()}
 // 概览：🚀 节点选择 快速切换
 const SEL='🚀 节点选择',G_MANUAL='\u{1F590}\uFE0F 手动选择';
 // /proxies 只返回 config 里的节点和策略组；订阅（proxy-providers）节点及其延迟在 /providers/proxies 里，需合并
@@ -865,11 +872,22 @@ async function loadAdStat(){let a;try{a=await api('/api/adblock')}catch(e){retur
   </div>${a.dns&&a.enabled?'<div class="mut small" style="margin-top:8px">已开启 DNS 层拦截：直接返回 NXDOMAIN 的请求不经过连接，不计入拦截次数</div>':''}`}
 function renderMode(){document.querySelectorAll('#mode button').forEach(b=>{b.classList.toggle('on',b.dataset.m===STATE.mode);
   b.onclick=async()=>{try{await api('/api/mode','PUT',{mode:b.dataset.m});STATE.mode=b.dataset.m;renderMode();toast('已切换模式')}catch(e){toast(e.message)}}})}
-const WDS={ok:['ok','正常'],restarting:['warn','正在重启核心'],direct:['bad','已切换直连'],stopped:['mut','核心已手动停止'],off:['mut','已关闭']};
-function renderWD(){const w=STATE.wd||{};const s=WDS[w.status]||['mut',w.status||'-'];
+const WDS={ok:['ok','正常'],restarting:['warn','正在重启核心'],direct:['bad','已切换直连'],stopped:['mut','核心已手动停止'],off:['mut','已关闭']};function renderWD(){const w=STATE.wd||{};const s=WDS[w.status]||['mut',w.status||'-'];
   $('#wd-status').innerHTML=`<span class="${s[0]}">● ${s[1]}</span>`+(w.last_check?` <span class="mut small">上次检查 ${new Date(w.last_check*1000).toLocaleTimeString('zh-CN',{hour12:false})}</span>`:'');
   $('#wd-events').innerHTML=(w.events||[]).map(e=>`<div class="ev"><span class="mut">${new Date(e.t*1000).toLocaleString('zh-CN',{hour12:false})}</span> ${esc(e.msg)}</div>`).join('')||'<div class="mut small">暂无事件</div>'}
 
+// IP 信息：本地公网 / 代理出口 + 归属地；IP 可脱敏隐藏，归属地始终显示
+let IPMASK=localStorage.getItem('ipmask')==='1';
+function maskIp(ip){if(!ip)return '-';if(!IPMASK)return ip;
+  const v4=ip.split('.');if(v4.length===4)return v4[0]+'.'+v4[1]+'.*.*';
+  const v6=ip.split(':');if(v6.length>2)return v6.slice(0,2).join(':')+'::****';
+  return '****'}
+async function loadIpInfo(){let j;try{j=await api('/api/ipinfo')}catch(e){return}
+  const set=(ipEl,locEl,d)=>{const el=$(ipEl);el.textContent=maskIp(d.ip);el.title=d.ip||'';
+    $(locEl).textContent=d.loc||''};
+  set('#ip-direct','#loc-direct',j.direct||{});set('#ip-proxy','#loc-proxy',j.proxy||{});
+  $('#ipmask-btn').textContent=IPMASK?'显示 IP':'隐藏 IP'}
+function toggleIpMask(){IPMASK=!IPMASK;localStorage.setItem('ipmask',IPMASK?'1':'0');loadIpInfo()}
 // 每秒：/api/live（速率、累计、内存）；概览 / 连接页额外拉取连接列表
 // 页面不可见时全部暂停；连续失败按 2、4、8…最多 30 秒退避；连接列表只在概览（每 3 秒）和连接页（每秒，暂停时不拉）获取
 let _cn=0,_busy=false,_fail=0,_skip=0;

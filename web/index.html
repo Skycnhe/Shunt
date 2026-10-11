@@ -54,6 +54,12 @@
       <div class="card stat" style="margin:0"><div class="k">活动连接</div><div class="v" id="s-conn">-</div><div class="s" id="s-devs"></div></div>
       <div class="card stat" style="margin:0"><div class="k">今日拦截广告</div><div class="v" id="s-ad">-</div><div class="s" id="s-ad2"></div></div>
     </div>
+    <div class="o1 card" style="margin-bottom:16px"><div class="row"><h3 class="sp" style="margin:0">IP 信息</h3><button class="btn g sm" id="ipmask-btn" onclick="toggleIpMask()">隐藏 IP</button></div>
+      <div class="iplist">
+        <div class="ipr"><span class="k">本地公网</span><b id="ip-direct">-</b><span class="mut small" id="loc-direct"></span></div>
+        <div class="ipr"><span class="k">代理出口</span><b id="ip-proxy">-</b><span class="mut small" id="loc-proxy"></span></div>
+      </div>
+      <div class="mut small" style="margin-top:6px">归属地始终显示；IP 可一键隐藏（仅前端脱敏）</div></div>
     <div class="o3 card"><div class="row"><h3 class="sp" style="margin:0">实时流量（近 2 分钟）</h3><span class="small" style="color:var(--pri)">● 下载</span><span class="small" style="color:var(--ok)">● 上传</span></div>
       <div class="spd"><span class="dn"><span class="k">↓</span><b id="ov-down">-</b></span><span class="upx"><span class="k">↑</span><b id="ov-up">-</b></span><span class="monly mut small" id="ov-tot" style="margin-left:auto"></span></div>
       <canvas id="chart" height="110" style="width:100%;margin-top:8px;display:block"></canvas></div>
