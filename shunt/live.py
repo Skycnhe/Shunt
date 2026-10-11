@@ -1,6 +1,7 @@
 """实时速率 / 内存（订阅 /traffic 与 /memory 流）"""
 import json, secrets, socket, time
 
+from .errlog import log_err
 from .core import core_json
 from .logstream import core_stream
 def udp_dns_query(name, port=1053, host="127.0.0.1", timeout=8):
@@ -51,8 +52,10 @@ def live_loop(path):
     while True:
         try:
             core_stream(path, sink, {}, idle=15)
-        except Exception:
+        except OSError:  # 内核未运行 / 断线，稍后重连
             pass
+        except Exception as e:
+            log_err("实时速率", e)
         LIVE.update(up=0, down=0, t=0) if path == "/traffic" else LIVE.update(inuse=0)
         time.sleep(3)
 
@@ -72,7 +75,7 @@ def memory_once():
             stop["stop"] = True
             try:
                 stop["sock"].shutdown(socket.SHUT_RDWR)
-            except Exception:
+            except (KeyError, OSError):
                 pass
     try:
         core_stream("/memory", sink, stop, idle=3)
