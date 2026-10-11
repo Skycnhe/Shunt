@@ -103,7 +103,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.1.0"
+PANEL_VERSION = "7.2.0"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -140,6 +140,7 @@ HC = "https://www.gstatic.com/generate_204"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 
 
+# ==== src/01_data.py ====
 # ---------------------------------------------------------------- 数据
 def load():
     try:
@@ -364,6 +365,7 @@ def safe(name):
     return re.sub(r"[^\w\-]", "_", name) or "sub"
 
 
+# ==== src/02_links.py ====
 # ---------------------------------------------------------------- 单节点链接解析
 def b64d(s):
     s = s.strip().replace("-", "+").replace("_", "/")
@@ -606,6 +608,7 @@ def reserved_names(d=None):
     return out
 
 
+# ==== src/03_groups.py ====
 # ---------------------------------------------------------------- 策略组
 PROV_FILE = os.path.join(PANEL_DIR, "provider_nodes.json")
 PROV = {"t": 0, "data": None}
@@ -803,6 +806,7 @@ def validate_groups(d):
     return errs
 
 
+# ==== src/04_mihomo_config.py ====
 # ---------------------------------------------------------------- 生成配置
 def build_config(d, strict=False):
     providers = {}
@@ -1207,6 +1211,7 @@ def check_config(path, kind=None):
     return False, "\n".join(lines[-3:]) or out[-400:]
 
 
+# ==== src/05_core_api.py ====
 # ---------------------------------------------------------------- 核心交互
 DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # 访问本机控制器绝不走系统代理
 
@@ -1335,6 +1340,7 @@ def refresh_after_sub(name, wait=90):
     threading.Thread(target=run, daemon=True).start()
 
 
+# ==== src/10_singbox_base.py ====
 # ---------------------------------------------------------------- sing-box 内核
 # 面板数据（订阅、节点、规则、DNS、设备）两个内核共用；切换内核时按各自格式生成独立的配置文件：
 #   mihomo   → /etc/mihomo/config.yaml
@@ -1372,6 +1378,7 @@ def write_core_file(kind):
         pass
 
 
+# ==== src/11_singbox_yaml.py ====
 # ---- 极简 YAML 读取（只为解析 Clash 订阅里的 proxies 列表；面板保持零依赖）
 def _y_strip_comment(s):
     q = None
@@ -1571,6 +1578,7 @@ def yaml_lite(text):
     return block(0, lines[0][0])[0]
 
 
+# ==== src/12_singbox_subs.py ====
 # ---- 订阅：sing-box 不能自己拉取订阅，由面板下载、解析成节点后写进配置
 def sub_cache_path(name):
     return os.path.join(SB_SUB_DIR, safe(name) + ".json")
@@ -1813,6 +1821,7 @@ def sb_update_subs(names=None, d=None):
     return ok, bad
 
 
+# ==== src/13_singbox_nodes.py ====
 # ---- 节点：mihomo 字段 → sing-box outbound
 def _sb_tls(p, sni_key="servername", force=False):
     if not (p.get("tls") or force):
@@ -1976,6 +1985,7 @@ def sb_outbound(p, tag):
     return o
 
 
+# ==== src/14_singbox_rules.py ====
 # ---- 规则：mihomo 规则字符串 → sing-box 路由规则
 def _mh_domain(x):
     """mihomo 域名通配（+.a.com / *.a.com / a.*.com）→ (字段, 值)"""
@@ -2140,6 +2150,7 @@ class SBRules:
         return r, needs
 
 
+# ==== src/15_singbox_dns.py ====
 # ---- DNS
 def _sb_dns_server(addr, tag, boot, warn):
     """mihomo DNS 地址（含 #策略组）→ sing-box DNS server"""
@@ -2275,6 +2286,7 @@ def sb_dns(d, cfg, policies, rs, alias, v6):
     return out, t_node, t_direct, t_proxy
 
 
+# ==== src/16_singbox_config.py ====
 # ---- 生成 sing-box 配置
 def build_singbox(d):
     """把 build_config 生成的 mihomo 结构翻译成 sing-box 配置；返回 (配置, 警告列表, 需要的规则集文件)"""
@@ -2678,6 +2690,7 @@ def sb_fake_rule_providers(d):
     return {"providers": out}
 
 
+# ==== src/17_singbox_switch.py ====
 # ---- 内核切换
 def sb_arch():
     m = os.uname().machine
@@ -2887,10 +2900,33 @@ def sb_update_job(channel, gh, force=False):
         CORE_UPD["busy"] = False
 
 
+# ==== src/20_panel_update.py ====
 # ---------------------------------------------------------------- 面板在线更新
 PANEL_RAW = os.environ.get("PANEL_RAW", "https://raw.githubusercontent.com/Skycnhe/Shunt/Hk001")
 UPD_FILES = ["server.py", "index.html", "tproxy.sh", "selftest.sh", "init.d/mihomo", "init.d/mihomo-panel"]
 UPD_STATE = {"busy": False}
+UPD_LIST = "update-files.txt"  # 仓库里的部署文件清单：以后增减文件只改清单，不用再改更新程序
+
+
+def remote_file_list(gh, commit, shas):
+    """读取仓库里的部署文件清单（必须通过 GitHub 校验）；没有或拿不到校验值时用内置列表"""
+    if not shas or UPD_LIST not in shas:
+        return list(UPD_FILES)
+    raw = fetch_raw(UPD_LIST, gh, commit, shas[UPD_LIST]).decode("utf-8", "replace")
+    out = []
+    for ln in raw.splitlines():
+        f = ln.split("#", 1)[0].strip()
+        if not f:
+            continue
+        if not re.fullmatch(r"[\w.\-]+(/[\w.\-]+)*", f) or ".." in f.split("/") or f.startswith("."):
+            raise ValueError(f"部署清单里有不安全的路径：{f}")
+        if f not in shas:
+            raise ValueError(f"部署清单里的 {f} 在仓库中不存在")
+        out.append(f)
+    for need in ("server.py", "index.html"):
+        if need not in out:
+            raise ValueError(f"部署清单缺少 {need}")
+    return out
 
 
 def local_file(f):
@@ -2948,6 +2984,19 @@ def fetch_raw(f, gh, commit=None, sha=None):
     raise IOError(f"下载 {f} 失败：{err}")
 
 
+def self_rollback():
+    """把 .backup 里的文件（上次更新前的版本）全部放回去"""
+    bak = os.path.join(BASE, ".backup")
+    if not os.path.isfile(os.path.join(bak, "server.py")):
+        return False, "没有可回滚的备份"
+    for root, _, names in os.walk(bak):
+        for n in names:
+            src = os.path.join(root, n)
+            shutil.copy2(src, local_file(os.path.relpath(src, bak)))
+    restart_self()
+    return True, "已回滚到更新前的版本，面板正在重启"
+
+
 def remote_version(src):
     m = re.search(rb'^PANEL_VERSION = "([^"]+)"', src, re.M)
     return m.group(1).decode() if m else "?"
@@ -2961,7 +3010,8 @@ def self_update(apply=False, gh=""):
     try:
         files, changed = {}, []
         commit, shas = panel_manifest()
-        for f in UPD_FILES:
+        flist = remote_file_list(gh, commit, shas)
+        for f in flist:
             data = fetch_raw(f, gh, commit, shas.get(f))
             files[f] = data
             try:
@@ -2987,8 +3037,8 @@ def self_update(apply=False, gh=""):
             raise ValueError("新版 index.html 不完整")
         tmpd = os.path.join(BASE, ".update")
         shutil.rmtree(tmpd, ignore_errors=True)
-        os.makedirs(os.path.join(tmpd, "init.d"))
         for f, data in files.items():
+            os.makedirs(os.path.dirname(os.path.join(tmpd, f)), exist_ok=True)
             with open(os.path.join(tmpd, f), "wb") as fh:
                 fh.write(data)
             if f.endswith(".sh") or f.startswith("init.d/"):
@@ -2997,9 +3047,10 @@ def self_update(apply=False, gh=""):
                     raise ValueError(f"新版 {f} 语法错误：{out[-200:]}")
         bak = os.path.join(BASE, ".backup")
         shutil.rmtree(bak, ignore_errors=True)
-        os.makedirs(os.path.join(bak, "init.d"))
-        for f in UPD_FILES:
+        os.makedirs(bak)
+        for f in flist:
             if os.path.isfile(local_file(f)):
+                os.makedirs(os.path.dirname(os.path.join(bak, f)), exist_ok=True)
                 shutil.copy2(local_file(f), os.path.join(bak, f))
         for f in changed:
             dst = local_file(f)
@@ -3008,7 +3059,7 @@ def self_update(apply=False, gh=""):
             os.chmod(dst + ".new", 0o755 if (f.endswith(".sh") or f.startswith("init.d/")) else 0o644)
             os.replace(dst + ".new", dst)
         shutil.rmtree(tmpd, ignore_errors=True)
-        start_update_guard(UPD_FILES)
+        start_update_guard(flist)
         restart_self()
         info["message"] = (f"已更新 {len(changed)} 个文件（{'、'.join(changed)}）" + ("，已通过 GitHub 校验" if shas else "")
                            + "，面板正在重启；新版启动失败会在 90 秒内自动回滚")
@@ -3019,6 +3070,7 @@ def self_update(apply=False, gh=""):
         UPD_STATE["busy"] = False
 
 
+# ==== src/21_core_update.py ====
 # ---------------------------------------------------------------- 内核（mihomo）更新
 CORE_REPO = os.environ.get("CORE_REPO", "https://github.com/MetaCubeX/mihomo/releases")
 CORE_CHANNELS = {"stable": "latest/download", "alpha": "download/Prerelease-Alpha"}
@@ -3313,6 +3365,7 @@ def core_upd_status():
     return {k: (list(v) if isinstance(v, deque) else v) for k, v in CORE_UPD.items()}
 
 
+# ==== src/22_sysopt.py ====
 # ---------------------------------------------------------------- Alpine 系统优化
 PROC_SYS = os.environ.get("PANEL_PROC_SYS", "/proc/sys")
 SYS_ROOT = os.environ.get("PANEL_SYS_ROOT", "/sys")
@@ -3703,18 +3756,6 @@ def speed_test(proxy):
         return {"ok": False, "error": str(e)[:120], "mb": round(n / 1e6, 1)}
 
 
-def self_rollback():
-    bak = os.path.join(BASE, ".backup")
-    if not os.path.isfile(os.path.join(bak, "server.py")):
-        return False, "没有可回滚的备份"
-    for f in UPD_FILES:
-        src = os.path.join(bak, f)
-        if os.path.isfile(src):
-            shutil.copy2(src, local_file(f))
-    restart_self()
-    return True, "已回滚到更新前的版本，面板正在重启"
-
-
 def config_view(d=None, masked=True):
     d = d or load()
     if active_core(d) == "singbox":
@@ -3863,6 +3904,7 @@ def favicon(url):
     return None, None
 
 
+# ==== src/30_auth.py ====
 # ---------------------------------------------------------------- 认证：PBKDF2 密码 + 随机会话
 PW_ITER = 60000  # 低端 ARM 上约 0.3 秒，只在登录 / 改密时计算
 SESS_FILE = os.path.join(PANEL_DIR, "sessions.json")
@@ -3966,6 +4008,7 @@ def ticket_use(t):
     return exp > time.time()
 
 
+# ==== src/31_notify_watchdog.py ====
 # ---------------------------------------------------------------- Telegram 通知
 def tg_send(text, d=None):
     d = d or load()
@@ -4077,6 +4120,7 @@ def check_nodes():
         notify("⚠️ 节点选择中的所有节点均测速超时，请检查订阅或网络" if all_down else "✅ 节点已恢复可用")
 
 
+# ==== src/32_latency.py ====
 # ---------------------------------------------------------------- 节点延迟缓存
 # 核心只在内存里保存最近几次测速记录：重载配置、重启、切换内核后全部清空，订阅节点的记录又分散在
 # /proxies 与 /providers/proxies 两处，前端轮询时就会「一会有一会没有」。面板把每个节点最近一次的
@@ -4324,6 +4368,7 @@ def monitor_loop():
                     print("monitor error", fn.__name__, e, flush=True)
 
 
+# ==== src/33_stats.py ====
 # ---------------------------------------------------------------- 流量统计
 class Stats:
     def __init__(self):
@@ -4423,6 +4468,7 @@ def arp_table():
 STATS = None
 
 
+# ==== src/34_unlock.py ====
 # ---------------------------------------------------------------- 流媒体解锁检测
 def fetch(url, timeout=10, headers=None):
     h = {"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"}
@@ -4540,6 +4586,7 @@ def unlock_test():
     return [o or {"name": UNLOCK[i][0], "ok": False, "text": "超时"} for i, o in enumerate(out)]
 
 
+# ==== src/35_ruletest.py ====
 # ---------------------------------------------------------------- 规则测试
 def clean_target(t):
     t = t.strip()
@@ -4704,6 +4751,7 @@ def rule_test(target):
     return res
 
 
+# ==== src/36_logstream.py ====
 # ---------------------------------------------------------------- 实时日志 (SSE)
 def core_stream(path, sink, stop, idle=None):
     """以原始 socket 读取 mihomo 的 chunked JSON 行流，逐行回调 sink；stop 被置位或连接断开时结束。
@@ -4746,6 +4794,7 @@ def core_stream(path, sink, stop, idle=None):
                 sink(line.decode("utf-8", "ignore"))
 
 
+# ==== src/40_adblock.py ====
 # ---------------------------------------------------------------- 广告拦截（AdGuard Home 风格的域名过滤）
 # 订阅 AdGuard/ABP（||domain^、@@||domain^）、hosts（0.0.0.0 domain）与纯域名列表，转换为 mihomo
 # behavior=domain / format=text 的本地 rule-provider 文件：
@@ -5268,6 +5317,7 @@ class AdStats:
 AD_STATS = None
 
 
+# ==== src/41_live.py ====
 # ---------------------------------------------------------------- 实时速率 / 内存（订阅 /traffic 与 /memory 流）
 def udp_dns_query(name, port=1053, host="127.0.0.1", timeout=8):
     """向本机 DNS 端口发一个 A 记录查询；收到同 ID 的应答（含 NXDOMAIN）即视为成功"""
@@ -5348,6 +5398,7 @@ def memory_once():
     return vals[-1] if vals else {"inuse": 0, "oslimit": 0}
 
 
+# ==== src/42_logclean.py ====
 # ---------------------------------------------------------------- 日志自动清理
 LOG_STATE = {"last": 0, "trimmed": []}
 
@@ -5400,6 +5451,7 @@ def log_loop():
         time.sleep(60)
 
 
+# ==== src/43_schedule.py ====
 # ---------------------------------------------------------------- 定时任务
 SCHED = {"events": deque(maxlen=30), "done": {}}
 
@@ -5511,6 +5563,7 @@ def ab_last_update():
     return max([v.get("updated", 0) for v in m.values()] or [0])
 
 
+# ==== src/44_devices.py ====
 # ---------------------------------------------------------------- 设备名称
 RDNS = {}  # ip -> (name, 过期时间)
 RDNS_Q = deque()
@@ -5606,6 +5659,7 @@ def tun_runtime_error(dev, wait=4):
     return f"未检测到网卡 {dev}"
 
 
+# ==== src/45_diag.py ====
 # ---------------------------------------------------------------- 网络诊断
 def dns_probe(server=("127.0.0.1", 1053), name="www.baidu.com"):
     """向 mihomo DNS 端口发一个最小的 A 查询"""
@@ -5726,6 +5780,7 @@ def diagnose():
     return out
 
 
+# ==== src/46_dnsleak.py ====
 # ---------------------------------------------------------------- DNS 防泄露
 RESOLV_FILE = os.environ.get("PANEL_RESOLV", "/etc/resolv.conf")
 CN_GEO = re.compile(r"(?i)^(?:cn|private|.*@cn|.*-cn|tld-cn|geolocation-cn)$")
@@ -5956,6 +6011,7 @@ def leak_check(live=True):
     return out
 
 
+# ==== src/50_migrate.py ====
 # ---------------------------------------------------------------- v5 → v6 升级：保留节点选择
 SEL_FILE = os.path.join(PANEL_DIR, "selected.json")
 
@@ -6013,6 +6069,7 @@ def startup_migrate():
         restore_selections()
 
 
+# ==== src/51_login.py ====
 # ---------------------------------------------------------------- 登录防爆破
 FAILS = {}  # ip -> [失败次数, 解锁时间]
 
@@ -6037,6 +6094,7 @@ def login_failed(ip):
         e[1] = time.time() + 600
 
 
+# ==== src/52_https.py ====
 # ---------------------------------------------------------------- HTTPS
 def gen_cert():
     if not sh("command -v openssl")[1]:
@@ -6067,6 +6125,7 @@ def restart_self():
     sh("(sleep 1; %s) >/dev/null 2>&1 &" % os.environ.get("PANEL_RESTART", "rc-service mihomo-panel restart"))
 
 
+# ==== src/53_access.py ====
 # ---------------------------------------------------------------- 访问控制
 # 面板没有密码：只接受局域网来源，Host 必须是 IP / 局域网名（防 DNS 重绑定），改动类请求必须带自定义头（防跨站请求）
 LAN_EXTRA = [ipaddress.ip_network(n) for n in ("100.64.0.0/10",)]  # CGNAT / Tailscale
@@ -6135,6 +6194,7 @@ def log_err(where, e, tb=False):
     print(f"[error] {where}: {msg}{extra}", flush=True)
 
 
+# ==== src/54_update_guard.py ====
 # ---------------------------------------------------------------- 面板更新失败自动回滚
 GUARD = os.path.join(BASE, ".update-guard.sh")
 ROLLBACK_NOTE = os.path.join(BASE, ".rollback-note")
@@ -6217,6 +6277,7 @@ def rename_policy(d, old, new):
     return map_refs(d, {old: new}, drop={old} if new == G_SEL else ())
 
 
+# ==== src/60_static.py ====
 # ---------------------------------------------------------------- 静态资源：gzip + ETag
 STATIC = {}
 STATIC_TYPES = {"index.html": "text/html", "icon.svg": "image/svg+xml", "icon-180.png": "image/png", "icon-512.png": "image/png"}
@@ -6252,6 +6313,7 @@ def static_file(name):
     return val
 
 
+# ==== src/61_http.py ====
 # ---------------------------------------------------------------- HTTP
 class H(BaseHTTPRequestHandler):
     timeout = 30  # 读请求/TLS 握手的超时：卡住不发数据的连接不再永久占用线程（日志流只写不读，不受影响）
@@ -7248,6 +7310,7 @@ class H(BaseHTTPRequestHandler):
         return self.send(404, {"message": "not found"})
 
 
+# ==== src/70_main.py ====
 def tp_env():
     """供 tproxy.sh eval：绕过列表、IPv6 开关、本机 IPv6 网段（值均经过正则过滤）"""
     d = load()
