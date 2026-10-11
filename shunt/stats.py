@@ -94,7 +94,7 @@ def arp_table():
                 p = line.split()
                 if len(p) >= 4 and p[3] != "00:00:00:00:00:00":
                     out[p[0]] = p[3]
-    except Exception:
+    except OSError:
         pass
     return out
 
