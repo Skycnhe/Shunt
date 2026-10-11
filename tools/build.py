@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""把 shunt/ 包的全部模块源码内嵌进单文件 server.py（设备上只部署这一个文件）。
+"""生成设备上部署的两个单文件：
+- server.py：内嵌 shunt/ 包的全部模块源码
+- index.html：由 web/index.html 模板把 web/style.css、web/js/*.js 按 @include 标记拼进去
 
-    python3 tools/build.py          # 改完 shunt/ 后重新生成 server.py
-    python3 tools/build.py --check  # 检查 server.py 是否与 shunt/ 一致（CI 用），不一致返回 1
+    python3 tools/build.py          # 改完 shunt/ 或 web/ 后重新生成 server.py 和 index.html
+    python3 tools/build.py --check  # 检查两者是否与源码一致（CI 用），不一致返回 1
     python3 tools/build.py --split  # 反向：从 server.py 里取出内嵌源码写回 shunt/（直接改了 server.py 时用）
 
 server.py 运行时注册一个导入器，从内嵌源码加载 shunt 包；异常堆栈里显示的是 shunt/xxx.py 的文件名和行号。
@@ -13,6 +15,8 @@ import ast, os, re, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PKG, OUT = os.path.join(ROOT, "shunt"), os.path.join(ROOT, "server.py")
+WEB, HTML = os.path.join(ROOT, "web"), os.path.join(ROOT, "index.html")
+INC = re.compile(r"^(?:/\*@include (\S+)\*/|//@include (\S+))$")
 
 HEAD = '''#!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
@@ -105,6 +109,18 @@ def build():
     return res
 
 
+def build_web():
+    out = []
+    for line in open(os.path.join(WEB, "index.html"), encoding="utf-8").read().split("\n"):
+        m = INC.match(line)
+        if m:
+            with open(os.path.join(WEB, m.group(1) or m.group(2)), encoding="utf-8") as f:
+                out.append(f.read()[:-1])  # 去掉拆分时补的最后一个换行
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
 def split():
     tree = ast.parse(open(OUT, encoding="utf-8").read())
     n = 0
@@ -121,13 +137,15 @@ if __name__ == "__main__":
     if "--split" in sys.argv:
         split()
         sys.exit(0)
-    s = build()
+    targets = [(OUT, build(), "shunt/"), (HTML, build_web(), "web/")]
     if "--check" in sys.argv:
-        cur = open(OUT, encoding="utf-8").read() if os.path.exists(OUT) else ""
-        if cur != s:
-            sys.exit("server.py 与 shunt/ 不一致：改 shunt/ 后请运行 python3 tools/build.py")
-        print(f"server.py 与 shunt/ 一致（{len(modules())} 个模块）")
+        bad = [f"{os.path.basename(f)} 与 {src} 不一致" for f, txt, src in targets
+               if (open(f, encoding="utf-8").read() if os.path.exists(f) else "") != txt]
+        if bad:
+            sys.exit("；".join(bad) + "：改完源码后请运行 python3 tools/build.py")
+        print(f"server.py 与 shunt/（{len(modules())} 个模块）、index.html 与 web/ 一致")
         sys.exit(0)
-    with open(OUT, "w", encoding="utf-8") as f:
-        f.write(s)
-    print(f"已生成 server.py（{len(modules())} 个模块，{s.count(chr(10))} 行）")
+    for f, txt, _ in targets:
+        with open(f, "w", encoding="utf-8") as fh:
+            fh.write(txt)
+    print(f"已生成 server.py（{len(modules())} 个模块）和 index.html")
