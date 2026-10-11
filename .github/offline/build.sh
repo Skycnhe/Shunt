@@ -17,8 +17,8 @@ latest_tag() { curl -fsSI "https://github.com/$1/releases/latest" | sed -n 's#^[
 W=/tmp/shunt-offline; rm -rf "$W"
 mkdir -p "$W/offline/apk/$M" "$W/offline/bin" "$W/offline/geo" "$W/offline/sb-rules"
 cd "$SRC"
-cp server.py index.html tproxy.sh selftest.sh install.sh LICENSE README.md CHANGELOG.md "$W/"
-for f in icon.svg icon-180.png icon-512.png offline.sh; do [ -f "$f" ] && cp "$f" "$W/"; done
+cp server.py index.html tproxy.sh selftest.sh install.sh "$W/"
+for f in README.md CHANGELOG.md LICENSE icon.svg icon-180.png icon-512.png offline.sh; do [ -f "$f" ] && cp "$f" "$W/"; done
 cp -r init.d "$W/"
 
 echo ">> apk 依赖 (Alpine $REL $M)"
