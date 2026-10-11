@@ -1,5 +1,8 @@
 # 更新记录与详细说明
 
+## v7.5.2 修复本地 IP 显示为代理 IP
+- TUN 模式会拦截本机全部流量，直连取 IP 的请求也被 sing-box 接管，导致"本地公网 IP"显示成代理出口 IP。现在直连探测改用 `curl --interface` 绑定物理网卡绕过 TUN；取不到网卡或 curl 失败时回退普通直连
+
 ## v7.5.1 修复 v7.5.0 打包遗漏
 - 修复 `shunt/ipinfo.py` 未加入 `MODULES` 列表导致 `server.py` 缺少该模块、`/api/ipinfo` 报 500 的问题
 

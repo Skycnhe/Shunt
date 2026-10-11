@@ -1,8 +1,11 @@
 """公网 IP 与归属地查询（概览页展示）"""
 import json
+import re
+import shlex
+import subprocess
 import time
 
-from .sysopt import proxy_opener
+from .sysopt import proxy_opener, sh
 
 IP_ECHO = "https://api.ipify.org"  # 返回纯文本公网 IP
 GEO_URL = "http://ip-api.com/json/%s?lang=zh-CN&fields=status,country,regionName,city"
@@ -17,6 +20,34 @@ def _fetch(url, via_proxy, timeout=10):
             return r.read().decode(errors="ignore").strip()
     except Exception:
         return ""
+
+
+def _phys_iface():
+    """物理网卡：取默认路由的 dev，排除 tun/mihomo。TUN 模式会拦截本机全部流量，
+    直连请求必须绑定物理网卡才能绕过 TUN 拿到真实公网 IP。"""
+    try:
+        out = subprocess.check_output(["ip", "-4", "route", "show", "default"],
+                                      text=True, timeout=5)
+        for line in out.splitlines():
+            m = re.search(r"\bdev (\S+)", line)
+            if m:
+                dev = m.group(1)
+                if not (dev.startswith("tun") or dev.startswith("utun") or dev == "mihomo"):
+                    return dev
+    except Exception:
+        pass
+    return None
+
+
+def _fetch_direct_ip():
+    """直连取公网 IP：优先 curl --interface 绑定物理网卡（绕过 TUN），失败回退普通直连"""
+    dev = _phys_iface()
+    if dev:
+        code, out = sh(f"curl -s --interface {shlex.quote(dev)} --max-time 10 {IP_ECHO}", timeout=15)
+        out = out.strip()
+        if code == 0 and re.fullmatch(r"[0-9a-fA-F:.]+", out):
+            return out
+    return _fetch(IP_ECHO, False)
 
 
 def _geo(ip):
@@ -36,7 +67,7 @@ def get_ipinfo():
     now = time.time()
     if _CACHE["v"] is not None and now - _CACHE["t"] < _TTL:
         return _CACHE["v"]
-    direct_ip = _fetch(IP_ECHO, False)
+    direct_ip = _fetch_direct_ip()
     proxy_ip = _fetch(IP_ECHO, True)
     v = {"direct": {"ip": direct_ip, "loc": _geo(direct_ip)},
          "proxy": {"ip": proxy_ip, "loc": _geo(proxy_ip)}}

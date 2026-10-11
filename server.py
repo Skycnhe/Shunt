@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.5.1"
+PANEL_VERSION = "7.5.2"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -231,7 +231,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.5.1"
+PANEL_VERSION = "7.5.2"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -6651,9 +6651,12 @@ def leak_check(live=True):
 '''
 _SRC['shunt.ipinfo'] = '''"""公网 IP 与归属地查询（概览页展示）"""
 import json
+import re
+import shlex
+import subprocess
 import time
 
-from .sysopt import proxy_opener
+from .sysopt import proxy_opener, sh
 
 IP_ECHO = "https://api.ipify.org"  # 返回纯文本公网 IP
 GEO_URL = "http://ip-api.com/json/%s?lang=zh-CN&fields=status,country,regionName,city"
@@ -6668,6 +6671,34 @@ def _fetch(url, via_proxy, timeout=10):
             return r.read().decode(errors="ignore").strip()
     except Exception:
         return ""
+
+
+def _phys_iface():
+    """物理网卡：取默认路由的 dev，排除 tun/mihomo。TUN 模式会拦截本机全部流量，
+    直连请求必须绑定物理网卡才能绕过 TUN 拿到真实公网 IP。"""
+    try:
+        out = subprocess.check_output(["ip", "-4", "route", "show", "default"],
+                                      text=True, timeout=5)
+        for line in out.splitlines():
+            m = re.search(r"\\bdev (\\S+)", line)
+            if m:
+                dev = m.group(1)
+                if not (dev.startswith("tun") or dev.startswith("utun") or dev == "mihomo"):
+                    return dev
+    except Exception:
+        pass
+    return None
+
+
+def _fetch_direct_ip():
+    """直连取公网 IP：优先 curl --interface 绑定物理网卡（绕过 TUN），失败回退普通直连"""
+    dev = _phys_iface()
+    if dev:
+        code, out = sh(f"curl -s --interface {shlex.quote(dev)} --max-time 10 {IP_ECHO}", timeout=15)
+        out = out.strip()
+        if code == 0 and re.fullmatch(r"[0-9a-fA-F:.]+", out):
+            return out
+    return _fetch(IP_ECHO, False)
 
 
 def _geo(ip):
@@ -6687,7 +6718,7 @@ def get_ipinfo():
     now = time.time()
     if _CACHE["v"] is not None and now - _CACHE["t"] < _TTL:
         return _CACHE["v"]
-    direct_ip = _fetch(IP_ECHO, False)
+    direct_ip = _fetch_direct_ip()
     proxy_ip = _fetch(IP_ECHO, True)
     v = {"direct": {"ip": direct_ip, "loc": _geo(direct_ip)},
          "proxy": {"ip": proxy_ip, "loc": _geo(proxy_ip)}}
