@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.4.0"
+PANEL_VERSION = "7.4.1"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -182,7 +182,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.4.0"
+PANEL_VERSION = "7.4.1"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -2821,6 +2821,27 @@ def sb_adblock_source(src):
     if exact:
         r["domain"] = exact
     return {"version": 3, "rules": [r] if r else []}
+
+
+def sb_rule_count(path):
+    """sing-box source 规则集里的条目数（广告拦截页显示「已加载」用；sing-box 的 clash_api 不提供规则集信息）"""
+    try:
+        with open(path) as f:
+            j = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return sum(len(v) for r in j.get("rules") or [] if isinstance(r, dict) for v in r.values() if isinstance(v, list))
+
+
+def sb_ab_loaded(d):
+    """{"ad-xxx": 条目数}：只统计配置里实际引用、且已转换好的广告拦截规则集"""
+    out = {}
+    for tag, rsd in build_singbox(d)[2].items():
+        if rsd.get("kind") == "adblock":
+            path = os.path.join(SB_RULE_DIR, rsd["path"])
+            if os.path.isfile(path) and os.path.getsize(path) > 0:
+                out[tag] = sb_rule_count(path)
+    return out
 
 
 def sb_sync_assets(d, force=False, need=None):
@@ -6656,7 +6677,7 @@ from .mihomo import bad_rule_policies, build_config, dns_cfg, safe_dev, validate
 from .core import core, core_json, refresh_after_sub, refresh_regions, reload_core
 from .sb_common import CORES, SB_BIN, SB_STATE, active_core, core_conf_path
 from .sb_subs import sb_update_subs
-from .sb_config import build_singbox, sb_fake_providers, sb_fake_rule_providers, sb_sync_assets, sb_version, write_active_config
+from .sb_config import build_singbox, sb_ab_loaded, sb_fake_providers, sb_fake_rule_providers, sb_sync_assets, sb_version, write_active_config
 from .sb_switch import core_switch_job, sb_arch, sb_remote_version, sb_update_job
 from .panel_update import self_rollback, self_update
 from .core_update import (
@@ -7557,11 +7578,15 @@ class H(BaseHTTPRequestHandler):
         meta = ab_meta()
         rep = adblock.AD_STATS.report() if adblock.AD_STATS else {"today": 0, "top": [], "lists": {}, "days": []}
         lists = [dict(l, **{k: v for k, v in (meta.get(l["id"]) or {}).items()}, hits=rep["lists"].get(l["id"], 0)) for l in d["adblock"]["lists"]]
-        prov = (core_json("/providers/rules") or {}).get("providers") or {}
+        if active_core(d) == "singbox":  # sing-box 的 clash_api 没有规则集信息：按已转换好的规则集文件统计
+            loaded = sb_ab_loaded(d) if d["adblock"].get("enabled") else {}
+        else:
+            prov = (core_json("/providers/rules") or {}).get("providers") or {}
+            loaded = {k: v.get("ruleCount") for k, v in prov.items() if k.startswith("ad-")}
         return self.send(200, {**{k: v for k, v in d["adblock"].items() if k != "lists"}, "lists": lists,
                                "presets": AB_PRESETS, "stats": rep, "updating": AB_STATE["updating"], "msg": AB_STATE["msg"],
                                "custom_hits": rep["lists"].get("custom", 0),
-                               "loaded": {k: v.get("ruleCount") for k, v in prov.items() if k.startswith("ad-")}})
+                               "loaded": loaded})
 
     @api_route("/api/adblock", "PUT")
     def api_adblock_put(self, m, p, b, q):
