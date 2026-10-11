@@ -5,6 +5,9 @@ from .base import (
     AUTO_SUFFIX, AUTO_TAIL, AUTO_TAIL_OLD, DATA_FILE, DEFAULT, G_AUTO, G_OTHER, LB_PREFIX, LB_SUFFIX, LB_TAIL, LEGACY_AUTO, LOCK,
     PANEL_DIR, PROXY_MODES, REGIONS, SCHEMA, TESTS
 )
+OLD_PW_KEYS = ("password", "pw_hash", "pw_default")
+
+
 def load():
     try:
         with open(DATA_FILE) as f:
@@ -22,10 +25,9 @@ def load():
     if not d["tests"]:
         d["tests"] = [dict(t) for t in TESTS]
     dirty = False
-    if d.get("password") and not d.get("pw_hash"):  # 旧版明文密码 → PBKDF2 哈希，明文不再落盘
-        d["pw_default"] = d["password"] == "admin"
-        d["pw_hash"] = pw_hash(d["password"])
-        d["password"] = ""
+    if any(k in d for k in OLD_PW_KEYS):  # v6.8.2 起面板不再有密码：清掉旧版留下的密码字段
+        for k in OLD_PW_KEYS:
+            d.pop(k, None)
         dirty = True
     if not d["secret"]:
         d["secret"] = secrets.token_hex(16)
@@ -184,7 +186,7 @@ def update(fn):
 
 HISTORY_FILE = os.path.join(PANEL_DIR, "history.json")
 HISTORY_MAX = 10
-HISTORY_SKIP = {"core", "password", "pw_hash", "pw_default", "secret", "devices", "https", "schema", "sysopt", "sysopt_orig", "sysopt_mods"}
+HISTORY_SKIP = {"core", "secret", "devices", "https", "schema", "sysopt", "sysopt_orig", "sysopt_mods"}
 KEY_LABEL = {"subs": "订阅", "nodes": "节点", "rules": "自定义规则", "rulesets": "规则集", "dns": "DNS", "adblock": "广告拦截",
              "custom_groups": "自定义策略组", "groups_cfg": "地区分组", "region_groups": "地区分组", "proxy_mode": "代理方式",
              "tun": "TUN", "ipv6": "IPv6", "bypass": "绕过设备", "mode": "代理模式", "sniffer": "域名嗅探", "schedule": "定时任务",
@@ -230,6 +232,5 @@ def safe(name):
 
 def _link():
     """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global dns_policy_of, rule_policy_index, pw_hash
+    global dns_policy_of, rule_policy_index
     from .mihomo import dns_policy_of, rule_policy_index
-    from .auth import pw_hash
