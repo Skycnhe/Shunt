@@ -1,13 +1,93 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Shunt 分流: 零依赖的旁路由透明代理管理后端 (Alpine Linux, mihomo / sing-box)"""
-import json, os, sys, signal, time, hashlib, hmac, secrets, subprocess, threading, re, socket, ssl, base64, copy, ipaddress, shutil
-import urllib.request, urllib.error, http.client, gzip, io
-from collections import deque
-from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse, urlsplit, parse_qs, unquote, quote
+"""Shunt 分流: 零依赖的旁路由透明代理管理后端 (Alpine Linux, mihomo / sing-box)
 
-BASE = os.path.dirname(os.path.abspath(__file__))
+本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
+"""
+PANEL_VERSION = "7.3.0"
+import importlib.abc, importlib.util, linecache, os, sys, types
+
+_SRC = {}
+_SRC['shunt'] = '''"""Shunt 分流面板后端。
+
+设备上运行的是仓库根目录的 server.py：它由 tools/build.py 生成，内嵌了本目录全部模块的源码，所以部署时仍然只有一个文件。
+模块之间：引用前面模块的名字直接 from-import；引用后面模块的名字写在各模块末尾的 _link() 里，由 load() 在全部模块加载后调用。
+"""
+import importlib
+import os
+
+# 加载顺序：模块顶层代码只用到排在前面的模块
+MODULES = [
+    "base",
+    "data",
+    "links",
+    "groups",
+    "mihomo",
+    "core",
+    "sb_common",
+    "sb_yaml",
+    "sb_subs",
+    "sb_nodes",
+    "sb_rules",
+    "sb_dns",
+    "sb_config",
+    "sb_switch",
+    "panel_update",
+    "core_update",
+    "sysopt",
+    "auth",
+    "notify",
+    "latency",
+    "stats",
+    "unlock",
+    "ruletest",
+    "logstream",
+    "adblock",
+    "live",
+    "logclean",
+    "schedule",
+    "devices",
+    "diag",
+    "dnsleak",
+    "migrate",
+    "login",
+    "https",
+    "access",
+    "update_guard",
+    "static",
+    "webapi",
+    "cli",
+]
+SERVER_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "server.py")
+_loaded = []
+
+
+def load(server_file=None):
+    """按顺序加载全部模块并绑定模块间的引用；返回模块列表（重复调用直接返回）"""
+    global SERVER_FILE
+    if _loaded:
+        return _loaded
+    if server_file:
+        SERVER_FILE = server_file
+    mods = [importlib.import_module(__name__ + "." + n) for n in MODULES]
+    for m in mods:
+        if hasattr(m, "_link"):
+            m._link()
+    _loaded.extend(mods)
+    return _loaded
+
+
+def setvar(name, value):
+    """测试 / 调试用：把所有模块里同名的全局变量一起改掉（from-import 让每个模块都有自己的一份引用）"""
+    for m in _loaded:
+        if name in vars(m):
+            setattr(m, name, value)
+'''
+_SRC['shunt.base'] = '''"""基础常量与通用工具"""
+import shunt
+import os, threading, re
+
+BASE = os.path.dirname(os.path.abspath(shunt.SERVER_FILE))  # 面板文件所在目录（index.html、tproxy.sh 等）
 CONF_DIR = os.environ.get("MIHOMO_DIR", "/etc/mihomo")
 DATA_FILE = os.environ.get("PANEL_DATA", "/etc/mihomo-panel/data.json")
 PANEL_DIR = os.path.dirname(DATA_FILE)
@@ -53,10 +133,10 @@ DOH_DOMAINS = ["+.dns.google", "+.cloudflare-dns.com", "+.one.one.one.one", "+.d
                "+.mozilla.cloudflare-dns.com", "+.chrome.cloudflare-dns.com", "+.dns.sb", "+.doh.dns.sb"]
 LAN_IN = "IN-TYPE,TPROXY/TUN/REDIR"  # 只针对透明代理进来的局域网流量；mihomo 自己的 DNS 查询（Inner）与 7890 端口不受影响
 # 国内（会看到你查询国外域名就算泄露）的 DNS 服务器特征
-CN_DNS = re.compile(r"(?i)(?:^|[/@\[])(?:223\.5\.5\.5|223\.6\.6\.6|2400:3200|119\.29\.29\.29|119\.28\.28\.28|182\.254\.11[68]\.116|"
-                    r"1\.12\.12\.12|120\.53\.53\.53|2402:4e00|114\.114\.11[45]\.11[45]|180\.76\.76\.76|180\.184\.[12]\.[12]|"
-                    r"101\.226\.4\.6|218\.30\.118\.6|117\.50\.\d+\.\d+|52\.80\.\d+\.\d+|"
-                    r"[\w.-]*(?:alidns\.com|doh\.pub|dot\.pub|dnspod\.(?:cn|com)|360\.cn|114dns\.com|onedns\.net|baidu\.com|volces\.com))(?:[:/#\]]|$)")
+CN_DNS = re.compile(r"(?i)(?:^|[/@\\[])(?:223\\.5\\.5\\.5|223\\.6\\.6\\.6|2400:3200|119\\.29\\.29\\.29|119\\.28\\.28\\.28|182\\.254\\.11[68]\\.116|"
+                    r"1\\.12\\.12\\.12|120\\.53\\.53\\.53|2402:4e00|114\\.114\\.11[45]\\.11[45]|180\\.76\\.76\\.76|180\\.184\\.[12]\\.[12]|"
+                    r"101\\.226\\.4\\.6|218\\.30\\.118\\.6|117\\.50\\.\\d+\\.\\d+|52\\.80\\.\\d+\\.\\d+|"
+                    r"[\\w.-]*(?:alidns\\.com|doh\\.pub|dot\\.pub|dnspod\\.(?:cn|com)|360\\.cn|114dns\\.com|onedns\\.net|baidu\\.com|volces\\.com))(?:[:/#\\]]|$)")
 AB_DEFAULT = {"enabled": False, "lists": [], "black": [], "white": [], "interval": 86400, "dns": False}
 # 内置预设：按「国内 / 国外 × 视频 / 网页 / 隐私」分组，前端按 cat 分行显示
 BM = "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/"
@@ -96,14 +176,14 @@ TESTS = [
 ]
 G_SEL, G_YT, G_GG, G_TG, G_FINAL = "🚀 节点选择", "📹 YouTube", "🔍 Google", "📲 Telegram", "🐟 漏网之鱼"
 G_AI, G_NF = "🤖 AI 服务", "🎬 Netflix"
-G_MANUAL, G_AUTO, G_DIRECT = "\U0001F590\uFE0F 手动选择", "⚡ 全局自动选择", "🏠 直连"
-LB_PREFIX, AUTO_TAIL, LB_TAIL = "\u2696\uFE0F ", "竞技", "负载均衡"
+G_MANUAL, G_AUTO, G_DIRECT = "\\U0001F590\\uFE0F 手动选择", "⚡ 全局自动选择", "🏠 直连"
+LB_PREFIX, AUTO_TAIL, LB_TAIL = "\\u2696\\uFE0F ", "竞技", "负载均衡"
 AUTO_TAIL_OLD = "自动优选"  # v6–v6.7.2 的地区组后缀，v6.7.3 改为「竞技」，仅用于迁移
 LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据时自动迁移
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.2.0"
+PANEL_VERSION = "7.3.0"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -138,10 +218,14 @@ SIDE_GROUPS = [G_YT, G_GG, G_TG, G_AI, G_NF, G_FINAL]
 BUILTIN_POLICIES = {"DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE"}
 HC = "https://www.gstatic.com/generate_204"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+'''
+_SRC['shunt.data'] = '''"""数据"""
+import copy, json, os, re, secrets, time
 
-
-# ==== src/01_data.py ====
-# ---------------------------------------------------------------- 数据
+from .base import (
+    AUTO_SUFFIX, AUTO_TAIL, AUTO_TAIL_OLD, DATA_FILE, DEFAULT, G_AUTO, G_OTHER, LB_PREFIX, LB_SUFFIX, LB_TAIL, LEGACY_AUTO, LOCK,
+    PANEL_DIR, PROXY_MODES, REGIONS, SCHEMA, TESTS
+)
 def load():
     try:
         with open(DATA_FILE) as f:
@@ -362,11 +446,23 @@ def write_json(path, obj):
 
 
 def safe(name):
-    return re.sub(r"[^\w\-]", "_", name) or "sub"
+    return re.sub(r"[^\\w\\-]", "_", name) or "sub"
 
 
-# ==== src/02_links.py ====
-# ---------------------------------------------------------------- 单节点链接解析
+def _link():
+    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
+    global dns_policy_of, rule_policy_index, pw_hash
+    from .mihomo import dns_policy_of, rule_policy_index
+    from .auth import pw_hash
+'''
+_SRC['shunt.links'] = '''"""单节点链接解析"""
+import base64, json, re
+from urllib.parse import parse_qs, unquote, urlsplit
+
+from .base import (
+    AUTO_SUFFIX, AUTO_TAIL_OLD, BUILTIN_POLICIES, G_AUTO, G_DIRECT, G_MANUAL, G_OTHER, G_SEL, LB_SUFFIX, LEGACY_AUTO, REGIONS, SIDE_GROUPS
+)
+from .data import auto_name, lb_dropped_names, lb_names, lb_old_name
 def b64d(s):
     s = s.strip().replace("-", "+").replace("_", "/")
     s += "=" * (-len(s) % 4)
@@ -387,7 +483,7 @@ def truthy(v):
 def host_port(netloc):
     """返回 (host, port_spec)，兼容 [IPv6]:port 与 hy2 的多端口 443,2000-3000"""
     hp = netloc.rpartition("@")[2]
-    m = re.fullmatch(r"\[([0-9A-Fa-f:.]+)\]:([\d,\-]+)", hp) or re.fullmatch(r"([^:\[\]]+):([\d,\-]+)", hp)
+    m = re.fullmatch(r"\\[([0-9A-Fa-f:.]+)\\]:([\\d,\\-]+)", hp) or re.fullmatch(r"([^:\\[\\]]+):([\\d,\\-]+)", hp)
     if not m:
         raise ValueError("服务器地址或端口无效")
     return m.group(1), m.group(2)
@@ -521,7 +617,7 @@ def parse_link(line):
             return p
         if scheme in ("hysteria2", "hy2"):
             auth = user + (":" + pw if pw is not None else "")
-            first = re.split(r"[,\-]", port)[0]
+            first = re.split(r"[,\\-]", port)[0]
             p = {"name": name, "type": "hysteria2", "server": host, "port": int(first), "password": auth, "udp": True}
             if not port.isdigit():
                 p["ports"] = port
@@ -546,7 +642,7 @@ def parse_link(line):
         u = urlsplit(line)
         qs = parse_qs(u.query)
         host, port = host_port(u.netloc)
-        port = re.split(r"[,\-]", port)[0]
+        port = re.split(r"[,\\-]", port)[0]
         name = unquote(u.fragment)
         user = unquote(u.username or "")
         pw = unquote(u.password) if u.password is not None else None
@@ -606,10 +702,13 @@ def reserved_names(d=None):
     if d:
         out |= {g["name"] for g in d.get("custom_groups") or []}
     return out
+'''
+_SRC['shunt.groups'] = '''"""策略组"""
+import os, re, time
 
-
-# ==== src/03_groups.py ====
-# ---------------------------------------------------------------- 策略组
+from .base import BUILTIN_POLICIES, GROUPS_DEFAULT, GROUP_TYPES, G_OTHER, PANEL_DIR, PRIMARY_REGIONS, REGIONS
+from .data import load, read_json, write_json
+from .links import reserved_names
 PROV_FILE = os.path.join(PANEL_DIR, "provider_nodes.json")
 PROV = {"t": 0, "data": None}
 RX_CACHE = {}
@@ -735,7 +834,7 @@ def find_cycle(groups):
     return None
 
 
-NAME_BAD = re.compile(r"[,#\n\r\t\"]")
+NAME_BAD = re.compile(r"[,#\\n\\r\\t\\"]")
 
 
 def clean_custom_group(b):
@@ -757,7 +856,7 @@ def clean_custom_group(b):
     if not members and not flt:
         raise ValueError("请至少选择一个成员，或填写筛选正则")
     icon = str(b.get("icon") or "").strip()
-    if icon and not re.match(r"^https?://\S{4,500}$", icon):
+    if icon and not re.match(r"^https?://\\S{4,500}$", icon):
         raise ValueError("图标必须是 http(s) 图片地址")
     g = {"name": name, "type": t, "proxies": members, "filter": flt, "subs": bool(b.get("subs", True)),
          "expose": bool(b.get("expose", True)), "icon": icon}
@@ -806,8 +905,24 @@ def validate_groups(d):
     return errs
 
 
-# ==== src/04_mihomo_config.py ====
-# ---------------------------------------------------------------- 生成配置
+def _link():
+    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
+    global build_config, core_json, active_core, sb_provider_nodes
+    from .mihomo import build_config
+    from .core import core_json
+    from .sb_common import active_core
+    from .sb_subs import sb_provider_nodes
+'''
+_SRC['shunt.mihomo'] = '''"""生成配置"""
+import ipaddress, json, os, re
+
+from .base import (
+    AUTO_ORDER, BUILTIN_POLICIES, CONF_DIR, CTRL_HOST, CTRL_PORT, DEFAULT_EXCLUDE, DNS_DEFAULT, DNS_LISTS, DOH_DOMAINS, DOH_IPS, G_AI,
+    G_AUTO, G_DIRECT, G_FINAL, G_GG, G_MANUAL, G_NF, G_SEL, G_TG, G_YT, HC, LAN_IN, LB_ORDER, MIHOMO_BIN, MIXED, SIDE_GROUPS, SMART_BIN,
+    TUN_DEFAULT, TUN_STACKS
+)
+from .data import LB_KINDS, auto_name, lb_name, region_label, safe
+from .groups import clean_custom_group, gcfg, group_opts, region_plan, rx
 def build_config(d, strict=False):
     providers = {}
     for s in d["subs"]:
@@ -1036,15 +1151,15 @@ def fix_rule_policy(rule, policies):
 
 
 def safe_dev(name):
-    name = re.sub(r"[^A-Za-z0-9_\-]", "", str(name or ""))[:15]
+    name = re.sub(r"[^A-Za-z0-9_\\-]", "", str(name or ""))[:15]
     return name or "Meta"
 
 
-DNS_RX = re.compile(r"^(?:(?:https|tls|quic|udp|tcp|h3)://[^\s#]+|dhcp://[\w.\-]+|system(?:://)?|rcode://\w+|"
-                    r"\[?[0-9a-fA-F:.]+\]?(?::\d+)?)(?:#\S.*)?$")
-HOST_KEY_RX = re.compile(r"^(?:\+\.|\*\.)?(?:[a-z0-9_*](?:[a-z0-9_\-*]{0,61}[a-z0-9_*])?\.)*[a-z0-9_\-]{1,63}$")
-POLICY_DOMAIN_RX = re.compile(r"^(?:\+\.|\*\.|\.)?(?:[a-z0-9_*\-]+\.)*[a-z0-9_*\-]+$", re.I)
-POLICY_NAME_RX = re.compile(r"^[\w@!\-.]+$")
+DNS_RX = re.compile(r"^(?:(?:https|tls|quic|udp|tcp|h3)://[^\\s#]+|dhcp://[\\w.\\-]+|system(?:://)?|rcode://\\w+|"
+                    r"\\[?[0-9a-fA-F:.]+\\]?(?::\\d+)?)(?:#\\S.*)?$")
+HOST_KEY_RX = re.compile(r"^(?:\\+\\.|\\*\\.)?(?:[a-z0-9_*](?:[a-z0-9_\\-*]{0,61}[a-z0-9_*])?\\.)*[a-z0-9_\\-]{1,63}$")
+POLICY_DOMAIN_RX = re.compile(r"^(?:\\+\\.|\\*\\.|\\.)?(?:[a-z0-9_*\\-]+\\.)*[a-z0-9_*\\-]+$", re.I)
+POLICY_NAME_RX = re.compile(r"^[\\w@!\\-.]+$")
 
 
 def norm_policy_match(m):
@@ -1138,14 +1253,14 @@ def validate_dns(dc, d):
         for s in dc.get(key) or []:
             if not DNS_RX.match(s) or s.startswith("rcode://"):
                 errs.append(f"{label} 格式无效：{s}")
-            elif key == "default" and not re.match(r"^(?:(?:udp|tcp|tls|https)://)?\[?[0-9a-fA-F:.]+\]?(?::\d+)?(?:/|$)", s):
+            elif key == "default" and not re.match(r"^(?:(?:udp|tcp|tls|https)://)?\\[?[0-9a-fA-F:.]+\\]?(?::\\d+)?(?:/|$)", s):
                 errs.append(f"默认 DNS 必须是 IP（用于解析 DoH 域名）：{s}")
             elif key in ("default", "pserver") and dns_policy_of(s):
                 errs.append(f"{label} 不能指定 #策略组（解析节点域名本身不能经过节点）：{s}")
             elif dns_policy_of(s) and dns_policy_of(s) not in pol:
                 errs.append(f"{label} 引用的策略组不存在：{s}")
     for s in dc.get("fake_filter") or []:
-        if not re.match(r"^(?:geosite:|rule-set:)?[\w*+.\-!@:]+$", s):
+        if not re.match(r"^(?:geosite:|rule-set:)?[\\w*+.\\-!@:]+$", s):
             errs.append(f"Fake-IP 过滤格式无效：{s}")
     for h in dc.get("hosts") or []:
         e = check_host_entry(h)
@@ -1208,11 +1323,24 @@ def check_config(path, kind=None):
     if code == 0:
         return True, ""
     lines = [l for l in out.splitlines() if "level=error" in l or "level=fatal" in l or "test failed" in l.lower() or l.startswith("panic:")]
-    return False, "\n".join(lines[-3:]) or out[-400:]
+    return False, "\\n".join(lines[-3:]) or out[-400:]
 
 
-# ==== src/05_core_api.py ====
-# ---------------------------------------------------------------- 核心交互
+def _link():
+    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
+    global active_core, LGBM_URL, sh, DOMAIN_RX, adblock_providers
+    from .sb_common import active_core
+    from .core_update import LGBM_URL
+    from .sysopt import sh
+    from .adblock import DOMAIN_RX, adblock_providers
+'''
+_SRC['shunt.core'] = '''"""核心交互"""
+import json, os, threading, time, urllib.request, urllib.error
+
+from .base import CONF_DIR, CTRL, DATA_FILE, LOCK, SVC
+from .data import load, read_json, save
+from .groups import provider_nodes
+from .mihomo import build_config, check_config, write_config
 DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # 访问本机控制器绝不走系统代理
 
 
@@ -1340,8 +1468,21 @@ def refresh_after_sub(name, wait=90):
     threading.Thread(target=run, daemon=True).start()
 
 
-# ==== src/10_singbox_base.py ====
-# ---------------------------------------------------------------- sing-box 内核
+def _link():
+    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
+    global SB_CONF, active_core, build_singbox, check_sb_config, sb_hot_reload, sb_log_error, sb_sync_assets, write_sb_config
+    global sh, WD, core_alive, retest_soon
+    from .sb_common import SB_CONF, active_core
+    from .sb_config import build_singbox, check_sb_config, sb_hot_reload, sb_log_error, sb_sync_assets, write_sb_config
+    from .sysopt import sh
+    from .notify import WD, core_alive
+    from .latency import retest_soon
+'''
+_SRC['shunt.sb_common'] = '''"""sing-box 内核"""
+import os
+
+from .base import CONF_DIR, PANEL_DIR
+from .data import load
 # 面板数据（订阅、节点、规则、DNS、设备）两个内核共用；切换内核时按各自格式生成独立的配置文件：
 #   mihomo   → /etc/mihomo/config.yaml
 #   sing-box → /etc/sing-box/config.json
@@ -1373,22 +1514,27 @@ def core_conf_path(kind=None):
 
 def write_core_file(kind):
     try:
-        wfile(CORE_FILE, kind + "\n")
+        wfile(CORE_FILE, kind + "\\n")
     except Exception:
         pass
 
 
-# ==== src/11_singbox_yaml.py ====
-# ---- 极简 YAML 读取（只为解析 Clash 订阅里的 proxies 列表；面板保持零依赖）
+def _link():
+    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
+    global wfile
+    from .sysopt import wfile
+'''
+_SRC['shunt.sb_yaml'] = '''"""极简 YAML 读取（只为解析 Clash 订阅里的 proxies 列表；面板保持零依赖）"""
+import json, re
 def _y_strip_comment(s):
     q = None
     for i, ch in enumerate(s):
         if q:
-            if ch == q and (q == "'" or s[i - 1] != "\\"):
+            if ch == q and (q == "'" or s[i - 1] != "\\\\"):
                 q = None
-        elif ch in "'\"":
+        elif ch in "'\\"":
             q = ch
-        elif ch == "#" and (i == 0 or s[i - 1] in " \t"):
+        elif ch == "#" and (i == 0 or s[i - 1] in " \\t"):
             return s[:i].rstrip()
     return s.rstrip()
 
@@ -1411,9 +1557,9 @@ def _y_scalar(s):
         return False
     if low in ("null", "~"):
         return None
-    if re.fullmatch(r"[-+]?\d+", s) and not (len(s.lstrip("+-")) > 1 and s.lstrip("+-")[0] == "0"):
+    if re.fullmatch(r"[-+]?\\d+", s) and not (len(s.lstrip("+-")) > 1 and s.lstrip("+-")[0] == "0"):
         return int(s)
-    if re.fullmatch(r"[-+]?\d+\.\d+", s):
+    if re.fullmatch(r"[-+]?\\d+\\.\\d+", s):
         return float(s)
     return s
 
@@ -1421,13 +1567,13 @@ def _y_scalar(s):
 def _y_flow(s, i=0):
     """解析 {..} / [..] 流式集合，返回 (值, 结束位置)"""
     def ws(i):
-        while i < len(s) and s[i] in " \t\r\n":
+        while i < len(s) and s[i] in " \\t\\r\\n":
             i += 1
         return i
 
     def scalar(i, stops):
         i = ws(i)
-        if i < len(s) and s[i] in "'\"":
+        if i < len(s) and s[i] in "'\\"":
             q = s[i]
             j = i + 1
             while j < len(s):
@@ -1435,7 +1581,7 @@ def _y_flow(s, i=0):
                     if q == "'" and j + 1 < len(s) and s[j + 1] == "'":
                         j += 2
                         continue
-                    if q == '"' and s[j - 1] == "\\":
+                    if q == '"' and s[j - 1] == "\\\\":
                         j += 1
                         continue
                     break
@@ -1491,7 +1637,7 @@ def _y_flow(s, i=0):
 def yaml_lite(text):
     """块状 / 流式映射与列表、引号字符串、注释；不支持锚点等高级语法"""
     raw = []
-    for line in text.replace("\t", "  ").splitlines():
+    for line in text.replace("\\t", "  ").splitlines():
         if line.strip() in ("---", "...") or not line.strip() or line.lstrip().startswith("#"):
             continue
         raw.append(line)
@@ -1508,15 +1654,15 @@ def yaml_lite(text):
         lines.append((len(c) - len(c.lstrip(" ")), c.strip()))
 
     def split_kv(t):
-        if t[:1] in "'\"":
+        if t[:1] in "'\\"":
             q = t[0]
             j = t.find(q, 1)
-            while q == '"' and j > 0 and t[j - 1] == "\\":
+            while q == '"' and j > 0 and t[j - 1] == "\\\\":
                 j = t.find(q, j + 1)
             if j > 0 and t[j + 1:j + 2] == ":":
                 return _y_scalar(t[:j + 1]), t[j + 2:].strip()
             return None
-        m = re.match(r"^([^:{}\[\],]+?)\s*:(?:\s+(.*)|$)", t)
+        m = re.match(r"^([^:{}\\[\\],]+?)\\s*:(?:\\s+(.*)|$)", t)
         return (m.group(1).strip(), (m.group(2) or "").strip()) if m else None
 
     def inline(v):
@@ -1566,7 +1712,7 @@ def yaml_lite(text):
                     while i < len(lines) and lines[i][0] > ind:
                         parts.append(lines[i][1])
                         i += 1
-                    out[str(k)] = ("\n" if v.startswith("|") else " ").join(parts)
+                    out[str(k)] = ("\\n" if v.startswith("|") else " ").join(parts)
                 else:
                     out[str(k)], i = block(i, lines[i][0])
             else:
@@ -1576,10 +1722,16 @@ def yaml_lite(text):
     if not lines:
         return None
     return block(0, lines[0][0])[0]
+'''
+_SRC['shunt.sb_subs'] = '''"""订阅：sing-box 不能自己拉取订阅，由面板下载、解析成节点后写进配置"""
+import json, os, re, time, urllib.request, urllib.error
 
-
-# ==== src/12_singbox_subs.py ====
-# ---- 订阅：sing-box 不能自己拉取订阅，由面板下载、解析成节点后写进配置
+from .base import CONF_DIR, DEFAULT_EXCLUDE, PANEL_DIR
+from .data import load, read_json, safe, write_json
+from .links import b64d, parse_link, reserved_names
+from .groups import PROV, rx
+from .sb_common import SB_SUB_DIR, SB_UA
+from .sb_yaml import yaml_lite
 def sub_cache_path(name):
     return os.path.join(SB_SUB_DIR, safe(name) + ".json")
 
@@ -1597,19 +1749,19 @@ def _yaml_full(text):
 
 def _yaml_section(text, key):
     """取出顶层 key: 段落原文（到下一个顶层键为止）"""
-    lines = text.replace("\t", "  ").splitlines()
+    lines = text.replace("\\t", "  ").splitlines()
     out, on = [], False
     for ln in lines:
         top = ln[:1] not in ("", " ", "-", "#")
         if top:
-            m = re.match(r"^[\"']?([^:\"']+)[\"']?\s*:", ln)
+            m = re.match(r"^[\\"']?([^:\\"']+)[\\"']?\\s*:", ln)
             on = bool(m and m.group(1).strip() == key)
             if on:
                 out.append(f"{key}:" + ln.split(":", 1)[1])
             continue
         if on:
             out.append(ln)
-    return "\n".join(out) if out else ""
+    return "\\n".join(out) if out else ""
 
 
 def _yaml_items(sec):
@@ -1631,7 +1783,7 @@ def _yaml_items(sec):
     out = []
     for it in items:
         try:
-            v = yaml_lite("x:\n" + "\n".join(it))
+            v = yaml_lite("x:\\n" + "\\n".join(it))
             v = (v or {}).get("x")
             if isinstance(v, list) and v and isinstance(v[0], dict):
                 out.append(v[0])
@@ -1656,7 +1808,7 @@ def sub_yaml(text):
         except Exception:
             v = None
         if key == "proxies":
-            n_items = sum(1 for x in sec.splitlines() if re.match(r"^\s*-\s", x))
+            n_items = sum(1 for x in sec.splitlines() if re.match(r"^\\s*-\\s", x))
             if not isinstance(v, list) or len(v) < n_items:
                 alt = _yaml_items(sec)
                 if len(alt) > len(v if isinstance(v, list) else []):
@@ -1669,7 +1821,7 @@ def sub_yaml(text):
 
 def parse_sub_text(text, fetch=None, depth=0):
     """订阅内容 → mihomo 风格节点列表。支持 Clash YAML、sing-box JSON、Base64 / 明文分享链接"""
-    t = text.strip().lstrip("\ufeff")
+    t = text.strip().lstrip("\\ufeff")
     if t.startswith("{"):
         try:
             j = json.loads(t)
@@ -1678,7 +1830,7 @@ def parse_sub_text(text, fetch=None, depth=0):
                         if o.get("type") not in ("selector", "urltest", "direct", "block", "dns") and o.get("tag") and o.get("server")], []
         except ValueError:
             pass
-    if re.search(r"(?m)^[\"']?(proxies|proxy-providers)[\"']?\s*:", t):
+    if re.search(r"(?m)^[\\"']?(proxies|proxy-providers)[\\"']?\\s*:", t):
         y = sub_yaml(t)
         ps = y.get("proxies") if isinstance(y.get("proxies"), list) else []
         out = [p for p in ps if isinstance(p, dict) and p.get("name") and p.get("type")]
@@ -1704,11 +1856,11 @@ def parse_sub_text(text, fetch=None, depth=0):
     body = t
     if "://" not in t:
         try:
-            body = b64d(re.sub(r"\s+", "", t))
+            body = b64d(re.sub(r"\\s+", "", t))
         except Exception:
             body = ""
     out, errs = [], []
-    for i, line in enumerate([x.strip() for x in body.splitlines() if re.match(r"^\s*[A-Za-z][\w+.\-]*://", x)], 1):
+    for i, line in enumerate([x.strip() for x in body.splitlines() if re.match(r"^\\s*[A-Za-z][\\w+.\\-]*://", x)], 1):
         try:
             p = parse_link(line)
             p["name"] = (p.get("name") or f"{p['type']}-{p['server']}:{p['port']}").strip()
@@ -1821,8 +1973,15 @@ def sb_update_subs(names=None, d=None):
     return ok, bad
 
 
-# ==== src/13_singbox_nodes.py ====
-# ---- 节点：mihomo 字段 → sing-box outbound
+def _link():
+    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
+    global proxy_opener, core_alive, fetch
+    from .sysopt import proxy_opener
+    from .notify import core_alive
+    from .unlock import fetch
+'''
+_SRC['shunt.sb_nodes'] = '''"""节点：mihomo 字段 → sing-box outbound"""
+import re
 def _sb_tls(p, sni_key="servername", force=False):
     if not (p.get("tls") or force):
         return None
@@ -1860,9 +2019,9 @@ def _sb_transport(p):
                 t["headers"] = hdr
             return t
         t = {"type": "ws", "path": path}
-        m = re.search(r"[?&]ed=(\d+)", path)
+        m = re.search(r"[?&]ed=(\\d+)", path)
         if m:
-            t["path"] = re.sub(r"[?&]ed=\d+", "", path) or "/"
+            t["path"] = re.sub(r"[?&]ed=\\d+", "", path) or "/"
             t["max_early_data"], t["early_data_header_name"] = int(m.group(1)), "Sec-WebSocket-Protocol"
         elif o.get("max-early-data"):
             t["max_early_data"] = int(o["max-early-data"])
@@ -1892,7 +2051,7 @@ def _sb_transport(p):
 
 
 def _mbps(v):
-    m = re.match(r"\s*(\d+)", str(v or ""))
+    m = re.match(r"\\s*(\\d+)", str(v or ""))
     return int(m.group(1)) if m else 0
 
 
@@ -1912,7 +2071,7 @@ def sb_outbound(p, tag):
         if pl == "obfs":
             o["plugin"], o["plugin_opts"] = "obfs-local", f"obfs={po.get('mode', 'http')};obfs-host={po.get('host', 'bing.com')}"
         elif pl == "v2ray-plugin":
-            opts = [f"mode={po.get('mode', 'websocket')}"] + ([f"host={po['host']}"] if po.get("host") else []) + \
+            opts = [f"mode={po.get('mode', 'websocket')}"] + ([f"host={po['host']}"] if po.get("host") else []) + \\
                    ([f"path={po['path']}"] if po.get("path") else []) + (["tls"] if po.get("tls") else [])
             o["plugin"], o["plugin_opts"] = "v2ray-plugin", ";".join(opts)
         elif pl:
@@ -1983,10 +2142,12 @@ def sb_outbound(p, tag):
     if p.get("udp") is False and t in ("ss",):
         o["network"] = "tcp"
     return o
+'''
+_SRC['shunt.sb_rules'] = '''"""规则：mihomo 规则字符串 → sing-box 路由规则"""
+import re
 
-
-# ==== src/14_singbox_rules.py ====
-# ---- 规则：mihomo 规则字符串 → sing-box 路由规则
+from .mihomo import rule_policy_index
+from .sb_common import SB_GEO
 def _mh_domain(x):
     """mihomo 域名通配（+.a.com / *.a.com / a.*.com）→ (字段, 值)"""
     x = x.strip().lower()
@@ -1995,7 +2156,7 @@ def _mh_domain(x):
     if x.startswith("."):
         return "domain_suffix", x[1:]
     if "*" in x:
-        return "domain_regex", "^" + re.escape(x).replace(r"\*", r"[^.]+") + "$"
+        return "domain_regex", "^" + re.escape(x).replace(r"\\*", r"[^.]+") + "$"
     return "domain", x
 
 
@@ -2057,9 +2218,9 @@ class SBRules:
             ports, ranges = [], []
             for x in val.replace("/", ",").split(","):
                 x = x.strip()
-                if re.fullmatch(r"\d+", x):
+                if re.fullmatch(r"\\d+", x):
                     ports.append(int(x))
-                elif re.fullmatch(r"\d+-\d+", x):
+                elif re.fullmatch(r"\\d+-\\d+", x):
                     ranges.append(x.replace("-", ":"))
             c = {}
             if ports:
@@ -2107,7 +2268,7 @@ class SBRules:
 
     def match(self, body):
         """不含策略的匹配部分 → 规则 dict / None（不支持）/ False（永不命中）"""
-        m = re.match(r"^(AND|OR|NOT)\s*,\s*\((.*)\)$", body.strip(), re.I)
+        m = re.match(r"^(AND|OR|NOT)\\s*,\\s*\\((.*)\\)$", body.strip(), re.I)
         if m:
             return self.logical(m.group(1).upper(), m.group(2))
         typ, _, val = body.partition(",")
@@ -2145,13 +2306,17 @@ class SBRules:
             self.warn.append(f"规则「{line[:80]}」sing-box 不支持，已跳过")
             return None, False
         r = dict(r, **act)
-        needs = typ in ("GEOIP", "IP-CIDR", "IP-CIDR6") and "no-resolve" not in [x.strip().lower() for x in parts[i + 1:]] \
+        needs = typ in ("GEOIP", "IP-CIDR", "IP-CIDR6") and "no-resolve" not in [x.strip().lower() for x in parts[i + 1:]] \\
             and not r.get("ip_is_private")
         return r, needs
+'''
+_SRC['shunt.sb_dns'] = '''"""DNS"""
+import re
+from urllib.parse import urlsplit
 
-
-# ==== src/15_singbox_dns.py ====
-# ---- DNS
+from .base import DNS_DEFAULT
+from .mihomo import dns_cfg, dns_policy_of, fix_dns_policy, is_ip_addr, policy_parts
+from .sb_rules import _mh_domain
 def _sb_dns_server(addr, tag, boot, warn):
     """mihomo DNS 地址（含 #策略组）→ sing-box DNS server"""
     addr = addr.strip()
@@ -2286,8 +2451,27 @@ def sb_dns(d, cfg, policies, rs, alias, v6):
     return out, t_node, t_direct, t_proxy
 
 
-# ==== src/16_singbox_config.py ====
-# ---- 生成 sing-box 配置
+def _link():
+    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
+    global ab_sets
+    from .adblock import ab_sets
+'''
+_SRC['shunt.sb_config'] = '''"""生成 sing-box 配置"""
+import ipaddress, json, os, re, signal, time, urllib.request, urllib.error
+
+from .base import (
+    AB_DIR, BUILTIN_POLICIES, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, SVC, TUN_DEFAULT, TUN_STACKS, UA
+)
+from .data import auto_name, lb_dropped_names, lb_names, lb_old_name, load, safe, write_json
+from .groups import PROV, gcfg, rx
+from .mihomo import build_config, dns_cfg, safe_dev, write_config
+from .core import core_json
+from .sb_common import CORE_PID, SB_BIN, SB_CONF, SB_DIR, SB_RULE_DIR, SB_STATE, active_core
+from .sb_yaml import yaml_lite
+from .sb_subs import sb_provider_nodes, sb_sub_cache, sb_sub_outbounds
+from .sb_nodes import sb_outbound
+from .sb_rules import SBRules, _mh_domain
+from .sb_dns import sb_dns
 def build_singbox(d):
     """把 build_config 生成的 mihomo 结构翻译成 sing-box 配置；返回 (配置, 警告列表, 需要的规则集文件)"""
     sub_out = sb_sub_outbounds(d)
@@ -2393,10 +2577,10 @@ def build_singbox(d):
             rule_sets[name] = {"kind": "adblock", "src": os.path.join(AB_DIR, os.path.basename(prov["path"])), "path": name + ".json"}
         else:
             url = prov.get("url") or ""
-            if re.search(r"\.srs(?:\?|$)", url):
+            if re.search(r"\\.srs(?:\\?|$)", url):
                 rule_sets[name] = {"kind": "srs", "url": url, "path": f"rs-{safe(name)}.srs"}
             elif prov.get("format") == "mrs" and "meta-rules-dat" in url and "/meta/" in url:
-                rule_sets[name] = {"kind": "srs", "url": re.sub(r"\.mrs(\?|$)", r".srs\1", url.replace("/meta/", "/sing/")),
+                rule_sets[name] = {"kind": "srs", "url": re.sub(r"\\.mrs(\\?|$)", r".srs\\1", url.replace("/meta/", "/sing/")),
                                    "path": f"rs-{safe(name)}.srs"}
             elif prov.get("format") == "mrs":
                 warn.append(f"规则集「{name}」是 mihomo 专用的 .mrs 格式，sing-box 无法使用，已跳过（可改用 .srs 地址）")
@@ -2488,7 +2672,7 @@ def _rule_lines_to_source(text, behavior, fmt):
     """mihomo 规则集文本（yaml payload / text）→ sing-box source 规则集"""
     t = text.strip()
     items = []
-    if fmt == "yaml" or re.search(r"(?m)^payload\s*:", t):
+    if fmt == "yaml" or re.search(r"(?m)^payload\\s*:", t):
         y = yaml_lite(t)
         items = [str(x) for x in ((y or {}).get("payload") or [])] if isinstance(y, dict) else []
     else:
@@ -2496,7 +2680,7 @@ def _rule_lines_to_source(text, behavior, fmt):
     r = {}
     tr = SBRules({}, set(), {}, {})
     for x in items:
-        x = x.strip().strip("'\"")
+        x = x.strip().strip("'\\"")
         if behavior == "ipcidr":
             try:
                 r.setdefault("ip_cidr", []).append(str(ipaddress.ip_network(x, strict=False)))
@@ -2597,7 +2781,7 @@ def check_sb_config(path, binp=None):
     if code == 0:
         return True, ""
     lines = [l for l in out.splitlines() if "FATAL" in l or "ERROR" in l or "error" in l.lower()]
-    return False, "\n".join(lines[-3:]) or out[-400:]
+    return False, "\\n".join(lines[-3:]) or out[-400:]
 
 
 def write_active_config(d=None):
@@ -2627,7 +2811,7 @@ def sb_log_error():
         return ""
     for line in reversed(lines):
         if "FATAL" in line or " ERROR " in line:
-            return re.sub(r"^(\S+\s+){0,3}(FATAL|ERROR)(\[\d+\])?\s*", "", line.strip())[-200:]
+            return re.sub(r"^(\\S+\\s+){0,3}(FATAL|ERROR)(\\[\\d+\\])?\\s*", "", line.strip())[-200:]
     return ""
 
 
@@ -2653,7 +2837,7 @@ def sb_version(path=None):
     if not os.path.isfile(path):
         return ""
     code, out = sh(f"'{path}' version", timeout=15)
-    m = re.search(r"sing-box version (\S+)", out) if code == 0 else None
+    m = re.search(r"sing-box version (\\S+)", out) if code == 0 else None
     return m.group(1) if m else ""
 
 
@@ -2690,8 +2874,22 @@ def sb_fake_rule_providers(d):
     return {"providers": out}
 
 
-# ==== src/17_singbox_switch.py ====
-# ---- 内核切换
+def _link():
+    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
+    global nft_ok, proxy_opener, sh, core_alive
+    from .sysopt import nft_ok, proxy_opener, sh
+    from .notify import core_alive
+'''
+_SRC['shunt.sb_switch'] = '''"""内核切换"""
+import hashlib, io, json, os, re, shutil, threading, time
+
+from .base import CONF_DIR, MIHOMO_LOG, SMART_BIN, SVC
+from .data import load, update
+from .groups import PROV, gcfg
+from .mihomo import check_config, mh_bin, write_config
+from .sb_common import CORES, SB_API, SB_BIN, SB_CONF, SB_REPO, SB_STATE, active_core, write_core_file
+from .sb_subs import sb_update_subs
+from .sb_config import check_sb_config, sb_sync_assets, sb_version, write_sb_config
 def sb_arch():
     m = os.uname().machine
     return {"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64", "armv7l": "armv7", "armv8l": "armv7", "armv6l": "armv6",
@@ -2712,7 +2910,7 @@ def sb_remote_version(channel, gh):
         if channel != "stable":
             raise
     with open_url(SB_REPO + "/latest", gh, timeout=15) as r:  # API 受限时从跳转地址里取版本号
-        m = re.search(r"/tag/v?([\w.\-]+)", r.geturl())
+        m = re.search(r"/tag/v?([\\w.\\-]+)", r.geturl())
     if not m:
         raise IOError("获取 sing-box 版本号失败")
     return m.group(1)
@@ -2854,7 +3052,7 @@ def core_switch_job(kind, gh):
             update(lambda x: x.update(core=prev))
             write_core_file(prev)
             sh(SVC + " restart", timeout=90)
-            log = re.sub(r"\x1b\[[0-9;]*m", "", "\n".join(tail[-3:]))[-400:]
+            log = re.sub(r"\\x1b\\[[0-9;]*m", "", "\\n".join(tail[-3:]))[-400:]
             raise ValueError(f"{label} 30 秒内未响应，已切回 {CORES[prev]}。" + ("日志：" + log if log else "请查看核心日志"))
         threading.Thread(target=restore_selections, daemon=True).start()
         CORE_UPD.update(ok=True, message=f"已切换到 {label}" + (f"（{len(SB_STATE['warn'])} 条兼容提示见设置 → 核心）" if kind == "singbox" and SB_STATE["warn"] else ""))
@@ -2900,8 +3098,19 @@ def sb_update_job(channel, gh, force=False):
         CORE_UPD["busy"] = False
 
 
-# ==== src/20_panel_update.py ====
-# ---------------------------------------------------------------- 面板在线更新
+def _link():
+    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
+    global CORE_UPD, LGBM_FILE, _cu, bin_version, lgbm_fetch, mh_fetch, open_url, release_digest
+    global sh, WD, core_alive, notify, restore_selections, snapshot_selections
+    from .core_update import CORE_UPD, LGBM_FILE, _cu, bin_version, lgbm_fetch, mh_fetch, open_url, release_digest
+    from .sysopt import sh
+    from .notify import WD, core_alive, notify
+    from .migrate import restore_selections, snapshot_selections
+'''
+_SRC['shunt.panel_update'] = '''"""面板在线更新"""
+import hashlib, json, os, re, shutil, time, urllib.request, urllib.error
+
+from .base import BASE, PANEL_VERSION, UA
 PANEL_RAW = os.environ.get("PANEL_RAW", "https://raw.githubusercontent.com/Skycnhe/Shunt/Hk001")
 UPD_FILES = ["server.py", "index.html", "tproxy.sh", "selftest.sh", "init.d/mihomo", "init.d/mihomo-panel"]
 UPD_STATE = {"busy": False}
@@ -2918,7 +3127,7 @@ def remote_file_list(gh, commit, shas):
         f = ln.split("#", 1)[0].strip()
         if not f:
             continue
-        if not re.fullmatch(r"[\w.\-]+(/[\w.\-]+)*", f) or ".." in f.split("/") or f.startswith("."):
+        if not re.fullmatch(r"[\\w.\\-]+(/[\\w.\\-]+)*", f) or ".." in f.split("/") or f.startswith("."):
             raise ValueError(f"部署清单里有不安全的路径：{f}")
         if f not in shas:
             raise ValueError(f"部署清单里的 {f} 在仓库中不存在")
@@ -2944,7 +3153,7 @@ def gh_api(path, timeout=15):
 
 def panel_manifest():
     """返回 (commit, {路径: git blob sha1})；失败返回 (None, {})"""
-    m = re.match(r"https://raw\.githubusercontent\.com/([^/]+/[^/]+)/(.+?)/?$", PANEL_RAW)
+    m = re.match(r"https://raw\\.githubusercontent\\.com/([^/]+/[^/]+)/(.+?)/?$", PANEL_RAW)
     if not m:
         return None, {}
     try:
@@ -2957,7 +3166,7 @@ def panel_manifest():
 
 
 def git_blob_sha(data):
-    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+    return hashlib.sha1(b"blob %d\\0" % len(data) + data).hexdigest()
 
 
 def fetch_raw(f, gh, commit=None, sha=None):
@@ -3070,8 +3279,26 @@ def self_update(apply=False, gh=""):
         UPD_STATE["busy"] = False
 
 
-# ==== src/21_core_update.py ====
-# ---------------------------------------------------------------- 内核（mihomo）更新
+def _link():
+    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
+    global open_url, proxy_opener, sh, restart_self, log_err, start_update_guard
+    from .core_update import open_url
+    from .sysopt import proxy_opener, sh
+    from .https import restart_self
+    from .access import log_err
+    from .update_guard import start_update_guard
+'''
+_SRC['shunt.core_update'] = '''"""内核（mihomo）更新"""
+import hashlib, os, re, shutil, sys, threading, time, urllib.request, urllib.error
+from collections import deque
+from urllib.parse import quote
+
+from .base import CONF_DIR, MIHOMO_LOG, SVC, UA
+from .data import load
+from .mihomo import mh_bin, write_config
+from .core import reload_core
+from .sb_common import CORES, active_core
+from .panel_update import UPD_STATE, gh_api
 CORE_REPO = os.environ.get("CORE_REPO", "https://github.com/MetaCubeX/mihomo/releases")
 CORE_CHANNELS = {"stable": "latest/download", "alpha": "download/Prerelease-Alpha"}
 SMART_REPO = os.environ.get("SMART_REPO", "https://github.com/vernesong/mihomo/releases")  # 只发布 Alpha 预览版
@@ -3099,7 +3326,7 @@ def bin_version(path):
     if not os.path.isfile(path):
         return ""
     code, out = sh(f"'{path}' -v", timeout=15)
-    m = re.search(r"Mihomo\s+Meta\s+(\S+)", out) if code == 0 else None
+    m = re.search(r"Mihomo\\s+Meta\\s+(\\S+)", out) if code == 0 else None
     return m.group(1) if m else ""
 
 
@@ -3119,7 +3346,7 @@ def open_url(url, gh, timeout=20):
 
 def release_digest(repo_url, tag, name):
     """GitHub Release 资产的 SHA256（GitHub 自动计算，API 的 digest 字段）；拿不到返回空串"""
-    m = re.match(r"https://github\.com/([^/]+/[^/]+)/releases", repo_url)
+    m = re.match(r"https://github\\.com/([^/]+/[^/]+)/releases", repo_url)
     if not m:
         return ""
     try:
@@ -3150,7 +3377,7 @@ def core_remote_version(channel, gh, kind="mihomo"):
     url = f"{SMART_REPO}/download/Prerelease-Alpha/version.txt" if kind == "smart" else f"{CORE_REPO}/{CORE_CHANNELS[channel]}/version.txt"
     with open_url(url, gh) as r:
         v = r.read(200).decode(errors="ignore").strip()
-    if not re.match(r"^[\w.\-]+$", v):
+    if not re.match(r"^[\\w.\\-]+$", v):
         raise IOError("获取到的版本号无效：" + v[:40])
     return v
 
@@ -3365,8 +3592,23 @@ def core_upd_status():
     return {k: (list(v) if isinstance(v, deque) else v) for k, v in CORE_UPD.items()}
 
 
-# ==== src/22_sysopt.py ====
-# ---------------------------------------------------------------- Alpine 系统优化
+def _link():
+    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
+    global proxy_opener, sh, core_alive, notify, log_err
+    from .sysopt import proxy_opener, sh
+    from .notify import core_alive, notify
+    from .access import log_err
+'''
+_SRC['shunt.sysopt'] = '''"""Alpine 系统优化"""
+import http.client, json, os, re, ssl, subprocess, threading, time, urllib.request, urllib.error
+from collections import deque
+from urllib.parse import urlsplit
+
+from .base import MIXED, PANEL_DIR, TESTS, UA
+from .data import load, update
+from .mihomo import build_config
+from .sb_common import active_core
+from .sb_config import build_singbox
 PROC_SYS = os.environ.get("PANEL_PROC_SYS", "/proc/sys")
 SYS_ROOT = os.environ.get("PANEL_SYS_ROOT", "/sys")
 ETC = os.environ.get("PANEL_ETC", "/etc")
@@ -3379,7 +3621,7 @@ OPT_LOCK = threading.Lock()
 def mem_mb():
     try:
         with open("/proc/meminfo") as f:
-            return int(re.search(r"MemTotal:\s+(\d+)", f.read()).group(1)) // 1024
+            return int(re.search(r"MemTotal:\\s+(\\d+)", f.read()).group(1)) // 1024
     except Exception:
         return 512
 
@@ -3599,9 +3841,9 @@ def opt_status():
 def opt_fix_ulimit():
     """旧版写死 rc_ulimit="-n 1048576"：在硬上限更低的 LXC 容器里会让核心启动失败，按实际上限改小"""
     txt = rfile(OPT_CONFD)
-    m = re.search(r'^rc_ulimit="-n (\d+)"', txt, re.M)
+    m = re.search(r'^rc_ulimit="-n (\\d+)"', txt, re.M)
     if m and int(m.group(1)) > nofile_target():
-        wfile(OPT_CONFD, txt.replace(m.group(0), f'rc_ulimit="-n {nofile_target()}"') + ("" if txt.endswith("\n") else "\n"))
+        wfile(OPT_CONFD, txt.replace(m.group(0), f'rc_ulimit="-n {nofile_target()}"') + ("" if txt.endswith("\\n") else "\\n"))
 
 
 def _opt_locald(on):
@@ -3615,14 +3857,14 @@ def _opt_locald(on):
                   '  echo $MASK > "$q/rps_cpus" 2>/dev/null; echo 4096 > "$q/rps_flow_cnt" 2>/dev/null',
                   "done"]
     if "gov" in on:
-        lines += ["for g in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_governor; do echo performance > \"$g\" 2>/dev/null; done"]
+        lines += ["for g in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_governor; do echo performance > \\"$g\\" 2>/dev/null; done"]
     if "bbr" in on:
         lines += ["modprobe tcp_bbr 2>/dev/null; modprobe sch_fq 2>/dev/null"]
     if "conntrack" in on:
         lines += ["modprobe nf_conntrack 2>/dev/null"]
     # 开机时 sysctl 服务可能早于模块加载（conntrack / bbr 参数会写入失败），这里再应用一次
     lines += ["[ -f " + OPT_SYSCTL + " ] && sysctl -q -p " + OPT_SYSCTL + " 2>/dev/null", "exit 0"]
-    return "\n".join(lines) + "\n"
+    return "\\n".join(lines) + "\\n"
 
 
 def opt_apply(ids):
@@ -3641,7 +3883,7 @@ def opt_apply(ids):
             if "tcp_bbr" not in rfile(mf).split():
                 try:
                     with open(mf, "a") as f:
-                        f.write("tcp_bbr\n")
+                        f.write("tcp_bbr\\n")
                     mods.append("tcp_bbr")
                 except OSError as e:
                     errs.append(f"写入 /etc/modules 失败：{e}")
@@ -3664,7 +3906,7 @@ def opt_apply(ids):
             os.makedirs(os.path.dirname(OPT_SYSCTL), exist_ok=True)
             if len(conf) > 1:
                 with open(OPT_SYSCTL, "w") as f:
-                    f.write("\n".join(conf) + "\n")
+                    f.write("\\n".join(conf) + "\\n")
             elif os.path.exists(OPT_SYSCTL):
                 os.remove(OPT_SYSCTL)
         except OSError as e:
@@ -3672,13 +3914,13 @@ def opt_apply(ids):
         # mihomo 文件句柄
         try:
             txt = rfile(OPT_CONFD)
-            txt = "\n".join(l for l in txt.splitlines() if not l.startswith("rc_ulimit=")).strip()
+            txt = "\\n".join(l for l in txt.splitlines() if not l.startswith("rc_ulimit=")).strip()
             if "fd" in want:
-                txt = (txt + "\n" if txt else "") + f'rc_ulimit="-n {nofile_target()}"'
+                txt = (txt + "\\n" if txt else "") + f'rc_ulimit="-n {nofile_target()}"'
             if txt or os.path.exists(OPT_CONFD):
                 os.makedirs(os.path.dirname(OPT_CONFD), exist_ok=True)
                 with open(OPT_CONFD, "w") as f:
-                    f.write(txt + "\n" if txt else "")
+                    f.write(txt + "\\n" if txt else "")
         except OSError as e:
             errs.append(f"写入 {OPT_CONFD} 失败：{e}")
         # RPS
@@ -3725,7 +3967,7 @@ def opt_apply(ids):
             mf = os.path.join(ETC, "modules")
             if mods:
                 ls = [l for l in rfile(mf).splitlines() if l.strip() not in mods]
-                wfile(mf, "\n".join(ls) + ("\n" if ls else ""))
+                wfile(mf, "\\n".join(ls) + ("\\n" if ls else ""))
             orig, mods = {}, []
         update(lambda x: x.update({"sysopt": want, "sysopt_orig": orig, "sysopt_mods": mods}))
         fd_changed = ("fd" in want) != ("fd" in prev)
@@ -3869,7 +4111,7 @@ FAV_FAIL = {}
 
 
 def _is_img(b):
-    return b[:4] in (b"\x00\x00\x01\x00", b"\x89PNG") or b[:3] == b"GIF" or b[:2] == b"\xff\xd8" or b[:4] == b"RIFF" or b.lstrip()[:4] == b"<svg"
+    return b[:4] in (b"\\x00\\x00\\x01\\x00", b"\\x89PNG") or b[:3] == b"GIF" or b[:2] == b"\\xff\\xd8" or b[:4] == b"RIFF" or b.lstrip()[:4] == b"<svg"
 
 
 def favicon(url):
@@ -3881,7 +4123,7 @@ def favicon(url):
         if time.time() - os.path.getmtime(path) < 7 * 86400:
             with open(path, "rb") as f:
                 b = f.read()
-            return b, ("image/svg+xml" if b.lstrip()[:4] == b"<svg" else "image/x-icon" if b[:4] == b"\x00\x00\x01\x00" else "image/png")
+            return b, ("image/svg+xml" if b.lstrip()[:4] == b"<svg" else "image/x-icon" if b[:4] == b"\\x00\\x00\\x01\\x00" else "image/png")
     except OSError:
         pass
     if time.time() - FAV_FAIL.get(host, 0) < 3600:
@@ -3902,10 +4144,11 @@ def favicon(url):
             pass
     FAV_FAIL[host] = time.time()
     return None, None
+'''
+_SRC['shunt.auth'] = '''"""认证：PBKDF2 密码 + 随机会话"""
+import hashlib, hmac, json, os, secrets, threading, time
 
-
-# ==== src/30_auth.py ====
-# ---------------------------------------------------------------- 认证：PBKDF2 密码 + 随机会话
+from .base import PANEL_DIR
 PW_ITER = 60000  # 低端 ARM 上约 0.3 秒，只在登录 / 改密时计算
 SESS_FILE = os.path.join(PANEL_DIR, "sessions.json")
 SESS_TTL = 30 * 86400  # 会话 30 天无访问即过期（每次访问顺延）
@@ -4006,15 +4249,22 @@ def ticket_new():
 def ticket_use(t):
     exp = TICKETS.pop(str(t or ""), 0)
     return exp > time.time()
+'''
+_SRC['shunt.notify'] = '''"""Telegram 通知"""
+import json, socket, threading, time, urllib.request, urllib.error
+from collections import deque
+from urllib.parse import quote
 
-
-# ==== src/31_notify_watchdog.py ====
-# ---------------------------------------------------------------- Telegram 通知
+from .base import G_MANUAL, HC, NOTIFY_FILE, SVC, TPROXY_SH
+from .data import load, read_json, write_json
+from .core import core, core_json
+from .core_update import CORE_UPD
+from .sysopt import proxy_opener, sh
 def tg_send(text, d=None):
     d = d or load()
     if not d.get("tg_token") or not d.get("tg_chat"):
         return False, "未配置 Telegram"
-    body = json.dumps({"chat_id": d["tg_chat"], "text": f"[Shunt@{socket.gethostname()}]\n{text}"}).encode()
+    body = json.dumps({"chat_id": d["tg_chat"], "text": f"[Shunt@{socket.gethostname()}]\\n{text}"}).encode()
     url = f"https://api.telegram.org/bot{d['tg_token']}/sendMessage"
     err = ""
     for use_proxy in (True, False):  # 先走代理，核心挂了再直连
@@ -4118,10 +4368,18 @@ def check_nodes():
         st["allnodes"] = all_down
         write_json(NOTIFY_FILE, st)
         notify("⚠️ 节点选择中的所有节点均测速超时，请检查订阅或网络" if all_down else "✅ 节点已恢复可用")
+'''
+_SRC['shunt.latency'] = '''"""节点延迟缓存"""
+import base64, json, os, re, threading, time, urllib.request, urllib.error
+from urllib.parse import quote
 
-
-# ==== src/32_latency.py ====
-# ---------------------------------------------------------------- 节点延迟缓存
+from .base import G_MANUAL, G_SEL, HC, NOTIFY_FILE, PANEL_DIR, UA, WD_INTERVAL
+from .data import load, read_json, write_json
+from .core import core, core_json, refresh_regions
+from .sb_common import active_core
+from .sb_config import sb_fake_providers
+from .sysopt import proxy_opener
+from .notify import WD, check_nodes, core_alive, load_notified, notify, watchdog_tick
 # 核心只在内存里保存最近几次测速记录：重载配置、重启、切换内核后全部清空，订阅节点的记录又分散在
 # /proxies 与 /providers/proxies 两处，前端轮询时就会「一会有一会没有」。面板把每个节点最近一次的
 # 测速结果（任意测速地址中时间最新的一条）缓存到文件，核心暂时没有记录时用缓存补上。
@@ -4209,7 +4467,7 @@ def retest_soon(wait=6):
 
 def bg_save(data_url):
     """data:image/...;base64,xxx → 保存背景图；只接受 JPEG / PNG / WebP / GIF"""
-    m = re.match(r"data:image/[\w.+-]+;base64,(.+)$", str(data_url or ""), re.S)
+    m = re.match(r"data:image/[\\w.+-]+;base64,(.+)$", str(data_url or ""), re.S)
     if not m:
         return False, "图片格式不正确"
     try:
@@ -4255,7 +4513,7 @@ def bg_meta_save(m):
 def bg_fetch(url):
     """由路由器下载图片链接保存为背景图（先走代理，失败再直连）。必应每日壁纸这类接口会 302 跳到真实图片，urllib 自动跟随"""
     url = str(url or "").strip()
-    if not re.match(r"https?://\S+$", url):
+    if not re.match(r"https?://\\S+$", url):
         return False, "请输入 http(s) 开头的图片链接"
     raw, err = None, ""
     for proxy in (True, False):
@@ -4283,9 +4541,9 @@ def bg_fetch(url):
 
 
 def bg_type(head):
-    if head[:3] == b"\xff\xd8\xff":
+    if head[:3] == b"\\xff\\xd8\\xff":
         return "image/jpeg"
-    if head[:8] == b"\x89PNG\r\n\x1a\n":
+    if head[:8] == b"\\x89PNG\\r\\n\\x1a\\n":
         return "image/png"
     if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
         return "image/webp"
@@ -4366,10 +4624,13 @@ def monitor_loop():
                         fn()
                 except Exception as e:
                     print("monitor error", fn.__name__, e, flush=True)
+'''
+_SRC['shunt.stats'] = '''"""流量统计"""
+import copy, threading, time
 
-
-# ==== src/33_stats.py ====
-# ---------------------------------------------------------------- 流量统计
+from .base import STATS_FILE
+from .data import read_json, write_json
+from .core import core_json
 class Stats:
     def __init__(self):
         self.lock = threading.Lock()
@@ -4466,10 +4727,12 @@ def arp_table():
 
 
 STATS = None
+'''
+_SRC['shunt.unlock'] = '''"""流媒体解锁检测"""
+import http.client, re, threading, urllib.request, urllib.error
 
-
-# ==== src/34_unlock.py ====
-# ---------------------------------------------------------------- 流媒体解锁检测
+from .base import UA
+from .sysopt import proxy_opener
 def fetch(url, timeout=10, headers=None):
     h = {"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"}
     h.update(headers or {})
@@ -4493,7 +4756,7 @@ def cf_loc(host):
     try:
         _, _, b = fetch(f"https://{host}/cdn-cgi/trace", timeout=8)
         m = re.search(r"^loc=([A-Z]{2})", b, re.M)
-        ip = re.search(r"^ip=(\S+)", b, re.M)
+        ip = re.search(r"^ip=(\\S+)", b, re.M)
         return (m.group(1) if m else ""), (ip.group(1) if ip else "")
     except Exception:
         return "", ""
@@ -4506,8 +4769,8 @@ def ck_egress():
 
 def ck_netflix():
     code, url, body = fetch("https://www.netflix.com/title/81280792")
-    m = re.search(r'"requestCountry":\{"id":"([A-Z]{2})"', body) or re.search(r'"country":"([A-Z]{2})"', body) \
-        or re.search(r"netflix\.com/([a-z]{2})(?:-[a-z]{2})?/title", url)
+    m = re.search(r'"requestCountry":\\{"id":"([A-Z]{2})"', body) or re.search(r'"country":"([A-Z]{2})"', body) \\
+        or re.search(r"netflix\\.com/([a-z]{2})(?:-[a-z]{2})?/title", url)
     region = (m.group(1).upper() if m else "")
     if code == 200:
         return {"ok": True, "text": "完整解锁", "region": region}
@@ -4536,8 +4799,8 @@ def ck_disney():
     code, url, body = fetch("https://www.disneyplus.com/")
     if "unavailable" in url or "not available in your region" in body.lower():
         return {"ok": False, "text": "地区不支持"}
-    m = re.search(r'"countryCode"\s*:\s*"([A-Z]{2})"', body) or re.search(r'Region:\s*([A-Z]{2})', body) \
-        or re.search(r"disneyplus\.com/(?:[a-z]{2}-)?([a-z]{2})(?:/|$)", url)
+    m = re.search(r'"countryCode"\\s*:\\s*"([A-Z]{2})"', body) or re.search(r'Region:\\s*([A-Z]{2})', body) \\
+        or re.search(r"disneyplus\\.com/(?:[a-z]{2}-)?([a-z]{2})(?:/|$)", url)
     region = m.group(1).upper() if m else ""
     if code == 200:
         return {"ok": True, "text": "可访问" if not region else "可用", "region": region}
@@ -4559,7 +4822,7 @@ def ck_youtube():
 
 def ck_gemini():
     code, _, body = fetch("https://gemini.google.com/")
-    if re.search(r'45631641(?:,null,true|\\?":true)', body):
+    if re.search(r'45631641(?:,null,true|\\\\?":true)', body):
         return {"ok": True, "text": "可用"}
     if code == 200:
         return {"ok": False, "text": "地区可能不支持"}
@@ -4584,10 +4847,13 @@ def unlock_test():
     [t.start() for t in ths]
     [t.join(30) for t in ths]
     return [o or {"name": UNLOCK[i][0], "ok": False, "text": "超时"} for i, o in enumerate(out)]
+'''
+_SRC['shunt.ruletest'] = '''"""规则测试"""
+import ipaddress, json, re, socket, threading, time
+from urllib.parse import quote
 
-
-# ==== src/35_ruletest.py ====
-# ---------------------------------------------------------------- 规则测试
+from .base import MIXED
+from .core import core_json
 def clean_target(t):
     t = t.strip()
     t = re.sub(r"^[a-z]+://", "", t, flags=re.I).split("/")[0].split("?")[0]
@@ -4630,12 +4896,12 @@ def live_rule(host):
     try:
         hp = f"[{host}]:443" if ":" in host else f"{host}:443"
         port = str(s.getsockname()[1])
-        s.sendall(f"CONNECT {hp} HTTP/1.1\r\nHost: {hp}\r\n\r\n".encode())
+        s.sendall(f"CONNECT {hp} HTTP/1.1\\r\\nHost: {hp}\\r\\n\\r\\n".encode())
         try:
-            first = s.recv(256).decode("latin1").split("\r\n")[0]
+            first = s.recv(256).decode("latin1").split("\\r\\n")[0]
         except socket.timeout:
             first = "(等待超时)"
-        src = re.compile(r"(?:127\.0\.0\.1|\[?::1\]?):" + port + r"\b")
+        src = re.compile(r"(?:127\\.0\\.0\\.1|\\[?::1\\]?):" + port + r"\\b")
         for _ in range(10):
             c = core_json("/connections") or {}
             for x in c.get("connections") or []:
@@ -4650,12 +4916,12 @@ def live_rule(host):
                     continue
                 if not src.search(msg):
                     continue
-                m = re.search(r"dial (.+?) \(match (\w+)/(.*?)\) .*? error: (.*)", msg)
+                m = re.search(r"dial (.+?) \\(match (\\w+)/(.*?)\\) .*? error: (.*)", msg)
                 if m:
                     proxies = (core_json("/proxies") or {}).get("proxies") or {}
                     return {"method": "live", "rule": m.group(2), "payload": m.group(3),
                             "chain": chain_of(m.group(1), proxies), "note": "节点连接失败：" + m.group(4)[:200]}
-                m = re.search(r"match (\w+)\((.*?)\) using (.+)$", msg)
+                m = re.search(r"match (\\w+)\\((.*?)\\) using (.+)$", msg)
                 if m:
                     proxies = (core_json("/proxies") or {}).get("proxies") or {}
                     pol = m.group(3).split("[")[0].strip()
@@ -4751,8 +5017,16 @@ def rule_test(target):
     return res
 
 
-# ==== src/36_logstream.py ====
-# ---------------------------------------------------------------- 实时日志 (SSE)
+def _link():
+    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
+    global core_stream
+    from .logstream import core_stream
+'''
+_SRC['shunt.logstream'] = '''"""实时日志 (SSE)"""
+import socket
+
+from .base import CTRL_HOST, CTRL_PORT
+from .data import load
 def core_stream(path, sink, stop, idle=None):
     """以原始 socket 读取 mihomo 的 chunked JSON 行流，逐行回调 sink；stop 被置位或连接断开时结束。
     idle: 超过该秒数没有数据视为断线（/traffic /memory 每秒推送，可用来发现半开连接）"""
@@ -4760,13 +5034,13 @@ def core_stream(path, sink, stop, idle=None):
     s = socket.create_connection((CTRL_HOST, CTRL_PORT), timeout=10)
     stop["sock"] = s
     s.settimeout(idle)
-    s.sendall(f"GET {path} HTTP/1.1\r\nHost: {CTRL_HOST}\r\nAuthorization: Bearer {d['secret']}\r\nConnection: close\r\n\r\n".encode())
+    s.sendall(f"GET {path} HTTP/1.1\\r\\nHost: {CTRL_HOST}\\r\\nAuthorization: Bearer {d['secret']}\\r\\nConnection: close\\r\\n\\r\\n".encode())
     f = s.makefile("rb")
     status = f.readline().decode("latin1")
     chunked = False
     while True:
         h = f.readline()
-        if h in (b"\r\n", b"\n", b""):
+        if h in (b"\\r\\n", b"\\n", b""):
             break
         if h.lower().startswith(b"transfer-encoding:") and b"chunked" in h.lower():
             chunked = True
@@ -4788,21 +5062,32 @@ def core_stream(path, sink, stop, idle=None):
             if not data:
                 break
         buf += data
-        while b"\n" in buf:
-            line, buf = buf.split(b"\n", 1)
+        while b"\\n" in buf:
+            line, buf = buf.split(b"\\n", 1)
             if line.strip():
                 sink(line.decode("utf-8", "ignore"))
+'''
+_SRC['shunt.adblock'] = '''"""广告拦截（AdGuard Home 风格的域名过滤）"""
+import copy, hashlib, json, os, re, secrets, threading, time, urllib.request, urllib.error
+from collections import deque
+from urllib.parse import quote
 
-
-# ==== src/40_adblock.py ====
-# ---------------------------------------------------------------- 广告拦截（AdGuard Home 风格的域名过滤）
+from .base import AB_DIR, AB_STATS_FILE, CONF_DIR, UA
+from .data import load, read_json, write_json
+from .mihomo import build_config
+from .core import core, reload_core
+from .sb_common import active_core
+from .sb_config import sb_sync_assets
+from .sysopt import proxy_opener
+from .ruletest import clean_target
+from .logstream import core_stream
 # 订阅 AdGuard/ABP（||domain^、@@||domain^）、hosts（0.0.0.0 domain）与纯域名列表，转换为 mihomo
 # behavior=domain / format=text 的本地 rule-provider 文件：
 #   ||a.com^ → "+.a.com"（含子域）；hosts / 纯域名 → "a.com"（仅该域名，与 AdGuard Home 语义一致）
 # 规则：AND,((RULE-SET,ad-xxx),(NOT,((RULE-SET,ad-allow)))),REJECT  —— 白名单优先，且被放行的域名继续走正常分流
-DOMAIN_RX = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9_](?:[a-z0-9_\-]{0,61}[a-z0-9_])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9\-]{1,59})$")
-CLASH_RX = re.compile(r"^(domain|domain-suffix),([^,\s]+)(?:,.*)?$")
-ABP_RX = re.compile(r"^(@@)?\|\|([^\^/|$]+)\^\|?(?:\$(.*))?$")
+DOMAIN_RX = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9_](?:[a-z0-9_\\-]{0,61}[a-z0-9_])?\\.)+(?:[a-z]{2,63}|xn--[a-z0-9\\-]{1,59})$")
+CLASH_RX = re.compile(r"^(domain|domain-suffix),([^,\\s]+)(?:,.*)?$")
+ABP_RX = re.compile(r"^(@@)?\\|\\|([^\\^/|$]+)\\^\\|?(?:\\$(.*))?$")
 HOSTS_IPS = {"0.0.0.0", "127.0.0.1", "::", "::1", "0:0:0:0:0:0:0:0", "::0", "0", "255.255.255.255"}
 HOSTS_SKIP = {"localhost", "localhost.localdomain", "local", "broadcasthost", "ip6-localhost", "ip6-loopback",
               "ip6-localnet", "ip6-mcastprefix", "ip6-allnodes", "ip6-allrouters", "ip6-allhosts", "0.0.0.0"}
@@ -4840,7 +5125,7 @@ def parse_filter(text, plain_suffix=False):
         if low.startswith("payload:"):
             continue
         if low.startswith("- "):  # Clash YAML payload：  - DOMAIN-SUFFIX,a.com / - '+.a.com'
-            low = low[2:].strip().strip("'\"")
+            low = low[2:].strip().strip("'\\"")
             if not low:
                 continue
         cm = CLASH_RX.match(low)
@@ -4873,7 +5158,7 @@ def parse_filter(text, plain_suffix=False):
                 continue
             (as_ if allow else bs).add(dom)
             continue
-        if low[0] in "|/" or any(c in low for c in "$^*/\\"):
+        if low[0] in "|/" or any(c in low for c in "$^*/\\\\"):
             skipped += 1  # 正则、URL 规则、通配符等
             continue
         parts = low.split("#", 1)[0].split()
@@ -4918,7 +5203,7 @@ def domain_lines(suffix, exact):
 def write_lines(path, lines):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path + ".tmp", "w") as f:
-        f.write("\n".join(lines) + ("\n" if lines else ""))
+        f.write("\\n".join(lines) + ("\\n" if lines else ""))
     os.replace(path + ".tmp", path)
 
 
@@ -4958,9 +5243,9 @@ def ab_fetch(lst):
 def ab_compose(d):
     """根据用户黑/白名单与各列表的 @@ 规则生成 custom.txt / allow.txt"""
     ab = d["adblock"]
-    bs, be, _, _, _ = parse_filter("\n".join(ab.get("black") or []), plain_suffix=True)
+    bs, be, _, _, _ = parse_filter("\\n".join(ab.get("black") or []), plain_suffix=True)
     write_lines(os.path.join(AB_DIR, "custom.txt"), domain_lines(bs, be)[0])
-    ws, we, was, wae, _ = parse_filter("\n".join(ab.get("white") or []), plain_suffix=True)
+    ws, we, was, wae, _ = parse_filter("\\n".join(ab.get("white") or []), plain_suffix=True)
     suffix, exact = ws | was, we | wae
     for l in ab.get("lists", []):
         if not l.get("enabled", True):
@@ -5102,7 +5387,7 @@ def ab_check(target):
     ab = d["adblock"]
     names = {l["id"]: l["name"] for l in ab["lists"]}
     blocked, allowed = [], []
-    ws, we, was, wae, _ = parse_filter("\n".join(ab.get("white") or []), plain_suffix=True)
+    ws, we, was, wae, _ = parse_filter("\\n".join(ab.get("white") or []), plain_suffix=True)
     r = ab_match(host, (ws | was, we | wae))
     if r:
         allowed.append({"name": "自定义白名单", "rule": r})
@@ -5112,7 +5397,7 @@ def ab_check(target):
         r = ab_match(host, ab_sets(os.path.join(AB_DIR, l["id"] + ".allow.txt")))
         if r:
             allowed.append({"name": l["name"] + "（@@ 例外）", "rule": r})
-    bs, be, _, _, _ = parse_filter("\n".join(ab.get("black") or []), plain_suffix=True)
+    bs, be, _, _, _ = parse_filter("\\n".join(ab.get("black") or []), plain_suffix=True)
     r = ab_match(host, (bs, be))
     if r:
         blocked.append({"name": "自定义黑名单", "rule": r})
@@ -5128,8 +5413,8 @@ def ab_check(target):
 
 class AdStats:
     """订阅 mihomo info 日志，统计命中广告规则 (REJECT) 的连接；另按小时统计全部连接请求数、拦截数和 DNS 解析耗时（概览「域名过滤」）"""
-    RX = re.compile(r"--> (\S+?):\d+ match .*?RuleSet[,(](ad-[0-9a-z]+)\).* using REJECT")
-    RX_ALL = re.compile(r"--> \S+ (?:match|doesn't match)")
+    RX = re.compile(r"--> (\\S+?):\\d+ match .*?RuleSet[,(](ad-[0-9a-z]+)\\).* using REJECT")
+    RX_ALL = re.compile(r"--> \\S+ (?:match|doesn't match)")
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -5183,12 +5468,12 @@ class AdStats:
         if time.time() - self.saved > 60:
             self.flush()
 
-    SB_LINE = re.compile(r"^\[(\d+) \d+ms\] (.*)$")
-    SB_TO = re.compile(r"inbound/(\w+)\[([^\]]+)\]: inbound (?:packet )?connection to (\S+?):\d+$")
-    SB_SNIFF = re.compile(r"router: sniffed (?:packet )?protocol: \w+, domain: (\S+)")
-    SB_REJ = re.compile(r"router: match\[\d+\] .*?\brule_set=(ad-[0-9a-z]+).*=> reject")
-    SB_QN = re.compile(r"dns: exchange (\S+?)\.? IN ")
-    SB_DREJ = re.compile(r"dns: match\[\d+\] .*?\brule_set=(ad-[0-9a-z]+).*=> (?:predefined|reject)")
+    SB_LINE = re.compile(r"^\\[(\\d+) \\d+ms\\] (.*)$")
+    SB_TO = re.compile(r"inbound/(\\w+)\\[([^\\]]+)\\]: inbound (?:packet )?connection to (\\S+?):\\d+$")
+    SB_SNIFF = re.compile(r"router: sniffed (?:packet )?protocol: \\w+, domain: (\\S+)")
+    SB_REJ = re.compile(r"router: match\\[\\d+\\] .*?\\brule_set=(ad-[0-9a-z]+).*=> reject")
+    SB_QN = re.compile(r"dns: exchange (\\S+?)\\.? IN ")
+    SB_DREJ = re.compile(r"dns: match\\[\\d+\\] .*?\\brule_set=(ad-[0-9a-z]+).*=> (?:predefined|reject)")
 
     def sink_sb(self, line):
         """sing-box debug 日志：按连接 ID 记住目标域名，命中 ad- 规则集的 reject / DNS 拦截记为一次拦截"""
@@ -5317,16 +5602,25 @@ class AdStats:
 AD_STATS = None
 
 
-# ==== src/41_live.py ====
-# ---------------------------------------------------------------- 实时速率 / 内存（订阅 /traffic 与 /memory 流）
+def _link():
+    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
+    global udp_dns_query, log_err
+    from .live import udp_dns_query
+    from .access import log_err
+'''
+_SRC['shunt.live'] = '''"""实时速率 / 内存（订阅 /traffic 与 /memory 流）"""
+import json, secrets, socket, time
+
+from .core import core_json
+from .logstream import core_stream
 def udp_dns_query(name, port=1053, host="127.0.0.1", timeout=8):
     """向本机 DNS 端口发一个 A 记录查询；收到同 ID 的应答（含 NXDOMAIN）即视为成功"""
     qid = secrets.randbits(16)
-    pkt = qid.to_bytes(2, "big") + b"\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
+    pkt = qid.to_bytes(2, "big") + b"\\x01\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00"
     for lab in name.strip(".").split("."):
         b = lab.encode("idna") if lab else b""
         pkt += bytes([len(b)]) + b
-    pkt += b"\x00\x00\x01\x00\x01"
+    pkt += b"\\x00\\x00\\x01\\x00\\x01"
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.settimeout(timeout)
     try:
@@ -5396,10 +5690,12 @@ def memory_once():
         pass
     vals = [g for g in got if g.get("inuse")]
     return vals[-1] if vals else {"inuse": 0, "oslimit": 0}
+'''
+_SRC['shunt.logclean'] = '''"""日志自动清理"""
+import os, time
 
-
-# ==== src/42_logclean.py ====
-# ---------------------------------------------------------------- 日志自动清理
+from .base import LOG_FILES
+from .data import load
 LOG_STATE = {"last": 0, "trimmed": []}
 
 
@@ -5449,10 +5745,22 @@ def log_loop():
         except Exception as e:
             print("log clean error", e, flush=True)
         time.sleep(60)
+'''
+_SRC['shunt.schedule'] = '''"""定时任务"""
+import json, time
+from collections import deque
+from urllib.parse import quote
 
-
-# ==== src/43_schedule.py ====
-# ---------------------------------------------------------------- 定时任务
+from .base import G_MANUAL, HC, SVC
+from .data import load
+from .core import core, core_json, refresh_regions, reload_core
+from .sb_common import active_core
+from .sb_subs import sb_sub_cache, sb_update_subs
+from .sb_config import sb_sync_assets
+from .sysopt import sh
+from .notify import WD
+from .latency import bg_fetch, bg_meta, bg_meta_save
+from .adblock import AB_STATE, ab_meta, adblock_update
 SCHED = {"events": deque(maxlen=30), "done": {}}
 
 
@@ -5561,10 +5869,15 @@ def sched_loop():
 def ab_last_update():
     m = ab_meta()
     return max([v.get("updated", 0) for v in m.values()] or [0])
+'''
+_SRC['shunt.devices'] = '''"""设备名称"""
+import ipaddress, os, re, socket, threading, time
+from collections import deque
 
-
-# ==== src/44_devices.py ====
-# ---------------------------------------------------------------- 设备名称
+from .base import LEASE_FILES, MIHOMO_LOG
+from .data import load
+from .stats import arp_table
+from .ruletest import is_ip
 RDNS = {}  # ip -> (name, 过期时间)
 RDNS_Q = deque()
 RDNS_EV = threading.Event()
@@ -5657,15 +5970,22 @@ def tun_runtime_error(dev, wait=4):
     except OSError:
         pass
     return f"未检测到网卡 {dev}"
+'''
+_SRC['shunt.diag'] = '''"""网络诊断"""
+import json, os, secrets, shutil, socket, threading, time, urllib.request, urllib.error
 
-
-# ==== src/45_diag.py ====
-# ---------------------------------------------------------------- 网络诊断
+from .base import CONF_DIR, TPROXY_SH
+from .data import load
+from .mihomo import check_config, mh_bin, safe_dev
+from .core import core
+from .sb_common import CORES, SB_BIN, SB_CONF, SB_STATE, active_core
+from .sb_config import check_sb_config
+from .sysopt import proxy_opener, sh
 def dns_probe(server=("127.0.0.1", 1053), name="www.baidu.com"):
     """向 mihomo DNS 端口发一个最小的 A 查询"""
     qid = secrets.randbits(16)
-    pkt = qid.to_bytes(2, "big") + b"\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
-    pkt += b"".join(bytes([len(x)]) + x.encode() for x in name.split(".")) + b"\x00\x00\x01\x00\x01"
+    pkt = qid.to_bytes(2, "big") + b"\\x01\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00"
+    pkt += b"".join(bytes([len(x)]) + x.encode() for x in name.split(".")) + b"\\x00\\x00\\x01\\x00\\x01"
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.settimeout(4)
     try:
@@ -5780,11 +6100,24 @@ def diagnose():
     return out
 
 
-# ==== src/46_dnsleak.py ====
-# ---------------------------------------------------------------- DNS 防泄露
+def _link():
+    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
+    global ERRS
+    from .access import ERRS
+'''
+_SRC['shunt.dnsleak'] = '''"""DNS 防泄露"""
+import copy, ipaddress, json, os, re, secrets, socket, threading, time
+
+from .base import CN_DNS, DEFAULT_FAKE_FILTER, DNS_DEFAULT, G_SEL, TPROXY_SH
+from .data import load
+from .mihomo import dns_cfg, dns_policy_of, policy_parts
+from .core import core
+from .sysopt import sh
+from .notify import core_alive
+from .unlock import fetch
 RESOLV_FILE = os.environ.get("PANEL_RESOLV", "/etc/resolv.conf")
 CN_GEO = re.compile(r"(?i)^(?:cn|private|.*@cn|.*-cn|tld-cn|geolocation-cn)$")
-CN_DOMAIN = re.compile(r"(?i)^[+*.]*[\w.\-]*\.(?:cn|lan|local|arpa|home|localdomain)$")
+CN_DOMAIN = re.compile(r"(?i)^[+*.]*[\\w.\\-]*\\.(?:cn|lan|local|arpa|home|localdomain)$")
 
 
 def is_cn_dns(x):
@@ -5827,7 +6160,7 @@ def host_match(pattern, name):
     if pattern.startswith("."):
         return name.endswith(pattern)
     if "*" in pattern:
-        return bool(re.fullmatch(re.escape(pattern).replace(r"\*", r"[^.]+"), name))
+        return bool(re.fullmatch(re.escape(pattern).replace(r"\\*", r"[^.]+"), name))
     return name == pattern
 
 
@@ -5855,8 +6188,8 @@ def dns_route(name, d):
 def dns_probe_ip(name, server=("127.0.0.1", 1053)):
     """向 mihomo DNS 端口查询 A 记录，返回 (rcode, [IP])"""
     qid = secrets.randbits(16)
-    pkt = qid.to_bytes(2, "big") + b"\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
-    pkt += b"".join(bytes([len(x)]) + x.encode() for x in name.split(".")) + b"\x00\x00\x01\x00\x01"
+    pkt = qid.to_bytes(2, "big") + b"\\x01\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00"
+    pkt += b"".join(bytes([len(x)]) + x.encode() for x in name.split(".")) + b"\\x00\\x00\\x01\\x00\\x01"
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.settimeout(4)
     try:
@@ -6009,10 +6342,16 @@ def leak_check(live=True):
     out["bad"] = sum(1 for x in items if x["ok"] is False)
     out["warn"] = sum(1 for x in items if x["ok"] == "warn")
     return out
+'''
+_SRC['shunt.migrate'] = '''"""v5 → v6 升级：保留节点选择"""
+import os, time
+from urllib.parse import quote
 
-
-# ==== src/50_migrate.py ====
-# ---------------------------------------------------------------- v5 → v6 升级：保留节点选择
+from .base import CONF_DIR, PANEL_DIR
+from .data import legacy_map, load, read_json, write_json
+from .core import core, core_json, reload_core
+from .sb_common import active_core
+from .notify import core_alive
 SEL_FILE = os.path.join(PANEL_DIR, "selected.json")
 
 
@@ -6067,10 +6406,9 @@ def startup_migrate():
         time.sleep(1)
     if os.path.isfile(SEL_FILE):
         restore_selections()
-
-
-# ==== src/51_login.py ====
-# ---------------------------------------------------------------- 登录防爆破
+'''
+_SRC['shunt.login'] = '''"""登录防爆破"""
+import time
 FAILS = {}  # ip -> [失败次数, 解锁时间]
 
 
@@ -6092,10 +6430,13 @@ def login_failed(ip):
     e[0] += 1
     if e[0] >= 5:
         e[1] = time.time() + 600
+'''
+_SRC['shunt.https'] = '''"""HTTPS"""
+import os, socket, ssl, sys
+from http.server import ThreadingHTTPServer
 
-
-# ==== src/52_https.py ====
-# ---------------------------------------------------------------- HTTPS
+from .base import CERT, KEY, PANEL_DIR
+from .sysopt import sh
 def gen_cert():
     if not sh("command -v openssl")[1]:
         sh("apk add --no-cache openssl", timeout=120)
@@ -6123,10 +6464,12 @@ class Server(ThreadingHTTPServer):
 
 def restart_self():
     sh("(sleep 1; %s) >/dev/null 2>&1 &" % os.environ.get("PANEL_RESTART", "rc-service mihomo-panel restart"))
+'''
+_SRC['shunt.access'] = '''"""访问控制"""
+import ipaddress, os, time
+from collections import deque
 
-
-# ==== src/53_access.py ====
-# ---------------------------------------------------------------- 访问控制
+from .data import load
 # 面板没有密码：只接受局域网来源，Host 必须是 IP / 局域网名（防 DNS 重绑定），改动类请求必须带自定义头（防跨站请求）
 LAN_EXTRA = [ipaddress.ip_network(n) for n in ("100.64.0.0/10",)]  # CGNAT / Tailscale
 LAN_SUFFIX = (".lan", ".local", ".home", ".internal", ".home.arpa", ".localdomain", ".router", ".intranet", ".ts.net")
@@ -6190,12 +6533,17 @@ def log_err(where, e, tb=False):
     extra = ""
     if tb and isinstance(e, BaseException):
         import traceback
-        extra = "\n" + "".join(traceback.format_exception(type(e), e, e.__traceback__))[-1500:]
+        extra = "\\n" + "".join(traceback.format_exception(type(e), e, e.__traceback__))[-1500:]
     print(f"[error] {where}: {msg}{extra}", flush=True)
+'''
+_SRC['shunt.update_guard'] = '''"""面板更新失败自动回滚"""
+import os
 
-
-# ==== src/54_update_guard.py ====
-# ---------------------------------------------------------------- 面板更新失败自动回滚
+from .base import AUTO_TAIL, BASE, G_AUTO, G_DIRECT, G_MANUAL, G_SEL, LB_PREFIX, LB_TAIL, PANEL_VERSION, PORT, SIDE_GROUPS
+from .data import LB_ALL, map_refs
+from .panel_update import local_file
+from .sysopt import sh
+from .access import log_err
 GUARD = os.path.join(BASE, ".update-guard.sh")
 ROLLBACK_NOTE = os.path.join(BASE, ".rollback-note")
 
@@ -6203,7 +6551,7 @@ ROLLBACK_NOTE = os.path.join(BASE, ".rollback-note")
 def update_guard_script(files):
     """更新后由独立的 shell 脚本检查新面板：90 秒内一直打不开就把 .backup 里的旧版本放回去并重启"""
     bak = os.path.join(BASE, ".backup")
-    cps = "\n".join(f"  [ -f '{bak}/{f}' ] && cp '{bak}/{f}' '{local_file(f)}'" for f in files)
+    cps = "\\n".join(f"  [ -f '{bak}/{f}' ] && cp '{bak}/{f}' '{local_file(f)}'" for f in files)
     restart = os.environ.get("PANEL_RESTART", "rc-service mihomo-panel restart")
     return f"""#!/bin/sh
 # 由 Shunt 面板生成：在线更新后自动检查，新版启动失败时回滚
@@ -6275,10 +6623,11 @@ def group_meta(d, cfg):
 def rename_policy(d, old, new):
     """策略组改名 / 删除（new 为节点选择）时同步更新自定义规则、规则集、其他自定义组、DNS 的引用；返回受影响条目数"""
     return map_refs(d, {old: new}, drop={old} if new == G_SEL else ())
+'''
+_SRC['shunt.static'] = '''"""静态资源：gzip + ETag"""
+import base64, gzip, hashlib, os, re
 
-
-# ==== src/60_static.py ====
-# ---------------------------------------------------------------- 静态资源：gzip + ETag
+from .base import BASE
 STATIC = {}
 STATIC_TYPES = {"index.html": "text/html", "icon.svg": "image/svg+xml", "icon-180.png": "image/png", "icon-512.png": "image/png"}
 MANIFEST = {"name": "Shunt 分流", "short_name": "Shunt", "description": "mihomo 旁路由面板", "start_url": "/", "scope": "/",
@@ -6311,10 +6660,53 @@ def static_file(name):
     val = (raw, gz, '"%s"' % hashlib.md5(raw).hexdigest()[:16], STATIC_TYPES.get(name, "application/octet-stream"))
     STATIC[name] = (key, val)
     return val
+'''
+_SRC['shunt.webapi'] = '''"""HTTP"""
+import copy, gzip, json, os, re, shutil, socket, threading, time
+from http.server import BaseHTTPRequestHandler
+from collections import deque
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
-
-# ==== src/61_http.py ====
-# ---------------------------------------------------------------- HTTP
+from . import adblock, stats
+from .base import (
+    AB_DIR, AB_PRESETS, BUILTIN_POLICIES, CERT, DEFAULT_EXCLUDE, DNS_DEFAULT, DNS_LISTS, GROUP_TYPES, G_MANUAL, G_SEL, HC, KEY,
+    LB_STRATEGIES, LOCK, MAX_BODY, MIHOMO_BIN, MIHOMO_LOG, PANEL_VERSION, PRIMARY_REGIONS, PROXY_MODES, REGIONS, SMART_BIN, SVC, TPROXY_SH,
+    TUN_STACKS
+)
+from .data import HISTORY_FILE, HISTORY_SKIP, auto_name, lb_names, load, migrate_names, read_json, region_lb_set, save, update
+from .links import add_links, q1
+from .groups import all_node_names, clean_custom_group, gcfg, region_plan, rx, validate_groups
+from .mihomo import bad_rule_policies, build_config, dns_cfg, safe_dev, validate_dns
+from .core import core, core_json, refresh_after_sub, refresh_regions, reload_core
+from .sb_common import CORES, SB_BIN, SB_STATE, active_core, core_conf_path
+from .sb_subs import sb_update_subs
+from .sb_config import build_singbox, sb_fake_providers, sb_fake_rule_providers, sb_sync_assets, sb_version, write_active_config
+from .sb_switch import core_switch_job, sb_arch, sb_remote_version, sb_update_job
+from .panel_update import self_rollback, self_update
+from .core_update import (
+    CORE_CHANNELS, CORE_UPD, LGBM_FILE, bin_version, core_check, core_job_start, core_rollback_job, core_upd_status, core_update_job,
+    lgbm_fetch, lgbm_fetch_reload
+)
+from .sysopt import config_view, delay_test, favicon, nft_ok, opt_apply, opt_status, sh, speed_test
+from .auth import pw_check, pw_hash, sess_drop, sess_new, ticket_new, ticket_use
+from .notify import WD, tg_send
+from .latency import BG_FILE, RETEST, bg_fetch, bg_meta, bg_meta_save, bg_save, bg_type, fix_global, proxies_merged, retest_soon
+from .stats import arp_table
+from .unlock import unlock_test
+from .ruletest import clean_target, is_ip, rule_test
+from .logstream import core_stream
+from .adblock import AB_CACHE, AB_STATE, ab_check, ab_compose, ab_meta, adblock_update, fmt_size, list_id, parse_filter
+from .live import LIVE, memory_once
+from .logclean import LOG_STATE, log_clean, log_sizes
+from .schedule import SCHED, TASK_NAMES, run_task, sched_event
+from .devices import device_map, read_leases, tun_runtime_error
+from .diag import diagnose
+from .dnsleak import antileak_dns, dns_route, leak_check
+from .login import FAILS, login_blocked, login_failed
+from .https import gen_cert, restart_self
+from .access import acl_cfg, host_name, host_ok, ip_is_lan, log_err
+from .update_guard import group_meta, rename_policy
+from .static import MANIFEST, STATIC_TYPES, static_file
 class H(BaseHTTPRequestHandler):
     timeout = 30  # 读请求/TLS 握手的超时：卡住不发数据的连接不再永久占用线程（日志流只写不读，不受影响）
 
@@ -6507,9 +6899,9 @@ class H(BaseHTTPRequestHandler):
                 ev.wait(15)
                 ev.clear()
                 if not q and not stop.get("ended"):
-                    self.wfile.write(b": ping\n\n")  # 心跳，同时探测浏览器是否断开
+                    self.wfile.write(b": ping\\n\\n")  # 心跳，同时探测浏览器是否断开
                 while q:
-                    self.wfile.write(b"data: " + q.popleft().encode() + b"\n\n")
+                    self.wfile.write(b"data: " + q.popleft().encode() + b"\\n\\n")
                 self.wfile.flush()
                 if stop.get("ended"):
                     break
@@ -6590,7 +6982,7 @@ class H(BaseHTTPRequestHandler):
         if new["interval"] not in (0, 21600, 43200, 86400, 259200, 604800):
             return self.send(400, {"message": "更新间隔无效"})
         for key, label in (("black", "黑名单"), ("white", "白名单")):
-            bs, be, as_, ae, sk = parse_filter("\n".join(new[key]), plain_suffix=True)
+            bs, be, as_, ae, sk = parse_filter("\\n".join(new[key]), plain_suffix=True)
             if sk:
                 bad = [x for x in new[key] if not any(parse_filter(x, plain_suffix=True)[:4])]
                 return self.send(400, {"message": f"{label}中有无法识别的条目：" + "；".join(bad[:5])})
@@ -6700,7 +7092,7 @@ class H(BaseHTTPRequestHandler):
             return self.send(400, {"message": "容差应在 0–1000 ms 之间"})
         if "url" in b:
             u = str(b["url"]).strip()
-            if not re.match(r"^https?://\S+$", u):
+            if not re.match(r"^https?://\\S+$", u):
                 return self.send(400, {"message": "测速地址必须是 http(s) 链接"})
             gc["url"] = u
 
@@ -7026,7 +7418,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/unlock":
             return self.send(200, unlock_test())
         if p == "/api/stats" and m == "GET":
-            return self.send(200, STATS.report() if STATS else {"today": {}, "month": {}, "days": [], "arp": {}})
+            return self.send(200, stats.STATS.report() if stats.STATS else {"today": {}, "month": {}, "days": [], "arp": {}})
         if p == "/api/ruletest" and m == "POST":
             return self.send(200, rule_test(b.get("target") or ""))
         if p == "/api/subs" and m == "POST":
@@ -7058,7 +7450,7 @@ class H(BaseHTTPRequestHandler):
             d = load()
             added, errs = add_links(b.get("links") or "", d["nodes"], d)
             if not added:
-                return self.send(400, {"message": "没有可导入的节点" + ("：\n" + "\n".join(errs) if errs else "")})
+                return self.send(400, {"message": "没有可导入的节点" + ("：\\n" + "\\n".join(errs) if errs else "")})
             prev = update(lambda d: d["nodes"].extend(added))
             ok, msg = reload_core(prev)
             msg = (f"已导入 {len(added)} 个节点" if ok else msg) + ("；忽略：" + "；".join(errs) if errs else "")
@@ -7117,7 +7509,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/adblock" and m == "GET":
             d = load()
             meta = ab_meta()
-            rep = AD_STATS.report() if AD_STATS else {"today": 0, "top": [], "lists": {}, "days": []}
+            rep = adblock.AD_STATS.report() if adblock.AD_STATS else {"today": 0, "top": [], "lists": {}, "days": []}
             lists = [dict(l, **{k: v for k, v in (meta.get(l["id"]) or {}).items()}, hits=rep["lists"].get(l["id"], 0)) for l in d["adblock"]["lists"]]
             prov = (core_json("/providers/rules") or {}).get("providers") or {}
             return self.send(200, {**{k: v for k, v in d["adblock"].items() if k != "lists"}, "lists": lists,
@@ -7173,9 +7565,9 @@ class H(BaseHTTPRequestHandler):
                                    "answer": j.get("Answer") or [], "policy": dns_route(name, load())})
         if p == "/api/devices" and m == "GET":
             ips = set(arp_table()) | set(read_leases())
-            if STATS:
-                with STATS.lock:
-                    for b2 in STATS.data["days"].values():
+            if stats.STATS:
+                with stats.STATS.lock:
+                    for b2 in stats.STATS.data["days"].values():
                         ips |= set(b2.get("dev", {}))
             c = core_json("/connections", timeout=5) or {}
             ips |= {(x.get("metadata") or {}).get("sourceIP") for x in c.get("connections") or []}
@@ -7194,7 +7586,7 @@ class H(BaseHTTPRequestHandler):
             sc = {}
             for k in ("sub_update", "core_restart", "geo_update"):
                 v = str(b.get(k) or "").strip()
-                if v and not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", v):
+                if v and not re.fullmatch(r"([01]\\d|2[0-3]):[0-5]\\d", v):
                     return self.send(400, {"message": f"时间格式应为 HH:MM：{v}"})
                 sc[k] = v
             sc["latency"] = int(b.get("latency") or 0) if int(b.get("latency") or 0) in (0, 10, 30, 60, 180) else 0
@@ -7236,7 +7628,7 @@ class H(BaseHTTPRequestHandler):
                        "log_limit", "sniffer", "gh_proxy"}
             if "gh_proxy" in b:
                 b["gh_proxy"] = str(b["gh_proxy"] or "").strip()
-                if b["gh_proxy"] and not re.match(r"^https?://[\w.\-:]+/?$", b["gh_proxy"]):
+                if b["gh_proxy"] and not re.match(r"^https?://[\\w.\\-:]+/?$", b["gh_proxy"]):
                     return self.send(400, {"message": "GitHub 加速地址格式应为 https://ghfast.top/"})
                 if b["gh_proxy"] and not b["gh_proxy"].endswith("/"):
                     b["gh_proxy"] += "/"
@@ -7308,9 +7700,30 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/logticket" and m == "POST":
             return self.send(200, {"ticket": ticket_new()})
         return self.send(404, {"message": "not found"})
+'''
+_SRC['shunt.cli'] = '''""""""
+import ipaddress, os, re, signal, ssl, sys, threading
 
-
-# ==== src/70_main.py ====
+from . import adblock, stats
+from .base import CERT, KEY, PORT
+from .data import load, update
+from .mihomo import dns_cfg
+from .sb_common import active_core, write_core_file
+from .sb_config import write_active_config
+from .sysopt import opt_fix_ulimit, rfile, sh
+from .auth import sess_load
+from .latency import monitor_loop
+from .stats import Stats
+from .adblock import AdStats
+from .live import live_loop
+from .logclean import log_loop
+from .schedule import sched_loop
+from .devices import rdns_loop
+from .migrate import snapshot_selections, startup_migrate
+from .https import Server, gen_cert, https_ready
+from .access import log_err
+from .update_guard import ROLLBACK_NOTE
+from .webapi import H
 def tp_env():
     """供 tproxy.sh eval：绕过列表、IPv6 开关、本机 IPv6 网段（值均经过正则过滤）"""
     d = load()
@@ -7325,17 +7738,18 @@ def tp_env():
             pass
     local6 = []
     _, out = sh("ip -o -6 addr show scope global 2>/dev/null")
-    for m in re.finditer(r"inet6 ([0-9a-fA-F:]+/\d+)", out):
+    for m in re.finditer(r"inet6 ([0-9a-fA-F:]+/\\d+)", out):
         try:
             local6.append(str(ipaddress.ip_interface(m.group(1)).network))
         except ValueError:
             pass
-    return (f"B_IP='{','.join(ips)}'\nB_MAC='{','.join(macs)}'\nB_IP6='{','.join(ip6s)}'\n"
-            f"LOCAL6='{','.join(sorted(set(local6)))}'\nIPV6={1 if d.get('ipv6') else 0}\nTPROXY={1 if d.get('tproxy') else 0}\n"
-            f"MODE={d['proxy_mode']}\nDNS_ALL={1 if dns_cfg(d)['block_bypass'] else 0}")
+    return (f"B_IP='{','.join(ips)}'\\nB_MAC='{','.join(macs)}'\\nB_IP6='{','.join(ip6s)}'\\n"
+            f"LOCAL6='{','.join(sorted(set(local6)))}'\\nIPV6={1 if d.get('ipv6') else 0}\\nTPROXY={1 if d.get('tproxy') else 0}\\n"
+            f"MODE={d['proxy_mode']}\\nDNS_ALL={1 if dns_cfg(d)['block_bypass'] else 0}")
 
 
-if __name__ == "__main__":
+def main():
+    """命令行入口：带参数时执行一次性命令，否则启动面板"""
     if "--bypass" in sys.argv:  # 兼容旧版 tproxy.sh
         env = dict(l.split("=", 1) for l in tp_env().splitlines())
         print(env["B_IP"].strip("'") + "|" + env["B_MAC"].strip("'"))
@@ -7380,8 +7794,8 @@ if __name__ == "__main__":
     d = load()
     sess_load()
     signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))  # 让 finally 有机会保存统计
-    STATS = Stats()
-    AD_STATS = AdStats()
+    STATS = stats.STATS = Stats()
+    AD_STATS = adblock.AD_STATS = AdStats()
     for target, args in ((STATS.loop, ()), (monitor_loop, ()), (AD_STATS.loop, ()), (AD_STATS.dns_loop, ()), (live_loop, ("/traffic",)),
                          (live_loop, ("/memory",)), (log_loop, ()), (sched_loop, ()), (rdns_loop, ()), (startup_migrate, ())):
         threading.Thread(target=target, args=args, daemon=True).start()
@@ -7405,3 +7819,49 @@ if __name__ == "__main__":
     finally:
         STATS.flush()
         AD_STATS.flush()
+'''
+
+
+class _Importer(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+    """从 _SRC 加载 shunt 包；把源码登记到 linecache，异常堆栈能显示出错的那一行"""
+
+    @staticmethod
+    def path(name):
+        return name.replace(".", "/") + ("/__init__.py" if name == "shunt" else ".py")
+
+    def find_spec(self, name, path=None, target=None):
+        if name in _SRC:
+            return importlib.util.spec_from_loader(name, self, origin=self.path(name), is_package=name == "shunt")
+        return None
+
+    def create_module(self, spec):
+        return None
+
+    def exec_module(self, mod):
+        fn, src = self.path(mod.__name__), _SRC[mod.__name__]
+        mod.__file__ = fn
+        linecache.cache[fn] = (len(src), None, src.splitlines(True), fn)
+        exec(compile(src, fn, "exec"), mod.__dict__)
+
+
+sys.meta_path.insert(0, _Importer())
+import shunt  # noqa: E402
+
+shunt.load(os.path.abspath(__file__))
+for _m in shunt._loaded:  # 兼容 `import server` / runpy 的脚本（selftest.sh、离线包构建）：所有名字在这里都能拿到
+    globals().update((k, v) for k, v in vars(_m).items() if not k.startswith("__") and k != "_link")
+
+
+class _Facade(types.ModuleType):
+    """`server.X = ...`（测试打桩）同时改掉各模块里的同名变量"""
+
+    def __setattr__(self, k, v):
+        super().__setattr__(k, v)
+        shunt.setvar(k, v)
+
+
+if __name__ != "__main__" and isinstance(sys.modules.get(__name__), types.ModuleType):
+    sys.modules[__name__].__class__ = _Facade
+
+if __name__ == "__main__":
+    shunt.cli.main()
