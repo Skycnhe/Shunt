@@ -3,6 +3,7 @@ import hashlib, os, re, shutil, sys, threading, time, urllib.request, urllib.err
 from collections import deque
 from urllib.parse import quote
 
+from .errlog import log_err
 from .base import CONF_DIR, MIHOMO_LOG, SVC, UA
 from .data import load
 from .mihomo import mh_bin, write_config
@@ -304,7 +305,6 @@ def core_upd_status():
 
 def _link():
     """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global proxy_opener, sh, core_alive, notify, log_err
+    global proxy_opener, sh, core_alive, notify
     from .sysopt import proxy_opener, sh
     from .notify import core_alive, notify
-    from .access import log_err
