@@ -22,7 +22,69 @@ def build_singbox(d):
     v6 = bool(d.get("ipv6"))
     gc = gcfg(d)
     warn = []
-    # 节点
+    outbounds, node_names, prov_names = sb_node_outbounds(d, cfg, sub_out, warn)
+    alias, group_outs = sb_group_outbounds(cfg, gc, node_names, prov_names, warn)
+    outbounds += group_outs
+    group_out = [o for o in outbounds if o["type"] in ("selector", "urltest")]
+    outbounds = group_out + [o for o in outbounds if o["type"] not in ("selector", "urltest")] + [{"type": "direct", "tag": "DIRECT"}]
+    policies = {o["tag"] for o in outbounds} | BUILTIN_POLICIES
+    inbounds = sb_inbounds(d, v6)
+    in_tags = {i["tag"] for i in inbounds}
+    rule_sets = sb_rule_sets(cfg, warn)
+    tr = SBRules(cfg, in_tags, alias, rule_sets)
+    tr.warn = warn
+    # 路由规则
+    route_rules = []
+    if d.get("sniffer", True) or dns_cfg(d)["mode"] == "fake-ip":
+        route_rules.append({"action": "sniff"})
+    route_rules += [{"inbound": ["dns-in"], "action": "hijack-dns"}, {"protocol": ["dns"], "action": "hijack-dns"},
+                    {"clash_mode": "Direct", "action": "route", "outbound": "DIRECT"},
+                    {"clash_mode": "Global", "action": "route", "outbound": G_SEL if G_SEL in policies else "DIRECT"}]
+    resolved = False
+    final = "DIRECT"
+    for line in cfg["rules"]:
+        if line.upper().startswith("MATCH,"):
+            final = tr.action(line.split(",", 1)[1]).get("outbound", "DIRECT") if tr.action(line.split(",", 1)[1]) else "DIRECT"
+            continue
+        r, needs = tr.rule(line)
+        if r is None:
+            continue
+        if r.get("action") == "route" and r.get("outbound") not in policies:
+            r["outbound"] = G_SEL if G_SEL in policies else "DIRECT"
+        if needs and not resolved:  # 与 mihomo 一致：没有 no-resolve 的 IP 规则先解析域名再匹配
+            route_rules.append({"action": "resolve"})
+            resolved = True
+        route_rules.append(r)
+    dns, t_node, t_direct, t_proxy = sb_dns(d, cfg, policies, tr, alias, v6)
+    if resolved and t_proxy:
+        for r in route_rules:
+            if r.get("action") == "resolve":
+                r["server"] = t_proxy if dns_cfg(d)["mode"] == "fake-ip" else dns["final"]
+    elif resolved:
+        for r in route_rules:
+            if r.get("action") == "resolve":
+                r["server"] = t_direct
+    defs, missing = sb_rule_set_defs(rule_sets, warn)
+    route_rules = sb_prune_rules(route_rules, missing)
+    dns["rules"] = sb_prune_rules(dns["rules"], missing)
+    mode = {"global": "Global", "direct": "Direct"}.get(d.get("mode"), "Rule")
+    conf = {
+        "log": {"level": "info", "timestamp": True},
+        "dns": dns,
+        "inbounds": inbounds,
+        "outbounds": outbounds,
+        "route": {"rules": route_rules, "rule_set": defs, "final": final if final in policies else "DIRECT",
+                  "auto_detect_interface": True, "default_domain_resolver": t_node},
+        "experimental": {"clash_api": {"external_controller": f"{CTRL_HOST}:{CTRL_PORT}", "secret": d["secret"],
+                                       "default_mode": mode},
+                         "cache_file": {"enabled": True, "path": os.path.join(SB_DIR, "cache.db"), "store_fakeip": True}},
+    }
+    need = {tag: rsd for tag, rsd in rule_sets.items() if rsd["kind"] != "inline"}
+    return conf, list(dict.fromkeys(warn)), need
+
+
+def sb_node_outbounds(d, cfg, sub_out, warn):
+    """手动节点与订阅节点 → (outbounds, 手动节点名, {订阅名: 节点名列表})"""
     outbounds, node_names, prov_names = [], [], {}
     for p in cfg["proxies"]:
         try:
@@ -44,7 +106,12 @@ def build_singbox(d):
     for s in d["subs"]:
         if not sb_sub_cache(s["name"]).get("updated"):
             warn.append(f"订阅「{s['name']}」还没有下载过节点")
-    # 策略组：地区负载均衡与自动优选相同 → 去掉并重定向引用；其余 load-balance / fallback 改为 urltest
+    return outbounds, node_names, prov_names
+
+
+def sb_group_outbounds(cfg, gc, node_names, prov_names, warn):
+    """策略组：地区负载均衡与自动优选相同 → 去掉并重定向引用；其余 load-balance / fallback 改为 urltest。返回 (别名表, 组 outbounds)"""
+    outbounds = []
     alias = {}
     region_lb = set()
     for r, _ in REGIONS + [(G_OTHER, None)]:
@@ -86,10 +153,10 @@ def build_singbox(d):
             if g["type"] == "url-test" and not g.get("lazy", True):
                 o["idle_timeout"] = "720h"
         outbounds.append(o)
-    group_out = [o for o in outbounds if o["type"] in ("selector", "urltest")]
-    outbounds = group_out + [o for o in outbounds if o["type"] not in ("selector", "urltest")] + [{"type": "direct", "tag": "DIRECT"}]
-    policies = {o["tag"] for o in outbounds} | BUILTIN_POLICIES
-    # 入站
+    return alias, outbounds
+
+
+def sb_inbounds(d, v6):
     lis = "::" if v6 else "0.0.0.0"
     inbounds = [{"type": "mixed", "tag": "mixed-in", "listen": lis, "listen_port": MIXED},
                 {"type": "direct", "tag": "dns-in", "listen": lis, "listen_port": 1053}]
@@ -101,8 +168,11 @@ def build_singbox(d):
                "auto_route": True, "auto_redirect": bool(tc.get("auto_redirect", True)) and nft_ok(), "strict_route": bool(tc.get("strict_route", False)),
                "stack": tc.get("stack") if tc.get("stack") in TUN_STACKS else "mixed"}
         inbounds.append(tun)
-    in_tags = {i["tag"] for i in inbounds}
-    # 规则集
+    return inbounds
+
+
+def sb_rule_sets(cfg, warn):
+    """mihomo rule-providers → sing-box 规则集描述（inline / 广告拦截 / srs / 需要转换）"""
     rule_sets = {}
     for name, prov in cfg["rule-providers"].items():
         if prov.get("type") == "inline":
@@ -129,40 +199,11 @@ def build_singbox(d):
             else:
                 rule_sets[name] = {"kind": "convert", "url": url, "behavior": prov.get("behavior", "domain"),
                                    "format": prov.get("format", "yaml"), "path": f"rs-{safe(name)}.json"}
-    tr = SBRules(cfg, in_tags, alias, rule_sets)
-    tr.warn = warn
-    # 路由规则
-    route_rules = []
-    if d.get("sniffer", True) or dns_cfg(d)["mode"] == "fake-ip":
-        route_rules.append({"action": "sniff"})
-    route_rules += [{"inbound": ["dns-in"], "action": "hijack-dns"}, {"protocol": ["dns"], "action": "hijack-dns"},
-                    {"clash_mode": "Direct", "action": "route", "outbound": "DIRECT"},
-                    {"clash_mode": "Global", "action": "route", "outbound": G_SEL if G_SEL in policies else "DIRECT"}]
-    resolved = False
-    final = "DIRECT"
-    for line in cfg["rules"]:
-        if line.upper().startswith("MATCH,"):
-            final = tr.action(line.split(",", 1)[1]).get("outbound", "DIRECT") if tr.action(line.split(",", 1)[1]) else "DIRECT"
-            continue
-        r, needs = tr.rule(line)
-        if r is None:
-            continue
-        if r.get("action") == "route" and r.get("outbound") not in policies:
-            r["outbound"] = G_SEL if G_SEL in policies else "DIRECT"
-        if needs and not resolved:  # 与 mihomo 一致：没有 no-resolve 的 IP 规则先解析域名再匹配
-            route_rules.append({"action": "resolve"})
-            resolved = True
-        route_rules.append(r)
-    dns, t_node, t_direct, t_proxy = sb_dns(d, cfg, policies, tr, alias, v6)
-    if resolved and t_proxy:
-        for r in route_rules:
-            if r.get("action") == "resolve":
-                r["server"] = t_proxy if dns_cfg(d)["mode"] == "fake-ip" else dns["final"]
-    elif resolved:
-        for r in route_rules:
-            if r.get("action") == "resolve":
-                r["server"] = t_direct
-    # 规则集定义：只保留本地已有文件的（缺失的规则及引用跳过，避免启动失败）
+    return rule_sets
+
+
+def sb_rule_set_defs(rule_sets, warn):
+    """规则集定义：只保留本地已有文件的（缺失的规则及引用跳过，避免启动失败）"""
     defs, missing = [], set()
     for tag, rsd in rule_sets.items():
         if rsd["kind"] == "inline":
@@ -175,39 +216,26 @@ def build_singbox(d):
             missing.add(tag)
     if missing:
         warn.append("以下规则集文件尚未下载，相关规则暂时跳过：" + "、".join(sorted(missing)[:8]) + ("…" if len(missing) > 8 else ""))
+    return defs, missing
 
-    def prune_rules(lst):
-        out = []
-        for r in lst:
-            r = dict(r)
-            if r.get("type") == "logical":
-                subs = prune_rules(r["rules"])
-                if len(subs) != len(r["rules"]):
-                    continue
-                r["rules"] = subs
-            elif "rule_set" in r:
-                keep = [x for x in r["rule_set"] if x not in missing]
-                if not keep:
-                    continue
-                r["rule_set"] = keep
-            out.append(r)
-        return out
-    route_rules = prune_rules(route_rules)
-    dns["rules"] = prune_rules(dns["rules"])
-    mode = {"global": "Global", "direct": "Direct"}.get(d.get("mode"), "Rule")
-    conf = {
-        "log": {"level": "info", "timestamp": True},
-        "dns": dns,
-        "inbounds": inbounds,
-        "outbounds": outbounds,
-        "route": {"rules": route_rules, "rule_set": defs, "final": final if final in policies else "DIRECT",
-                  "auto_detect_interface": True, "default_domain_resolver": t_node},
-        "experimental": {"clash_api": {"external_controller": f"{CTRL_HOST}:{CTRL_PORT}", "secret": d["secret"],
-                                       "default_mode": mode},
-                         "cache_file": {"enabled": True, "path": os.path.join(SB_DIR, "cache.db"), "store_fakeip": True}},
-    }
-    need = {tag: rsd for tag, rsd in rule_sets.items() if rsd["kind"] != "inline"}
-    return conf, list(dict.fromkeys(warn)), need
+
+def sb_prune_rules(lst, missing):
+    """去掉引用了缺失规则集的规则（逻辑规则里有一条缺失就整条去掉）"""
+    out = []
+    for r in lst:
+        r = dict(r)
+        if r.get("type") == "logical":
+            subs = sb_prune_rules(r["rules"], missing)
+            if len(subs) != len(r["rules"]):
+                continue
+            r["rules"] = subs
+        elif "rule_set" in r:
+            keep = [x for x in r["rule_set"] if x not in missing]
+            if not keep:
+                continue
+            r["rule_set"] = keep
+        out.append(r)
+    return out
 
 
 def _rule_lines_to_source(text, behavior, fmt):
