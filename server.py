@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.3.0"
+PANEL_VERSION = "7.4.0"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -19,6 +19,7 @@ import os
 # 加载顺序：模块顶层代码只用到排在前面的模块
 MODULES = [
     "base",
+    "errlog",
     "data",
     "links",
     "groups",
@@ -35,7 +36,6 @@ MODULES = [
     "panel_update",
     "core_update",
     "sysopt",
-    "auth",
     "notify",
     "latency",
     "stats",
@@ -50,7 +50,6 @@ MODULES = [
     "diag",
     "dnsleak",
     "migrate",
-    "login",
     "https",
     "access",
     "update_guard",
@@ -161,7 +160,7 @@ GROUPS_DEFAULT = {"type": "url-test", "lb": True, "auto": True, "strategy": "con
                   "tolerance": 0, "url": "https://www.gstatic.com/generate_204", "extra": True, "other": True, "lazy": True,
                   "lgbm": False}
 SCHED_DEFAULT = {"sub_update": "", "core_restart": "", "geo_update": "", "latency": 0}
-DEFAULT = {"password": "admin", "pw_hash": "", "pw_default": False, "secret": "", "mode": "rule", "tproxy": True, "subs": [], "rules": [],
+DEFAULT = {"secret": "", "mode": "rule", "tproxy": True, "subs": [], "rules": [],
            "rulesets": [], "bypass": [], "tests": None, "sub_interval": 86400, "region_groups": True,
            "nodes": [], "ipv6": False, "https": False, "allow_public": False, "allow_hosts": [], "watchdog": True, "tg_token": "", "tg_chat": "",
            "proxy_mode": "", "tun": TUN_DEFAULT, "log_limit": 5, "adblock": AB_DEFAULT, "dns": DNS_DEFAULT,
@@ -183,7 +182,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.3.0"
+PANEL_VERSION = "7.4.0"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -219,6 +218,31 @@ BUILTIN_POLICIES = {"DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE"}
 HC = "https://www.gstatic.com/generate_204"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 '''
+_SRC['shunt.errlog'] = '''"""错误记录：原本被吞掉的异常记到面板日志和「诊断」页"""
+import time
+from collections import deque
+
+ERRS = deque(maxlen=30)
+_ERR_SEEN = {}
+
+
+def log_err(where, e, tb=False):
+    """把原本被吞掉的异常记到面板日志和「诊断」里；同一处同一错误 10 分钟只记一次"""
+    msg = f"{type(e).__name__}: {e}"[:300] if isinstance(e, BaseException) else str(e)[:300]
+    key = (where, msg)
+    now = time.time()
+    if now - _ERR_SEEN.get(key, 0) < 600:
+        return
+    _ERR_SEEN[key] = now
+    if len(_ERR_SEEN) > 500:
+        _ERR_SEEN.clear()
+    ERRS.appendleft({"t": int(now), "where": where, "msg": msg})
+    extra = ""
+    if tb and isinstance(e, BaseException):
+        import traceback
+        extra = "\\n" + "".join(traceback.format_exception(type(e), e, e.__traceback__))[-1500:]
+    print(f"[error] {where}: {msg}{extra}", flush=True)
+'''
 _SRC['shunt.data'] = '''"""数据"""
 import copy, json, os, re, secrets, time
 
@@ -226,6 +250,9 @@ from .base import (
     AUTO_SUFFIX, AUTO_TAIL, AUTO_TAIL_OLD, DATA_FILE, DEFAULT, G_AUTO, G_OTHER, LB_PREFIX, LB_SUFFIX, LB_TAIL, LEGACY_AUTO, LOCK,
     PANEL_DIR, PROXY_MODES, REGIONS, SCHEMA, TESTS
 )
+OLD_PW_KEYS = ("password", "pw_hash", "pw_default")
+
+
 def load():
     try:
         with open(DATA_FILE) as f:
@@ -243,10 +270,9 @@ def load():
     if not d["tests"]:
         d["tests"] = [dict(t) for t in TESTS]
     dirty = False
-    if d.get("password") and not d.get("pw_hash"):  # 旧版明文密码 → PBKDF2 哈希，明文不再落盘
-        d["pw_default"] = d["password"] == "admin"
-        d["pw_hash"] = pw_hash(d["password"])
-        d["password"] = ""
+    if any(k in d for k in OLD_PW_KEYS):  # v6.8.2 起面板不再有密码：清掉旧版留下的密码字段
+        for k in OLD_PW_KEYS:
+            d.pop(k, None)
         dirty = True
     if not d["secret"]:
         d["secret"] = secrets.token_hex(16)
@@ -405,7 +431,7 @@ def update(fn):
 
 HISTORY_FILE = os.path.join(PANEL_DIR, "history.json")
 HISTORY_MAX = 10
-HISTORY_SKIP = {"core", "password", "pw_hash", "pw_default", "secret", "devices", "https", "schema", "sysopt", "sysopt_orig", "sysopt_mods"}
+HISTORY_SKIP = {"core", "secret", "devices", "https", "schema", "sysopt", "sysopt_orig", "sysopt_mods"}
 KEY_LABEL = {"subs": "订阅", "nodes": "节点", "rules": "自定义规则", "rulesets": "规则集", "dns": "DNS", "adblock": "广告拦截",
              "custom_groups": "自定义策略组", "groups_cfg": "地区分组", "region_groups": "地区分组", "proxy_mode": "代理方式",
              "tun": "TUN", "ipv6": "IPv6", "bypass": "绕过设备", "mode": "代理模式", "sniffer": "域名嗅探", "schedule": "定时任务",
@@ -451,9 +477,8 @@ def safe(name):
 
 def _link():
     """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global dns_policy_of, rule_policy_index, pw_hash
+    global dns_policy_of, rule_policy_index
     from .mihomo import dns_policy_of, rule_policy_index
-    from .auth import pw_hash
 '''
 _SRC['shunt.links'] = '''"""单节点链接解析"""
 import base64, json, re
@@ -534,143 +559,171 @@ def transport(p, net, qs):
         raise ValueError(f"不支持的传输方式 {net}")
 
 
+def link_parts(line, first_port=False):
+    """URL 形式的链接 → (查询参数, 主机, 端口, 名称, 用户名, 密码)；first_port：端口范围只取第一个"""
+    u = urlsplit(line)
+    host, port = host_port(u.netloc)
+    if first_port:
+        port = re.split(r"[,\\-]", port)[0]
+    pw = unquote(u.password) if u.password is not None else None
+    return parse_qs(u.query), host, port, unquote(u.fragment), unquote(u.username or ""), pw
+
+
+def parse_vmess(line):
+    j = json.loads(b64d(line[8:].split("#")[0]))
+    p = {"name": str(j.get("ps") or ""), "type": "vmess", "server": j["add"], "port": int(j["port"]),
+         "uuid": j["id"], "alterId": int(j.get("aid") or 0), "cipher": j.get("scy") or "auto", "udp": True}
+    if j.get("tls") in ("tls", True):
+        p["tls"] = True
+        sni = j.get("sni") or j.get("host")
+        if sni:
+            p["servername"] = sni
+        if j.get("alpn"):
+            p["alpn"] = str(j["alpn"]).split(",")
+        if j.get("fp"):
+            p["client-fingerprint"] = j["fp"]
+        if truthy(j.get("allowInsecure") or j.get("skip-cert-verify") or ""):
+            p["skip-cert-verify"] = True
+    qs = {k: [str(j.get(f) or "")] for k, f in (("path", "path"), ("host", "host"), ("serviceName", "path"), ("headerType", "type"))}
+    transport(p, j.get("net") or "tcp", qs)
+    return p
+
+
+def parse_ss(line):
+    body, _, frag = line[5:].partition("#")
+    if "@" in body:
+        userinfo, _, rest = body.rpartition("@")
+        userinfo = unquote(userinfo)
+        if ":" not in userinfo:
+            userinfo = b64d(userinfo)
+    else:  # 旧格式 ss://base64(method:pass@host:port)
+        b, sep, qpart = body.partition("?")
+        dec = b64d(b.rstrip("/"))
+        userinfo, _, hp = dec.rpartition("@")
+        rest = hp + (sep + qpart if qpart else "")
+    method, _, password = userinfo.partition(":")
+    u = urlsplit("ss://x@" + rest)
+    host, port = host_port(u.netloc)
+    p = {"name": unquote(frag), "type": "ss", "server": host, "port": int(port), "cipher": method,
+         "password": password, "udp": True}
+    plugin = q1(parse_qs(u.query), "plugin")
+    if plugin:
+        parts = plugin.split(";")
+        opts = dict((x.split("=", 1) + [""])[:2] for x in parts[1:])
+        if parts[0] in ("obfs-local", "simple-obfs", "obfs"):
+            p["plugin"] = "obfs"
+            p["plugin-opts"] = {"mode": opts.get("obfs", "http"), "host": opts.get("obfs-host", "bing.com")}
+        elif parts[0] == "v2ray-plugin":
+            p["plugin"] = "v2ray-plugin"
+            p["plugin-opts"] = {"mode": opts.get("mode", "websocket"), "host": opts.get("host", ""),
+                                "path": opts.get("path", "/"), "tls": "tls" in opts}
+        else:
+            raise ValueError(f"不支持的 ss 插件 {parts[0]}")
+    return p
+
+
+def parse_vless(line):
+    qs, host, port, name, user, pw = link_parts(line)
+    p = {"name": name, "type": "vless", "server": host, "port": int(port), "uuid": user, "udp": True}
+    sec = q1(qs, "security")
+    if sec in ("tls", "reality", "xtls"):
+        p["tls"] = True
+        common_tls(p, qs)
+    if sec == "reality":
+        p["reality-opts"] = {"public-key": q1(qs, "pbk"), "short-id": q1(qs, "sid")}
+        p.setdefault("client-fingerprint", "chrome")
+    flow = q1(qs, "flow")
+    if flow:
+        p["flow"] = flow
+    enc = q1(qs, "encryption")
+    if enc and enc != "none":
+        p["encryption"] = enc
+    transport(p, q1(qs, "type"), qs)
+    return p
+
+
+def parse_trojan(line):
+    qs, host, port, name, user, pw = link_parts(line)
+    p = {"name": name, "type": "trojan", "server": host, "port": int(port), "password": user, "udp": True}
+    common_tls(p, qs, "sni")
+    transport(p, q1(qs, "type"), qs)
+    return p
+
+
+def parse_hysteria2(line):
+    qs, host, port, name, user, pw = link_parts(line)
+    auth = user + (":" + pw if pw is not None else "")
+    first = re.split(r"[,\\-]", port)[0]
+    p = {"name": name, "type": "hysteria2", "server": host, "port": int(first), "password": auth, "udp": True}
+    if not port.isdigit():
+        p["ports"] = port
+    common_tls(p, qs, "sni")
+    p.pop("client-fingerprint", None)
+    obfs = q1(qs, "obfs")
+    if obfs and obfs != "none":
+        p["obfs"] = obfs
+        p["obfs-password"] = q1(qs, "obfs-password")
+    return p
+
+
+def parse_tuic(line):
+    qs, host, port, name, user, pw = link_parts(line)
+    p = {"name": name, "type": "tuic", "server": host, "port": int(port), "uuid": user, "password": pw or "",
+         "udp": True, "alpn": ["h3"]}
+    common_tls(p, qs, "sni")
+    p.pop("client-fingerprint", None)
+    p["congestion-controller"] = q1(qs, "congestion_control", "congestion-control", default="bbr")
+    p["udp-relay-mode"] = q1(qs, "udp_relay_mode", "udp-relay-mode", default="native")
+    if truthy(q1(qs, "disable_sni")):
+        p["disable-sni"] = True
+    return p
+
+
+def parse_anytls(line):
+    qs, host, port, name, user, pw = link_parts(line, first_port=True)
+    p = {"name": name, "type": "anytls", "server": host, "port": int(port), "password": user, "udp": True}
+    common_tls(p, qs, "sni")
+    return p
+
+
+def parse_hysteria(line):
+    qs, host, port, name, user, pw = link_parts(line, first_port=True)
+    p = {"name": name, "type": "hysteria", "server": host, "port": int(port), "udp": True,
+         "up": q1(qs, "upmbps", "up", default="10"), "down": q1(qs, "downmbps", "down", default="50")}
+    auth = q1(qs, "auth", "auth_str") or user
+    if auth:
+        p["auth-str"] = auth
+    if q1(qs, "obfsParam", "obfs-password", "obfs"):
+        p["obfs"] = q1(qs, "obfsParam", "obfs-password", "obfs")
+    common_tls(p, qs, "sni")
+    p.pop("client-fingerprint", None)
+    return p
+
+
+def parse_socks(line):
+    qs, host, port, name, user, pw = link_parts(line, first_port=True)
+    if pw is None and user and ":" not in user:  # socks://base64(user:pass)@host:port
+        try:
+            user, _, pw = b64d(user).partition(":")
+        except ValueError:
+            pass
+    p = {"name": name, "type": "socks5", "server": host, "port": int(port), "udp": True}
+    if user:
+        p["username"], p["password"] = user, pw or ""
+    return p
+
+
+LINK_PARSERS = {"vmess": parse_vmess, "ss": parse_ss, "vless": parse_vless, "trojan": parse_trojan, "hysteria2": parse_hysteria2,
+                "hy2": parse_hysteria2, "tuic": parse_tuic, "anytls": parse_anytls, "hysteria": parse_hysteria, "hy": parse_hysteria,
+                "socks": parse_socks, "socks5": parse_socks, "socks5h": parse_socks}
+
+
 def parse_link(line):
     line = line.strip()
     scheme = line.split("://", 1)[0].lower()
-    if scheme == "vmess":
-        j = json.loads(b64d(line[8:].split("#")[0]))
-        p = {"name": str(j.get("ps") or ""), "type": "vmess", "server": j["add"], "port": int(j["port"]),
-             "uuid": j["id"], "alterId": int(j.get("aid") or 0), "cipher": j.get("scy") or "auto", "udp": True}
-        if j.get("tls") in ("tls", True):
-            p["tls"] = True
-            sni = j.get("sni") or j.get("host")
-            if sni:
-                p["servername"] = sni
-            if j.get("alpn"):
-                p["alpn"] = str(j["alpn"]).split(",")
-            if j.get("fp"):
-                p["client-fingerprint"] = j["fp"]
-            if truthy(j.get("allowInsecure") or j.get("skip-cert-verify") or ""):
-                p["skip-cert-verify"] = True
-        qs = {k: [str(j.get(f) or "")] for k, f in (("path", "path"), ("host", "host"), ("serviceName", "path"), ("headerType", "type"))}
-        transport(p, j.get("net") or "tcp", qs)
-        return p
-    if scheme == "ss":
-        body, _, frag = line[5:].partition("#")
-        if "@" in body:
-            userinfo, _, rest = body.rpartition("@")
-            userinfo = unquote(userinfo)
-            if ":" not in userinfo:
-                userinfo = b64d(userinfo)
-        else:  # 旧格式 ss://base64(method:pass@host:port)
-            b, sep, qpart = body.partition("?")
-            dec = b64d(b.rstrip("/"))
-            userinfo, _, hp = dec.rpartition("@")
-            rest = hp + (sep + qpart if qpart else "")
-        method, _, password = userinfo.partition(":")
-        u = urlsplit("ss://x@" + rest)
-        host, port = host_port(u.netloc)
-        p = {"name": unquote(frag), "type": "ss", "server": host, "port": int(port), "cipher": method,
-             "password": password, "udp": True}
-        plugin = q1(parse_qs(u.query), "plugin")
-        if plugin:
-            parts = plugin.split(";")
-            opts = dict((x.split("=", 1) + [""])[:2] for x in parts[1:])
-            if parts[0] in ("obfs-local", "simple-obfs", "obfs"):
-                p["plugin"] = "obfs"
-                p["plugin-opts"] = {"mode": opts.get("obfs", "http"), "host": opts.get("obfs-host", "bing.com")}
-            elif parts[0] == "v2ray-plugin":
-                p["plugin"] = "v2ray-plugin"
-                p["plugin-opts"] = {"mode": opts.get("mode", "websocket"), "host": opts.get("host", ""),
-                                    "path": opts.get("path", "/"), "tls": "tls" in opts}
-            else:
-                raise ValueError(f"不支持的 ss 插件 {parts[0]}")
-        return p
-    if scheme in ("vless", "trojan", "hysteria2", "hy2", "tuic"):
-        u = urlsplit(line)
-        qs = parse_qs(u.query)
-        host, port = host_port(u.netloc)
-        name = unquote(u.fragment)
-        user = unquote(u.username or "")
-        pw = unquote(u.password) if u.password is not None else None
-        if scheme == "vless":
-            p = {"name": name, "type": "vless", "server": host, "port": int(port), "uuid": user, "udp": True}
-            sec = q1(qs, "security")
-            if sec in ("tls", "reality", "xtls"):
-                p["tls"] = True
-                common_tls(p, qs)
-            if sec == "reality":
-                p["reality-opts"] = {"public-key": q1(qs, "pbk"), "short-id": q1(qs, "sid")}
-                p.setdefault("client-fingerprint", "chrome")
-            flow = q1(qs, "flow")
-            if flow:
-                p["flow"] = flow
-            enc = q1(qs, "encryption")
-            if enc and enc != "none":
-                p["encryption"] = enc
-            transport(p, q1(qs, "type"), qs)
-            return p
-        if scheme == "trojan":
-            p = {"name": name, "type": "trojan", "server": host, "port": int(port), "password": user, "udp": True}
-            common_tls(p, qs, "sni")
-            transport(p, q1(qs, "type"), qs)
-            return p
-        if scheme in ("hysteria2", "hy2"):
-            auth = user + (":" + pw if pw is not None else "")
-            first = re.split(r"[,\\-]", port)[0]
-            p = {"name": name, "type": "hysteria2", "server": host, "port": int(first), "password": auth, "udp": True}
-            if not port.isdigit():
-                p["ports"] = port
-            common_tls(p, qs, "sni")
-            p.pop("client-fingerprint", None)
-            obfs = q1(qs, "obfs")
-            if obfs and obfs != "none":
-                p["obfs"] = obfs
-                p["obfs-password"] = q1(qs, "obfs-password")
-            return p
-        if scheme == "tuic":
-            p = {"name": name, "type": "tuic", "server": host, "port": int(port), "uuid": user, "password": pw or "",
-                 "udp": True, "alpn": ["h3"]}
-            common_tls(p, qs, "sni")
-            p.pop("client-fingerprint", None)
-            p["congestion-controller"] = q1(qs, "congestion_control", "congestion-control", default="bbr")
-            p["udp-relay-mode"] = q1(qs, "udp_relay_mode", "udp-relay-mode", default="native")
-            if truthy(q1(qs, "disable_sni")):
-                p["disable-sni"] = True
-            return p
-    if scheme in ("anytls", "hysteria", "hy", "socks", "socks5", "socks5h"):
-        u = urlsplit(line)
-        qs = parse_qs(u.query)
-        host, port = host_port(u.netloc)
-        port = re.split(r"[,\\-]", port)[0]
-        name = unquote(u.fragment)
-        user = unquote(u.username or "")
-        pw = unquote(u.password) if u.password is not None else None
-        if scheme == "anytls":
-            p = {"name": name, "type": "anytls", "server": host, "port": int(port), "password": user, "udp": True}
-            common_tls(p, qs, "sni")
-            return p
-        if scheme in ("hysteria", "hy"):
-            p = {"name": name, "type": "hysteria", "server": host, "port": int(port), "udp": True,
-                 "up": q1(qs, "upmbps", "up", default="10"), "down": q1(qs, "downmbps", "down", default="50")}
-            auth = q1(qs, "auth", "auth_str") or user
-            if auth:
-                p["auth-str"] = auth
-            if q1(qs, "obfsParam", "obfs-password", "obfs"):
-                p["obfs"] = q1(qs, "obfsParam", "obfs-password", "obfs")
-            common_tls(p, qs, "sni")
-            p.pop("client-fingerprint", None)
-            return p
-        if pw is None and user and ":" not in user:  # socks://base64(user:pass)@host:port
-            try:
-                user, _, pw = b64d(user).partition(":")
-            except Exception:
-                pass
-        p = {"name": name, "type": "socks5", "server": host, "port": int(port), "udp": True}
-        if user:
-            p["username"], p["password"] = user, pw or ""
-        return p
-    raise ValueError(f"不支持的链接类型 {scheme}://")
+    if scheme not in LINK_PARSERS:
+        raise ValueError(f"不支持的链接类型 {scheme}://")
+    return LINK_PARSERS[scheme](line)
 
 
 def add_links(text, existing, d=None):
@@ -706,6 +759,7 @@ def reserved_names(d=None):
 _SRC['shunt.groups'] = '''"""策略组"""
 import os, re, time
 
+from .errlog import log_err
 from .base import BUILTIN_POLICIES, GROUPS_DEFAULT, GROUP_TYPES, G_OTHER, PANEL_DIR, PRIMARY_REGIONS, REGIONS
 from .data import load, read_json, write_json
 from .links import reserved_names
@@ -743,8 +797,8 @@ def provider_nodes(fresh=False):
         if data != read_json(PROV_FILE, None):
             try:
                 write_json(PROV_FILE, data)
-            except Exception:
-                pass
+            except OSError as e:
+                log_err("保存订阅节点列表", e)
     if data is None:
         data = read_json(PROV_FILE, {})
     PROV.update(t=now, data=data)
@@ -1022,6 +1076,38 @@ def build_config(d, strict=False):
         groups.append(g)
     policies = {g["name"] for g in groups} | BUILTIN_POLICIES | set(names)
 
+    dc = dns_cfg(d)
+    rule_providers, rules, ab_prov = mihomo_rules(d, policies, dc)
+    v6 = bool(d.get("ipv6"))
+    dns = mihomo_dns(d, dc, policies, ab_prov)
+    hosts = mihomo_hosts(dc)
+    tun = mihomo_tun(d)
+    extra = {}
+    if active_core(d) == "smart" and gcfg(d).get("lgbm"):  # 模型放在 -d 目录（/etc/mihomo/Model.bin），内核每 72 小时自动更新
+        gh = (d.get("gh_proxy") or "").rstrip("/")
+        extra = {"lgbm-auto-update": True, "lgbm-update-interval": 72, "lgbm-url": (gh + "/" if gh else "") + LGBM_URL}
+    return dict(extra, **{
+        "mixed-port": MIXED, "tproxy-port": 7893, "allow-lan": True, "bind-address": "*",
+        "mode": d.get("mode", "rule"), "log-level": "info", "ipv6": v6,
+        "external-controller": f"{CTRL_HOST}:{CTRL_PORT}", "secret": d["secret"],
+        "unified-delay": True, "tcp-concurrent": True, "global-ua": "clash.meta",
+        "geodata-mode": True, "geo-auto-update": True, "geo-update-interval": 24,
+        "geox-url": {
+            "geoip": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat",
+            "geosite": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat",
+            "mmdb": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.metadb",
+        },
+        "profile": {"store-selected": True, "store-fake-ip": True},
+        "sniffer": {"enable": bool(d.get("sniffer", True)), "sniff": {
+            "HTTP": {"ports": [80, "8080-8880"], "override-destination": True},
+            "TLS": {"ports": [443, 8443]}, "QUIC": {"ports": [443, 8443]}}},
+        "dns": dns, "tun": tun, "hosts": hosts,
+        "proxies": proxies,
+        "proxy-providers": providers, "rule-providers": rule_providers, "proxy-groups": groups, "rules": rules,
+    })
+
+def mihomo_rules(d, policies, dc):
+    """规则集、TUN 绕过、广告拦截、防绕过 DNS、自定义规则与内置分流规则 → (rule-providers, rules, 广告拦截 providers)"""
     rule_providers = {}
     rs_rules = []
     for r in d.get("rulesets", []):
@@ -1041,7 +1127,6 @@ def build_config(d, strict=False):
                 pass
     ab_prov, ab_rules = adblock_providers(d)
     rule_providers.update(ab_prov)
-    dc = dns_cfg(d)
     guard = []
     if dc["block_bypass"]:  # 阻止局域网设备绕过 mihomo DNS：拒绝 DoT/DoQ(853) 与已知公共 DoH 服务器
         rule_providers["dns-bypass-ip"] = {"type": "inline", "behavior": "ipcidr", "payload": list(DOH_IPS)}
@@ -1056,6 +1141,11 @@ def build_config(d, strict=False):
         f"GEOSITE,telegram,{G_TG}", f"GEOIP,telegram,{G_TG},no-resolve",
         f"GEOSITE,geolocation-!cn,{G_SEL}", "GEOSITE,cn,DIRECT", "GEOIP,CN,DIRECT", f"MATCH,{G_FINAL}",
     ]
+    return rule_providers, rules, ab_prov
+
+
+def mihomo_dns(d, dc, policies, ab_prov):
+    """dns 段：防泄露布局 + nameserver-policy"""
     v6 = bool(d.get("ipv6"))
     fx = lambda xs: [fix_dns_policy(x, policies) for x in xs]
     direct = fx(dc["direct"] or DNS_DEFAULT["direct"])
@@ -1093,11 +1183,19 @@ def build_config(d, strict=False):
         pol.setdefault("geosite:cn,private", direct)
     if pol:
         dns["nameserver-policy"] = pol
+    return dns
+
+
+def mihomo_hosts(dc):
     hosts = {}
     for h in dc["hosts"]:
         vals = hosts.setdefault(h["domain"], [])
         vals += [v for v in h["value"] if v not in vals]
     hosts = {k: (v[0] if len(v) == 1 else v) for k, v in hosts.items()}
+    return hosts
+
+
+def mihomo_tun(d):
     tc = d.get("tun") or TUN_DEFAULT
     if d.get("proxy_mode") == "tun":
         tun = {"enable": True, "stack": tc.get("stack") if tc.get("stack") in TUN_STACKS else "mixed",
@@ -1106,29 +1204,8 @@ def build_config(d, strict=False):
                "strict-route": bool(tc.get("strict_route", False))}
     else:
         tun = {"enable": False}
-    extra = {}
-    if active_core(d) == "smart" and gcfg(d).get("lgbm"):  # 模型放在 -d 目录（/etc/mihomo/Model.bin），内核每 72 小时自动更新
-        gh = (d.get("gh_proxy") or "").rstrip("/")
-        extra = {"lgbm-auto-update": True, "lgbm-update-interval": 72, "lgbm-url": (gh + "/" if gh else "") + LGBM_URL}
-    return dict(extra, **{
-        "mixed-port": MIXED, "tproxy-port": 7893, "allow-lan": True, "bind-address": "*",
-        "mode": d.get("mode", "rule"), "log-level": "info", "ipv6": v6,
-        "external-controller": f"{CTRL_HOST}:{CTRL_PORT}", "secret": d["secret"],
-        "unified-delay": True, "tcp-concurrent": True, "global-ua": "clash.meta",
-        "geodata-mode": True, "geo-auto-update": True, "geo-update-interval": 24,
-        "geox-url": {
-            "geoip": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat",
-            "geosite": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat",
-            "mmdb": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.metadb",
-        },
-        "profile": {"store-selected": True, "store-fake-ip": True},
-        "sniffer": {"enable": bool(d.get("sniffer", True)), "sniff": {
-            "HTTP": {"ports": [80, "8080-8880"], "override-destination": True},
-            "TLS": {"ports": [443, 8443]}, "QUIC": {"ports": [443, 8443]}}},
-        "dns": dns, "tun": tun, "hosts": hosts,
-        "proxies": proxies,
-        "proxy-providers": providers, "rule-providers": rule_providers, "proxy-groups": groups, "rules": rules,
-    })
+    return tun
+
 
 
 def rule_policy_index(parts):
@@ -1481,6 +1558,7 @@ def _link():
 _SRC['shunt.sb_common'] = '''"""sing-box 内核"""
 import os
 
+from .errlog import log_err
 from .base import CONF_DIR, PANEL_DIR
 from .data import load
 # 面板数据（订阅、节点、规则、DNS、设备）两个内核共用；切换内核时按各自格式生成独立的配置文件：
@@ -1515,8 +1593,8 @@ def core_conf_path(kind=None):
 def write_core_file(kind):
     try:
         wfile(CORE_FILE, kind + "\\n")
-    except Exception:
-        pass
+    except OSError as e:
+        log_err("记录当前内核", e)
 
 
 def _link():
@@ -2480,7 +2558,69 @@ def build_singbox(d):
     v6 = bool(d.get("ipv6"))
     gc = gcfg(d)
     warn = []
-    # 节点
+    outbounds, node_names, prov_names = sb_node_outbounds(d, cfg, sub_out, warn)
+    alias, group_outs = sb_group_outbounds(cfg, gc, node_names, prov_names, warn)
+    outbounds += group_outs
+    group_out = [o for o in outbounds if o["type"] in ("selector", "urltest")]
+    outbounds = group_out + [o for o in outbounds if o["type"] not in ("selector", "urltest")] + [{"type": "direct", "tag": "DIRECT"}]
+    policies = {o["tag"] for o in outbounds} | BUILTIN_POLICIES
+    inbounds = sb_inbounds(d, v6)
+    in_tags = {i["tag"] for i in inbounds}
+    rule_sets = sb_rule_sets(cfg, warn)
+    tr = SBRules(cfg, in_tags, alias, rule_sets)
+    tr.warn = warn
+    # 路由规则
+    route_rules = []
+    if d.get("sniffer", True) or dns_cfg(d)["mode"] == "fake-ip":
+        route_rules.append({"action": "sniff"})
+    route_rules += [{"inbound": ["dns-in"], "action": "hijack-dns"}, {"protocol": ["dns"], "action": "hijack-dns"},
+                    {"clash_mode": "Direct", "action": "route", "outbound": "DIRECT"},
+                    {"clash_mode": "Global", "action": "route", "outbound": G_SEL if G_SEL in policies else "DIRECT"}]
+    resolved = False
+    final = "DIRECT"
+    for line in cfg["rules"]:
+        if line.upper().startswith("MATCH,"):
+            final = tr.action(line.split(",", 1)[1]).get("outbound", "DIRECT") if tr.action(line.split(",", 1)[1]) else "DIRECT"
+            continue
+        r, needs = tr.rule(line)
+        if r is None:
+            continue
+        if r.get("action") == "route" and r.get("outbound") not in policies:
+            r["outbound"] = G_SEL if G_SEL in policies else "DIRECT"
+        if needs and not resolved:  # 与 mihomo 一致：没有 no-resolve 的 IP 规则先解析域名再匹配
+            route_rules.append({"action": "resolve"})
+            resolved = True
+        route_rules.append(r)
+    dns, t_node, t_direct, t_proxy = sb_dns(d, cfg, policies, tr, alias, v6)
+    if resolved and t_proxy:
+        for r in route_rules:
+            if r.get("action") == "resolve":
+                r["server"] = t_proxy if dns_cfg(d)["mode"] == "fake-ip" else dns["final"]
+    elif resolved:
+        for r in route_rules:
+            if r.get("action") == "resolve":
+                r["server"] = t_direct
+    defs, missing = sb_rule_set_defs(rule_sets, warn)
+    route_rules = sb_prune_rules(route_rules, missing)
+    dns["rules"] = sb_prune_rules(dns["rules"], missing)
+    mode = {"global": "Global", "direct": "Direct"}.get(d.get("mode"), "Rule")
+    conf = {
+        "log": {"level": "info", "timestamp": True},
+        "dns": dns,
+        "inbounds": inbounds,
+        "outbounds": outbounds,
+        "route": {"rules": route_rules, "rule_set": defs, "final": final if final in policies else "DIRECT",
+                  "auto_detect_interface": True, "default_domain_resolver": t_node},
+        "experimental": {"clash_api": {"external_controller": f"{CTRL_HOST}:{CTRL_PORT}", "secret": d["secret"],
+                                       "default_mode": mode},
+                         "cache_file": {"enabled": True, "path": os.path.join(SB_DIR, "cache.db"), "store_fakeip": True}},
+    }
+    need = {tag: rsd for tag, rsd in rule_sets.items() if rsd["kind"] != "inline"}
+    return conf, list(dict.fromkeys(warn)), need
+
+
+def sb_node_outbounds(d, cfg, sub_out, warn):
+    """手动节点与订阅节点 → (outbounds, 手动节点名, {订阅名: 节点名列表})"""
     outbounds, node_names, prov_names = [], [], {}
     for p in cfg["proxies"]:
         try:
@@ -2502,7 +2642,12 @@ def build_singbox(d):
     for s in d["subs"]:
         if not sb_sub_cache(s["name"]).get("updated"):
             warn.append(f"订阅「{s['name']}」还没有下载过节点")
-    # 策略组：地区负载均衡与自动优选相同 → 去掉并重定向引用；其余 load-balance / fallback 改为 urltest
+    return outbounds, node_names, prov_names
+
+
+def sb_group_outbounds(cfg, gc, node_names, prov_names, warn):
+    """策略组：地区负载均衡与自动优选相同 → 去掉并重定向引用；其余 load-balance / fallback 改为 urltest。返回 (别名表, 组 outbounds)"""
+    outbounds = []
     alias = {}
     region_lb = set()
     for r, _ in REGIONS + [(G_OTHER, None)]:
@@ -2544,10 +2689,10 @@ def build_singbox(d):
             if g["type"] == "url-test" and not g.get("lazy", True):
                 o["idle_timeout"] = "720h"
         outbounds.append(o)
-    group_out = [o for o in outbounds if o["type"] in ("selector", "urltest")]
-    outbounds = group_out + [o for o in outbounds if o["type"] not in ("selector", "urltest")] + [{"type": "direct", "tag": "DIRECT"}]
-    policies = {o["tag"] for o in outbounds} | BUILTIN_POLICIES
-    # 入站
+    return alias, outbounds
+
+
+def sb_inbounds(d, v6):
     lis = "::" if v6 else "0.0.0.0"
     inbounds = [{"type": "mixed", "tag": "mixed-in", "listen": lis, "listen_port": MIXED},
                 {"type": "direct", "tag": "dns-in", "listen": lis, "listen_port": 1053}]
@@ -2559,8 +2704,11 @@ def build_singbox(d):
                "auto_route": True, "auto_redirect": bool(tc.get("auto_redirect", True)) and nft_ok(), "strict_route": bool(tc.get("strict_route", False)),
                "stack": tc.get("stack") if tc.get("stack") in TUN_STACKS else "mixed"}
         inbounds.append(tun)
-    in_tags = {i["tag"] for i in inbounds}
-    # 规则集
+    return inbounds
+
+
+def sb_rule_sets(cfg, warn):
+    """mihomo rule-providers → sing-box 规则集描述（inline / 广告拦截 / srs / 需要转换）"""
     rule_sets = {}
     for name, prov in cfg["rule-providers"].items():
         if prov.get("type") == "inline":
@@ -2587,40 +2735,11 @@ def build_singbox(d):
             else:
                 rule_sets[name] = {"kind": "convert", "url": url, "behavior": prov.get("behavior", "domain"),
                                    "format": prov.get("format", "yaml"), "path": f"rs-{safe(name)}.json"}
-    tr = SBRules(cfg, in_tags, alias, rule_sets)
-    tr.warn = warn
-    # 路由规则
-    route_rules = []
-    if d.get("sniffer", True) or dns_cfg(d)["mode"] == "fake-ip":
-        route_rules.append({"action": "sniff"})
-    route_rules += [{"inbound": ["dns-in"], "action": "hijack-dns"}, {"protocol": ["dns"], "action": "hijack-dns"},
-                    {"clash_mode": "Direct", "action": "route", "outbound": "DIRECT"},
-                    {"clash_mode": "Global", "action": "route", "outbound": G_SEL if G_SEL in policies else "DIRECT"}]
-    resolved = False
-    final = "DIRECT"
-    for line in cfg["rules"]:
-        if line.upper().startswith("MATCH,"):
-            final = tr.action(line.split(",", 1)[1]).get("outbound", "DIRECT") if tr.action(line.split(",", 1)[1]) else "DIRECT"
-            continue
-        r, needs = tr.rule(line)
-        if r is None:
-            continue
-        if r.get("action") == "route" and r.get("outbound") not in policies:
-            r["outbound"] = G_SEL if G_SEL in policies else "DIRECT"
-        if needs and not resolved:  # 与 mihomo 一致：没有 no-resolve 的 IP 规则先解析域名再匹配
-            route_rules.append({"action": "resolve"})
-            resolved = True
-        route_rules.append(r)
-    dns, t_node, t_direct, t_proxy = sb_dns(d, cfg, policies, tr, alias, v6)
-    if resolved and t_proxy:
-        for r in route_rules:
-            if r.get("action") == "resolve":
-                r["server"] = t_proxy if dns_cfg(d)["mode"] == "fake-ip" else dns["final"]
-    elif resolved:
-        for r in route_rules:
-            if r.get("action") == "resolve":
-                r["server"] = t_direct
-    # 规则集定义：只保留本地已有文件的（缺失的规则及引用跳过，避免启动失败）
+    return rule_sets
+
+
+def sb_rule_set_defs(rule_sets, warn):
+    """规则集定义：只保留本地已有文件的（缺失的规则及引用跳过，避免启动失败）"""
     defs, missing = [], set()
     for tag, rsd in rule_sets.items():
         if rsd["kind"] == "inline":
@@ -2633,39 +2752,26 @@ def build_singbox(d):
             missing.add(tag)
     if missing:
         warn.append("以下规则集文件尚未下载，相关规则暂时跳过：" + "、".join(sorted(missing)[:8]) + ("…" if len(missing) > 8 else ""))
+    return defs, missing
 
-    def prune_rules(lst):
-        out = []
-        for r in lst:
-            r = dict(r)
-            if r.get("type") == "logical":
-                subs = prune_rules(r["rules"])
-                if len(subs) != len(r["rules"]):
-                    continue
-                r["rules"] = subs
-            elif "rule_set" in r:
-                keep = [x for x in r["rule_set"] if x not in missing]
-                if not keep:
-                    continue
-                r["rule_set"] = keep
-            out.append(r)
-        return out
-    route_rules = prune_rules(route_rules)
-    dns["rules"] = prune_rules(dns["rules"])
-    mode = {"global": "Global", "direct": "Direct"}.get(d.get("mode"), "Rule")
-    conf = {
-        "log": {"level": "info", "timestamp": True},
-        "dns": dns,
-        "inbounds": inbounds,
-        "outbounds": outbounds,
-        "route": {"rules": route_rules, "rule_set": defs, "final": final if final in policies else "DIRECT",
-                  "auto_detect_interface": True, "default_domain_resolver": t_node},
-        "experimental": {"clash_api": {"external_controller": f"{CTRL_HOST}:{CTRL_PORT}", "secret": d["secret"],
-                                       "default_mode": mode},
-                         "cache_file": {"enabled": True, "path": os.path.join(SB_DIR, "cache.db"), "store_fakeip": True}},
-    }
-    need = {tag: rsd for tag, rsd in rule_sets.items() if rsd["kind"] != "inline"}
-    return conf, list(dict.fromkeys(warn)), need
+
+def sb_prune_rules(lst, missing):
+    """去掉引用了缺失规则集的规则（逻辑规则里有一条缺失就整条去掉）"""
+    out = []
+    for r in lst:
+        r = dict(r)
+        if r.get("type") == "logical":
+            subs = sb_prune_rules(r["rules"], missing)
+            if len(subs) != len(r["rules"]):
+                continue
+            r["rules"] = subs
+        elif "rule_set" in r:
+            keep = [x for x in r["rule_set"] if x not in missing]
+            if not keep:
+                continue
+            r["rule_set"] = keep
+        out.append(r)
+    return out
 
 
 def _rule_lines_to_source(text, behavior, fmt):
@@ -3110,6 +3216,7 @@ def _link():
 _SRC['shunt.panel_update'] = '''"""面板在线更新"""
 import hashlib, json, os, re, shutil, time, urllib.request, urllib.error
 
+from .errlog import log_err
 from .base import BASE, PANEL_VERSION, UA
 PANEL_RAW = os.environ.get("PANEL_RAW", "https://raw.githubusercontent.com/Skycnhe/Shunt/Hk001")
 UPD_FILES = ["server.py", "index.html", "tproxy.sh", "selftest.sh", "init.d/mihomo", "init.d/mihomo-panel"]
@@ -3281,11 +3388,10 @@ def self_update(apply=False, gh=""):
 
 def _link():
     """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global open_url, proxy_opener, sh, restart_self, log_err, start_update_guard
+    global open_url, proxy_opener, sh, restart_self, start_update_guard
     from .core_update import open_url
     from .sysopt import proxy_opener, sh
     from .https import restart_self
-    from .access import log_err
     from .update_guard import start_update_guard
 '''
 _SRC['shunt.core_update'] = '''"""内核（mihomo）更新"""
@@ -3293,6 +3399,7 @@ import hashlib, os, re, shutil, sys, threading, time, urllib.request, urllib.err
 from collections import deque
 from urllib.parse import quote
 
+from .errlog import log_err
 from .base import CONF_DIR, MIHOMO_LOG, SVC, UA
 from .data import load
 from .mihomo import mh_bin, write_config
@@ -3594,10 +3701,9 @@ def core_upd_status():
 
 def _link():
     """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global proxy_opener, sh, core_alive, notify, log_err
+    global proxy_opener, sh, core_alive, notify
     from .sysopt import proxy_opener, sh
     from .notify import core_alive, notify
-    from .access import log_err
 '''
 _SRC['shunt.sysopt'] = '''"""Alpine 系统优化"""
 import http.client, json, os, re, ssl, subprocess, threading, time, urllib.request, urllib.error
@@ -4145,111 +4251,6 @@ def favicon(url):
     FAV_FAIL[host] = time.time()
     return None, None
 '''
-_SRC['shunt.auth'] = '''"""认证：PBKDF2 密码 + 随机会话"""
-import hashlib, hmac, json, os, secrets, threading, time
-
-from .base import PANEL_DIR
-PW_ITER = 60000  # 低端 ARM 上约 0.3 秒，只在登录 / 改密时计算
-SESS_FILE = os.path.join(PANEL_DIR, "sessions.json")
-SESS_TTL = 30 * 86400  # 会话 30 天无访问即过期（每次访问顺延）
-SESS_MAX = 50
-SESS, SESS_LOCK, TICKETS = {}, threading.Lock(), {}
-
-
-def pw_hash(pw, salt=None):
-    salt = salt or secrets.token_hex(16)
-    h = hashlib.pbkdf2_hmac("sha256", pw.encode(), bytes.fromhex(salt), PW_ITER).hex()
-    return f"pbkdf2_sha256${PW_ITER}${salt}${h}"
-
-
-def pw_check(pw, d):
-    st = d.get("pw_hash") or ""
-    if not st:
-        return hmac.compare_digest(pw.encode(), (d.get("password") or "admin").encode())
-    try:
-        _, it, salt, h = st.split("$")
-        return hmac.compare_digest(hashlib.pbkdf2_hmac("sha256", pw.encode(), bytes.fromhex(salt), int(it)).hex(), h)
-    except Exception:
-        return False
-
-
-def _tk(tok):
-    return hashlib.sha256(str(tok).encode()).hexdigest()
-
-
-def sess_load():
-    try:
-        with open(SESS_FILE) as f:
-            SESS.update({k: v for k, v in json.load(f).items() if isinstance(v, dict) and v.get("exp", 0) > time.time()})
-    except Exception:
-        pass
-
-
-def sess_save():
-    try:
-        tmp = SESS_FILE + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(SESS, f)
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, SESS_FILE)
-    except Exception as e:
-        print("session save error", e, flush=True)
-
-
-def sess_new(ip="", ua=""):
-    tok = secrets.token_urlsafe(32)
-    now = time.time()
-    with SESS_LOCK:
-        for k in [k for k, v in SESS.items() if v.get("exp", 0) <= now]:
-            SESS.pop(k)
-        while len(SESS) >= SESS_MAX:  # 只保留最近的会话
-            SESS.pop(min(SESS, key=lambda k: SESS[k].get("seen", 0)))
-        SESS[_tk(tok)] = {"t": int(now), "seen": int(now), "exp": int(now + SESS_TTL), "ip": ip, "ua": ua[:120]}
-        sess_save()
-    return tok
-
-
-def sess_ok(tok):
-    if not tok:
-        return False
-    k, now = _tk(tok), time.time()
-    with SESS_LOCK:
-        e = SESS.get(k)
-        if not e or e.get("exp", 0) <= now:
-            SESS.pop(k, None)
-            return False
-        if now - e.get("seen", 0) > 3600:  # 每小时最多落盘一次，避免频繁写闪存
-            e["seen"], e["exp"] = int(now), int(now + SESS_TTL)
-            sess_save()
-    return True
-
-
-def sess_drop(tok=None, keep=None):
-    """tok：注销该会话；tok 为空：注销全部（keep 除外）"""
-    with SESS_LOCK:
-        if tok:
-            SESS.pop(_tk(tok), None)
-        else:
-            kk = _tk(keep) if keep else None
-            for k in [k for k in SESS if k != kk]:
-                SESS.pop(k)
-        sess_save()
-
-
-def ticket_new():
-    """日志流（EventSource 无法带请求头）用的一次性票据，60 秒有效"""
-    now = time.time()
-    for k in [k for k, v in TICKETS.items() if v <= now]:
-        TICKETS.pop(k, None)
-    t = secrets.token_urlsafe(18)
-    TICKETS[t] = now + 60
-    return t
-
-
-def ticket_use(t):
-    exp = TICKETS.pop(str(t or ""), 0)
-    return exp > time.time()
-'''
 _SRC['shunt.notify'] = '''"""Telegram 通知"""
 import json, socket, threading, time, urllib.request, urllib.error
 from collections import deque
@@ -4373,6 +4374,7 @@ _SRC['shunt.latency'] = '''"""节点延迟缓存"""
 import base64, json, os, re, threading, time, urllib.request, urllib.error
 from urllib.parse import quote
 
+from .errlog import log_err
 from .base import G_MANUAL, G_SEL, HC, NOTIFY_FILE, PANEL_DIR, UA, WD_INTERVAL
 from .data import load, read_json, write_json
 from .core import core, core_json, refresh_regions
@@ -4427,8 +4429,8 @@ def delay_merge(px):
         try:
             write_json(DELAY_FILE, data)
             DELAYS.update(saved=now, dirty=False)
-        except Exception:
-            pass
+        except OSError as e:
+            log_err("保存延迟缓存", e)
     return px
 
 
@@ -4458,8 +4460,8 @@ def retest_soon(wait=6):
                 core("GET", f"/group/{quote(G_MANUAL)}/delay?url={quote(HC)}&timeout=5000", timeout=60)
             RETEST["last"] = time.time()
             proxies_merged()
-        except Exception:
-            pass
+        except Exception as e:
+            log_err("定时测速", e)
         finally:
             RETEST["pending"] = False
     threading.Thread(target=run, daemon=True).start()
@@ -4721,7 +4723,7 @@ def arp_table():
                 p = line.split()
                 if len(p) >= 4 and p[3] != "00:00:00:00:00:00":
                     out[p[0]] = p[3]
-    except Exception:
+    except OSError:
         pass
     return out
 
@@ -4934,7 +4936,7 @@ def live_rule(host):
         stop["stop"] = True
         try:
             stop["sock"].shutdown(socket.SHUT_RDWR)
-        except Exception:
+        except (KeyError, OSError):
             pass
 
 
@@ -5023,10 +5025,14 @@ def _link():
     from .logstream import core_stream
 '''
 _SRC['shunt.logstream'] = '''"""实时日志 (SSE)"""
-import socket
+import secrets, socket, time
 
 from .base import CTRL_HOST, CTRL_PORT
 from .data import load
+
+TICKETS = {}  # 日志流（EventSource 无法带请求头）用的一次性票据
+
+
 def core_stream(path, sink, stop, idle=None):
     """以原始 socket 读取 mihomo 的 chunked JSON 行流，逐行回调 sink；stop 被置位或连接断开时结束。
     idle: 超过该秒数没有数据视为断线（/traffic /memory 每秒推送，可用来发现半开连接）"""
@@ -5066,12 +5072,28 @@ def core_stream(path, sink, stop, idle=None):
             line, buf = buf.split(b"\\n", 1)
             if line.strip():
                 sink(line.decode("utf-8", "ignore"))
+
+
+def ticket_new():
+    """日志流（EventSource 无法带请求头）用的一次性票据，60 秒有效"""
+    now = time.time()
+    for k in [k for k, v in TICKETS.items() if v <= now]:
+        TICKETS.pop(k, None)
+    t = secrets.token_urlsafe(18)
+    TICKETS[t] = now + 60
+    return t
+
+
+def ticket_use(t):
+    exp = TICKETS.pop(str(t or ""), 0)
+    return exp > time.time()
 '''
 _SRC['shunt.adblock'] = '''"""广告拦截（AdGuard Home 风格的域名过滤）"""
 import copy, hashlib, json, os, re, secrets, threading, time, urllib.request, urllib.error
 from collections import deque
 from urllib.parse import quote
 
+from .errlog import log_err
 from .base import AB_DIR, AB_STATS_FILE, CONF_DIR, UA
 from .data import load, read_json, write_json
 from .mihomo import build_config
@@ -5594,8 +5616,10 @@ class AdStats:
             try:
                 sb = active_core() == "singbox"  # sing-box 的规则命中只在 debug 级别日志里
                 core_stream("/logs?level=debug" if sb else "/logs?level=info", self.sink_sb if sb else self.sink, {})
-            except Exception:
+            except OSError:  # 内核未运行 / 断线，稍后重连
                 pass
+            except Exception as e:
+                log_err("广告拦截统计", e)
             time.sleep(3)
 
 
@@ -5604,13 +5628,13 @@ AD_STATS = None
 
 def _link():
     """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global udp_dns_query, log_err
+    global udp_dns_query
     from .live import udp_dns_query
-    from .access import log_err
 '''
 _SRC['shunt.live'] = '''"""实时速率 / 内存（订阅 /traffic 与 /memory 流）"""
 import json, secrets, socket, time
 
+from .errlog import log_err
 from .core import core_json
 from .logstream import core_stream
 def udp_dns_query(name, port=1053, host="127.0.0.1", timeout=8):
@@ -5661,8 +5685,10 @@ def live_loop(path):
     while True:
         try:
             core_stream(path, sink, {}, idle=15)
-        except Exception:
+        except OSError:  # 内核未运行 / 断线，稍后重连
             pass
+        except Exception as e:
+            log_err("实时速率", e)
         LIVE.update(up=0, down=0, t=0) if path == "/traffic" else LIVE.update(inuse=0)
         time.sleep(3)
 
@@ -5682,7 +5708,7 @@ def memory_once():
             stop["stop"] = True
             try:
                 stop["sock"].shutdown(socket.SHUT_RDWR)
-            except Exception:
+            except (KeyError, OSError):
                 pass
     try:
         core_stream("/memory", sink, stop, idle=3)
@@ -5751,6 +5777,7 @@ import json, time
 from collections import deque
 from urllib.parse import quote
 
+from .errlog import log_err
 from .base import G_MANUAL, HC, SVC
 from .data import load
 from .core import core, core_json, refresh_regions, reload_core
@@ -5775,8 +5802,8 @@ def run_task(name):
         ok, bad = sb_update_subs(d=d)
         try:
             refresh_regions()
-        except Exception:
-            pass
+        except Exception as e:
+            log_err("定时任务：刷新地区分组", e)
         return not bad, "订阅已更新" if not bad else "以下订阅更新失败：" + "；".join(bad)
     if name == "geo_update" and active_core(d) == "singbox":
         bad = sb_sync_assets(d, force=True)
@@ -5790,8 +5817,8 @@ def run_task(name):
                 bad.append(s["name"])
         try:
             refresh_regions()
-        except Exception:
-            pass
+        except Exception as e:
+            log_err("定时任务：刷新地区分组", e)
         return not bad, "订阅已更新" if not bad else "以下订阅更新失败：" + "、".join(bad)
     if name == "core_restart":
         WD["manual_stop"] = False
@@ -5919,7 +5946,7 @@ def rdns_loop():
             name = ""
             try:  # 不再改全局 socket 超时：那会让同时建立的订阅下载、核心更新等连接也只剩 2 秒
                 name = socket.gethostbyaddr(ip)[0]
-            except Exception:
+            except OSError:
                 pass
             if name and (name == ip or name.endswith(".in-addr.arpa")):
                 name = ""
@@ -5974,6 +6001,7 @@ def tun_runtime_error(dev, wait=4):
 _SRC['shunt.diag'] = '''"""网络诊断"""
 import json, os, secrets, shutil, socket, threading, time, urllib.request, urllib.error
 
+from .errlog import ERRS
 from .base import CONF_DIR, TPROXY_SH
 from .data import load
 from .mihomo import check_config, mh_bin, safe_dev
@@ -6098,12 +6126,6 @@ def diagnose():
     except OSError:
         pass
     return out
-
-
-def _link():
-    """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global ERRS
-    from .access import ERRS
 '''
 _SRC['shunt.dnsleak'] = '''"""DNS 防泄露"""
 import copy, ipaddress, json, os, re, secrets, socket, threading, time
@@ -6407,30 +6429,6 @@ def startup_migrate():
     if os.path.isfile(SEL_FILE):
         restore_selections()
 '''
-_SRC['shunt.login'] = '''"""登录防爆破"""
-import time
-FAILS = {}  # ip -> [失败次数, 解锁时间]
-
-
-def login_blocked(ip):
-    e = FAILS.get(ip)
-    if e and e[1] > time.time():
-        return int(e[1] - time.time())
-    return 0
-
-
-def login_failed(ip):
-    if len(FAILS) > 256:  # 清掉已过期的记录，防止字典无限增长
-        now = time.time()
-        for k in [k for k, v in FAILS.items() if v[1] and v[1] <= now]:
-            FAILS.pop(k, None)
-    e = FAILS.setdefault(ip, [0, 0])
-    if e[1] and e[1] <= time.time():
-        e[:] = [0, 0]
-    e[0] += 1
-    if e[0] >= 5:
-        e[1] = time.time() + 600
-'''
 _SRC['shunt.https'] = '''"""HTTPS"""
 import os, socket, ssl, sys
 from http.server import ThreadingHTTPServer
@@ -6467,7 +6465,6 @@ def restart_self():
 '''
 _SRC['shunt.access'] = '''"""访问控制"""
 import ipaddress, os, time
-from collections import deque
 
 from .data import load
 # 面板没有密码：只接受局域网来源，Host 必须是 IP / 局域网名（防 DNS 重绑定），改动类请求必须带自定义头（防跨站请求）
@@ -6513,37 +6510,15 @@ def host_ok(host):
         pass
     a = acl_cfg()
     return a["public"] or h == "localhost" or "." not in h or h.endswith(LAN_SUFFIX) or h in a["hosts"]
-
-
-ERRS = deque(maxlen=30)
-_ERR_SEEN = {}
-
-
-def log_err(where, e, tb=False):
-    """把原本被吞掉的异常记到面板日志和「诊断」里；同一处同一错误 10 分钟只记一次"""
-    msg = f"{type(e).__name__}: {e}"[:300] if isinstance(e, BaseException) else str(e)[:300]
-    key = (where, msg)
-    now = time.time()
-    if now - _ERR_SEEN.get(key, 0) < 600:
-        return
-    _ERR_SEEN[key] = now
-    if len(_ERR_SEEN) > 500:
-        _ERR_SEEN.clear()
-    ERRS.appendleft({"t": int(now), "where": where, "msg": msg})
-    extra = ""
-    if tb and isinstance(e, BaseException):
-        import traceback
-        extra = "\\n" + "".join(traceback.format_exception(type(e), e, e.__traceback__))[-1500:]
-    print(f"[error] {where}: {msg}{extra}", flush=True)
 '''
 _SRC['shunt.update_guard'] = '''"""面板更新失败自动回滚"""
 import os
 
+from .errlog import log_err
 from .base import AUTO_TAIL, BASE, G_AUTO, G_DIRECT, G_MANUAL, G_SEL, LB_PREFIX, LB_TAIL, PANEL_VERSION, PORT, SIDE_GROUPS
 from .data import LB_ALL, map_refs
 from .panel_update import local_file
 from .sysopt import sh
-from .access import log_err
 GUARD = os.path.join(BASE, ".update-guard.sh")
 ROLLBACK_NOTE = os.path.join(BASE, ".rollback-note")
 
@@ -6667,6 +6642,7 @@ from http.server import BaseHTTPRequestHandler
 from collections import deque
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
+from .errlog import log_err
 from . import adblock, stats
 from .base import (
     AB_DIR, AB_PRESETS, BUILTIN_POLICIES, CERT, DEFAULT_EXCLUDE, DNS_DEFAULT, DNS_LISTS, GROUP_TYPES, G_MANUAL, G_SEL, HC, KEY,
@@ -6688,13 +6664,12 @@ from .core_update import (
     lgbm_fetch, lgbm_fetch_reload
 )
 from .sysopt import config_view, delay_test, favicon, nft_ok, opt_apply, opt_status, sh, speed_test
-from .auth import pw_check, pw_hash, sess_drop, sess_new, ticket_new, ticket_use
 from .notify import WD, tg_send
 from .latency import BG_FILE, RETEST, bg_fetch, bg_meta, bg_meta_save, bg_save, bg_type, fix_global, proxies_merged, retest_soon
 from .stats import arp_table
 from .unlock import unlock_test
 from .ruletest import clean_target, is_ip, rule_test
-from .logstream import core_stream
+from .logstream import core_stream, ticket_new, ticket_use
 from .adblock import AB_CACHE, AB_STATE, ab_check, ab_compose, ab_meta, adblock_update, fmt_size, list_id, parse_filter
 from .live import LIVE, memory_once
 from .logclean import LOG_STATE, log_clean, log_sizes
@@ -6702,11 +6677,22 @@ from .schedule import SCHED, TASK_NAMES, run_task, sched_event
 from .devices import device_map, read_leases, tun_runtime_error
 from .diag import diagnose
 from .dnsleak import antileak_dns, dns_route, leak_check
-from .login import FAILS, login_blocked, login_failed
 from .https import gen_cert, restart_self
-from .access import acl_cfg, host_name, host_ok, ip_is_lan, log_err
+from .access import acl_cfg, host_name, host_ok, ip_is_lan
 from .update_guard import group_meta, rename_policy
 from .static import MANIFEST, STATIC_TYPES, static_file
+ROUTES = {}  # (方法, 路径) → H 的处理函数；api() 先处理前缀 / 条件路由，再查这张表
+
+
+def api_route(path, *methods):
+    def deco(fn):
+        for m in methods:
+            assert (m, path) not in ROUTES, (m, path)
+            ROUTES[(m, path)] = fn
+        return fn
+    return deco
+
+
 class H(BaseHTTPRequestHandler):
     timeout = 30  # 读请求/TLS 握手的超时：卡住不发数据的连接不再永久占用线程（日志流只写不读，不受影响）
 
@@ -6762,19 +6748,13 @@ class H(BaseHTTPRequestHandler):
             n = 0
         if n <= 0:
             return {}
-        if n > MAX_BODY:  # 防止未登录请求（如 /api/login）用超大 body 耗尽路由器内存
+        if n > MAX_BODY:  # 防止超大 body 耗尽路由器内存
             raise ValueError("请求体过大")
         raw = self.rfile.read(n)
         try:
             return json.loads(raw)
         except Exception:
             return {}
-
-    def tok(self):
-        return self.headers.get("X-Token") or ""
-
-    def authed(self):  # v6.8.2 起面板不再需要密码，局域网内直接访问
-        return True
 
     def do_GET(self): self.route("GET")
     def do_POST(self): self.route("POST")
@@ -6807,7 +6787,7 @@ class H(BaseHTTPRequestHandler):
             origin = self.headers.get("Origin")
             if origin and origin != "null" and urlparse(origin).netloc.lower() != host.lower():
                 return "跨站请求已拒绝"
-            if "X-Shunt" not in self.headers and "X-Token" not in self.headers:
+            if "X-Shunt" not in self.headers and "X-Token" not in self.headers:  # X-Token：兼容旧版脚本
                 return "缺少 X-Shunt 请求头，跨站请求已拒绝（脚本调用接口请加上 -H 'X-Shunt: 1'）"
         return ""
 
@@ -6834,24 +6814,6 @@ class H(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(raw)
             return
-        if p == "/api/login" and m == "POST":
-            ip = self.client_address[0]
-            left = login_blocked(ip)
-            if left:
-                return self.send(429, {"message": f"失败次数过多，请 {left // 60 + 1} 分钟后再试"})
-            d = load()
-            try:
-                bd = self.body()
-                pw = str(bd.get("password") or "") if isinstance(bd, dict) else ""
-            except ValueError as e:
-                return self.send(413, {"message": str(e)})
-            if pw_check(pw, d):
-                FAILS.pop(ip, None)
-                return self.send(200, {"token": sess_new(ip, self.headers.get("User-Agent") or ""),
-                                       "must_change": bool(d.get("pw_default"))})
-            login_failed(ip)
-            n = FAILS[ip][0]
-            return self.send(401, {"message": "密码错误" + (f"，还可尝试 {5 - n} 次" if n < 5 else "，已锁定 10 分钟")})
         if not p.startswith("/api/"):
             return self.send(404, {"message": "not found"})
         if p == "/api/logstream" and m == "GET":  # EventSource 无法带自定义头，用 /api/logticket 换来的一次性票据
@@ -6859,8 +6821,6 @@ class H(BaseHTTPRequestHandler):
             if not ticket_use(q1(qs, "ticket")):
                 return self.send(401, {"message": "未登录"})
             return self.logstream(q1(qs, "level", default="info"))
-        if not self.authed():
-            return self.send(401, {"message": "未登录"})
         try:
             return self.api(m, p, u.query)
         except (BrokenPipeError, ConnectionResetError):
@@ -6911,7 +6871,7 @@ class H(BaseHTTPRequestHandler):
             stop["stop"] = True
             try:
                 stop["sock"].shutdown(socket.SHUT_RDWR)
-            except Exception:
+            except (KeyError, OSError):
                 pass
 
     def reply(self, ok, msg):
@@ -7198,134 +7158,6 @@ class H(BaseHTTPRequestHandler):
             slow = p.endswith("/delay") or p.endswith("/healthcheck")  # 测速可能超过默认 10 秒
             code, raw = core(m, p[len("/api/core"):] + ("?" + q if q else ""), b if b else None, timeout=60 if slow else 10)
             return self.send(code, raw or b"{}")
-        if p == "/api/state" and m == "GET":
-            d = load()
-            _, st = sh(SVC + " status")
-            code, ver = core("GET", "/version")
-            try:
-                version = json.loads(ver).get("version", "-") if code == 200 else "-"
-            except Exception:
-                version = "-"
-            cfg = build_config(d)
-            groups = [g["name"] for g in cfg["proxy-groups"]]
-            gmeta = group_meta(d, cfg)
-            if active_core(d) == "singbox":  # 地区负载均衡并入自动优选；负载均衡 / 故障转移按自动测速运行
-                lbs = region_lb_set()
-                groups = [g for g in groups if g not in lbs]
-                for n, mt in list(gmeta.items()):
-                    if n in lbs:
-                        gmeta.pop(n)
-                    elif mt["type"] in ("load-balance", "fallback"):
-                        mt.update(sb_from=mt["type"], type="url-test")
-            return self.send(200, {"pw_default": False, "mode": d["mode"], "subs": d["subs"], "rules": d["rules"],
-                                   "running": "started" in st or code == 200, "version": version, "groups": groups,
-                                   "nodes": [{"name": n["proxy"]["name"], "type": n["proxy"]["type"],
-                                                                "server": n["proxy"]["server"], "port": n["proxy"]["port"]} for n in d["nodes"]],
-                                   "rulesets": d["rulesets"], "bypass": d["bypass"], "tests": d["tests"],
-                                   "sub_interval": d["sub_interval"],
-                                   "ipv6": d["ipv6"], "https": d["https"],
-                                   "watchdog": d["watchdog"], "tg_token": d["tg_token"], "tg_chat": d["tg_chat"],
-                                   "default_exclude": DEFAULT_EXCLUDE, "proxy_mode": d["proxy_mode"], "tun": d["tun"],
-                                   "log_limit": d["log_limit"], "dns": dns_cfg(d),
-                                   "schedule": d["schedule"], "devices": d["devices"], "adblock_on": d["adblock"]["enabled"],
-                                   "sched_events": list(SCHED["events"])[:20], "group_meta": gmeta,
-                                   "sniffer": d["sniffer"],
-                                   "gh_proxy": d["gh_proxy"], "panel_version": PANEL_VERSION, "core": active_core(d),
-                                   "wd": {"status": WD["status"], "last_check": WD["last_check"],
-                                          "events": list(WD["events"])[:20]}})
-        if p == "/api/groups" and m == "GET":
-            return self.groups_info()
-        if p == "/api/groups/cfg" and m == "PUT":
-            return self.save_groups_cfg(b)
-        if p == "/api/groups" and m == "POST":
-            return self.save_custom_group(b)
-        if p == "/api/groups" and m == "DELETE":
-            return self.delete_custom_group(b)
-        if p == "/api/groups/preview" and m == "POST":
-            flt = str(b.get("filter") or "").strip()
-            if not flt:
-                return self.send(200, {"matched": [], "total": 0})
-            r = rx(flt)
-            if r is None:
-                return self.send(400, {"message": "正则无效"})
-            d = load()
-            manual = [n["proxy"]["name"] for n in d["nodes"]]
-            allnodes = all_node_names(d) if b.get("subs", True) else manual
-            hit = [n for n in allnodes if r.search(n)]
-            return self.send(200, {"matched": hit[:200], "total": len(hit), "of": len(allnodes)})
-        if p == "/api/groups/refresh" and m == "POST":
-            return self.reply(*refresh_regions())
-        if p == "/api/config" and m == "GET":
-            txt = config_view(load(), masked=True)
-            sbm = active_core() == "singbox"
-            if "download" in parse_qs(q):
-                return self.send(200, txt.encode(), "application/json" if sbm else "application/x-yaml")
-            return self.send(200, {"text": txt, "path": core_conf_path(), "size": len(txt.encode()), "core": active_core()})
-        if p == "/api/sysopt" and m == "GET":
-            return self.send(200, opt_status())
-        if p == "/api/sysopt" and m == "POST":
-            ids = b.get("ids")
-            if not isinstance(ids, list):
-                return self.send(400, {"message": "参数错误"})
-            ok, msg, errs = opt_apply([str(i) for i in ids])
-            return self.send(200, {"ok": ok, "message": msg, "errors": errs} | opt_status())
-        if p == "/api/speedtest" and m == "GET":
-            via = q1(parse_qs(q), "via", default="proxy")
-            return self.send(200, speed_test(via == "proxy"))
-        if p == "/api/bg" and m == "GET":
-            bm = bg_meta()
-            try:
-                return self.send(200, {"exists": True, "v": int(os.path.getmtime(BG_FILE)), "size": os.path.getsize(BG_FILE),
-                                       "url": bm.get("url", ""), "daily": bool(bm.get("daily"))})
-            except OSError:
-                return self.send(200, {"exists": False})
-        if p == "/api/bg" and m == "POST":
-            ok, msg = bg_save(b.get("data"))
-            if not ok:
-                return self.send(400, {"message": msg})
-            bg_meta_save({})  # 改为上传的图片：不再按链接刷新
-            return self.send(200, {"message": msg, "v": int(os.path.getmtime(BG_FILE))})
-        if p == "/api/bg/url" and m == "POST":
-            url = str(b.get("url") or "").strip() or bg_meta().get("url", "")
-            ok, msg = bg_fetch(url)
-            if not ok:
-                return self.send(400, {"message": msg})
-            bg_meta_save({"url": url, "daily": bool(b.get("daily")), "t": int(time.time())})
-            return self.send(200, {"message": msg, "v": int(os.path.getmtime(BG_FILE))})
-        if p == "/api/bg/daily" and m == "POST":
-            bm = bg_meta()
-            if not bm.get("url"):
-                return self.send(400, {"message": "当前背景图不是链接图片"})
-            bm["daily"] = bool(b.get("daily"))
-            bg_meta_save(bm)
-            return self.send(200, {"message": "已开启每天自动更新" if bm["daily"] else "已关闭每天自动更新"})
-        if p == "/api/bg" and m == "DELETE":
-            try:
-                os.remove(BG_FILE)
-            except OSError:
-                pass
-            bg_meta_save({})
-            return self.send(200, {"message": "已移除背景图"})
-        if p == "/api/px" and m == "GET":
-            px = proxies_merged()
-            if px is None:
-                return self.send(502, {"message": "核心未运行或无法连接"})
-            return self.send(200, {"proxies": px, "retesting": RETEST["pending"]})
-        if p == "/api/coreswitch" and m == "GET":
-            d = load()
-            if active_core(d) == "singbox" and not SB_STATE["warn"]:
-                SB_STATE["warn"] = build_singbox(d)[1]
-            return self.send(200, {"core": active_core(d), "versions": {"mihomo": bin_version(MIHOMO_BIN), "smart": bin_version(SMART_BIN), "singbox": sb_version()},
-                                   "lgbm": os.path.isfile(LGBM_FILE),
-                                   "warn": SB_STATE["warn"] if active_core(d) == "singbox" else [], "busy": CORE_UPD["busy"]})
-        if p == "/api/coreswitch" and m == "POST":
-            kind = b.get("core")
-            if kind not in CORES:
-                return self.send(400, {"message": "未知的内核"})
-            if kind == active_core():
-                return self.send(400, {"message": f"当前已经是 {CORES[kind]}"})
-            ok, msg = core_job_start(core_switch_job, kind, load().get("gh_proxy") or "")
-            return self.send(200 if ok else 409, {"message": msg})
         if p == "/api/coreupdate" and m == "GET" and (q1(parse_qs(q), "core") or active_core()) == "singbox":
             ch = q1(parse_qs(q), "channel", default="stable")
             info = {"current": sb_version() or "未安装", "arch": sb_arch() or os.uname().machine, "channel": ch,
@@ -7351,58 +7183,6 @@ class H(BaseHTTPRequestHandler):
             ch = b.get("channel") or "stable"
             ok, msg = core_job_start(sb_update_job, ch, load().get("gh_proxy") or "", bool(b.get("force")))
             return self.send(200 if ok else 409, {"message": msg})
-        if p == "/api/coreupdate" and m == "GET":
-            ch = q1(parse_qs(q), "channel", default="stable")
-            kind = "smart" if (q1(parse_qs(q), "core") or active_core()) == "smart" else "mihomo"
-            if ch not in CORE_CHANNELS:
-                return self.send(400, {"message": "未知的更新通道"})
-            ok, info = core_check(ch, load().get("gh_proxy") or "", kind)
-            info["busy"] = CORE_UPD["busy"]
-            return self.send(200 if ok else 502, info)
-        if p == "/api/coreupdate/status" and m == "GET":
-            return self.send(200, core_upd_status())
-        if p == "/api/coreupdate" and m == "POST":
-            kind = "smart" if (b.get("core") or active_core()) == "smart" else "mihomo"
-            if b.get("action") == "lgbm":
-                try:
-                    n = lgbm_fetch(load().get("gh_proxy") or "")
-                except Exception as e:
-                    return self.send(502, {"message": "模型下载失败：" + str(e)[:200]})
-                if active_core() == "smart":
-                    reload_core()
-                return self.reply(True, f"LightGBM 模型已更新（{n // 2**20} MB）")
-            if b.get("action") == "rollback":
-                ok, msg = core_job_start(core_rollback_job, kind)
-            else:
-                ch = "alpha" if kind == "smart" else (b.get("channel") or "stable")
-                if ch not in CORE_CHANNELS:
-                    return self.send(400, {"message": "未知的更新通道"})
-                ok, msg = core_job_start(core_update_job, ch, load().get("gh_proxy") or "", bool(b.get("force")), kind)
-            return self.send(200 if ok else 409, {"message": msg})
-        if p == "/api/selfupdate" and m == "GET":
-            ok, info = self_update(False, load().get("gh_proxy") or "")
-            return self.send(200 if ok else 502, info)
-        if p == "/api/selfupdate" and m == "POST":
-            if b.get("action") == "rollback":
-                return self.reply(*self_rollback())
-            ok, info = self_update(True, load().get("gh_proxy") or "")
-            return self.send(200 if ok else 500, info)
-        if p == "/api/subs/update" and m == "POST":
-            name = b.get("name") or ""
-            names = [s["name"] for s in load()["subs"]] if not name else [name]
-            if active_core() == "singbox":
-                okl, bad = sb_update_subs(names)
-                ok2, msg2 = refresh_regions()
-                msg = ("已更新：" + "；".join(okl) if not bad else "更新失败：" + "；".join(bad)) + ("；" + msg2 if msg2 and "无变化" not in msg2 else "")
-                return self.reply(not bad, msg)
-            bad = []
-            for nm in names:
-                code, raw = core("PUT", "/providers/proxies/" + quote(nm), timeout=120)
-                if code >= 300:
-                    bad.append(nm + "：" + raw.decode(errors="ignore")[:100])
-            ok2, msg2 = refresh_regions()
-            msg = ("已更新" if not bad else "更新失败：" + "；".join(bad)) + ("；" + msg2 if msg2 and "无变化" not in msg2 else "")
-            return self.reply(not bad, msg)
         if p == "/api/delay":
             return self.send(200, delay_test(force=q1(parse_qs(q), "force") == "1"))
         if p == "/api/favicon":
@@ -7417,301 +7197,587 @@ class H(BaseHTTPRequestHandler):
             return self.wfile.write(b)
         if p == "/api/unlock":
             return self.send(200, unlock_test())
-        if p == "/api/stats" and m == "GET":
-            return self.send(200, stats.STATS.report() if stats.STATS else {"today": {}, "month": {}, "days": [], "arp": {}})
-        if p == "/api/ruletest" and m == "POST":
-            return self.send(200, rule_test(b.get("target") or ""))
-        if p == "/api/subs" and m == "POST":
-            name, url = (b.get("name") or "").strip(), (b.get("url") or "").strip()
-            if not name or not url.startswith("http"):
-                return self.send(400, {"message": "名称或订阅链接无效"})
-            flt, exc = (b.get("filter") or "").strip(), (b["exclude"] if "exclude" in b else DEFAULT_EXCLUDE).strip()
-            for pat in (flt, exc):
-                try:
-                    re.compile(pat)
-                except re.error as e:
-                    return self.send(400, {"message": f"正则表达式无效：{pat}（{e}）"})
-            prev = update(lambda d: d.update(subs=[s for s in d["subs"] if s["name"] != name] +
-                                              [{"name": name, "url": url, "filter": flt, "exclude": exc}]))
-            if active_core() == "singbox":  # 先由面板下载节点，再生成配置
-                okl, bad = sb_update_subs([name])
-                ok, msg = reload_core(prev)
-                if ok and bad:
-                    ok, msg = False, "订阅已保存，但下载失败：" + "；".join(bad)
-                return self.reply(ok, msg if not ok else "已添加：" + "；".join(okl))
-            ok, msg = reload_core(prev)
-            if ok:
-                refresh_after_sub(name)  # 订阅下载完成后按实际节点生成地区 / 均衡分组
-            return self.reply(ok, msg)
-        if p == "/api/subs" and m == "DELETE":
-            prev = update(lambda d: d.update(subs=[s for s in d["subs"] if s["name"] != b.get("name")]))
-            return self.reply(*reload_core(prev))
-        if p == "/api/nodes" and m == "POST":
-            d = load()
-            added, errs = add_links(b.get("links") or "", d["nodes"], d)
-            if not added:
-                return self.send(400, {"message": "没有可导入的节点" + ("：\\n" + "\\n".join(errs) if errs else "")})
-            prev = update(lambda d: d["nodes"].extend(added))
-            ok, msg = reload_core(prev)
-            msg = (f"已导入 {len(added)} 个节点" if ok else msg) + ("；忽略：" + "；".join(errs) if errs else "")
-            return self.reply(ok, msg)
-        if p == "/api/nodes" and m == "DELETE":
-            names = set(b.get("names") or [b.get("name")])
-            prev = update(lambda d: d.update(nodes=[n for n in d["nodes"] if n["proxy"]["name"] not in names]))
-            return self.reply(*reload_core(prev))
-        if p == "/api/rules" and m == "PUT":
-            rules = [r.strip() for r in b.get("rules", []) if r.strip()]
-            bad = bad_rule_policies([r for r in rules if not r.startswith("#")], load())
-            if bad:
-                return self.send(400, {"message": "以下规则的策略不存在：" + "；".join(bad[:5])})
-            prev = update(lambda d: d.update(rules=rules))
-            return self.reply(*reload_core(prev))
-        if p == "/api/mode" and m == "PUT":
-            mode = b.get("mode")
-            if mode not in ("rule", "global", "direct"):
-                return self.send(400, {"message": "模式无效"})
-            with LOCK:
-                d = load()
-                d["mode"] = mode
-                save(d)
-                sb = active_core(d) == "singbox"
-                write_active_config(d)
-            core("PATCH", "/configs", {"mode": mode.capitalize() if sb else mode})
-            if mode == "global":
-                fix_global()
-            return self.send(200, {"message": "ok"})
-        if p == "/api/proxymode" and m == "PUT":
-            return self.set_proxy_mode(b)
-        if p == "/api/conns" and m == "GET":  # 精简后的连接列表：只保留前端用到的字段
-            c = core_json("/connections", timeout=5)
-            if c is None:
-                return self.send(502, {"message": "mihomo 未运行或无法连接"})
-            keep = ("sourceIP", "host", "sniffHost", "destinationIP", "destinationPort", "network")
-            out = [{"id": x.get("id"), "start": x.get("start"), "upload": x.get("upload", 0), "download": x.get("download", 0),
-                    "rule": x.get("rule"), "rulePayload": x.get("rulePayload"), "chains": x.get("chains"),
-                    "metadata": {k: (x.get("metadata") or {}).get(k) for k in keep}} for x in c.get("connections") or []]
-            return self.send(200, {"connections": out})
-        if p == "/api/live" and m == "GET":
-            out = dict(LIVE)
-            if time.time() - out["t"] > 5:  # 后台 /traffic 流未就绪（核心刚启动或已停止）时退回连接快照
-                c = core_json("/connections", timeout=3)
-                out.update(up=0, down=0, upTotal=(c or {}).get("uploadTotal", 0), downTotal=(c or {}).get("downloadTotal", 0))
-                out["stale"] = True
-            if not out["inuse"]:
-                out.update(memory_once())
-            out["running"] = time.time() - LIVE["t"] < 5 or bool(out.get("inuse"))
-            return self.send(200, out)
-        if p == "/api/logs/info" and m == "GET":
-            return self.send(200, {"files": log_sizes(), "limit": load()["log_limit"], "last": LOG_STATE["last"]})
-        if p == "/api/logs/clean" and m == "POST":
-            freed = log_clean(force=True)
-            return self.send(200, {"message": f"已清理，释放 {fmt_size(freed)}", "files": log_sizes()})
-        if p == "/api/adblock" and m == "GET":
-            d = load()
-            meta = ab_meta()
-            rep = adblock.AD_STATS.report() if adblock.AD_STATS else {"today": 0, "top": [], "lists": {}, "days": []}
-            lists = [dict(l, **{k: v for k, v in (meta.get(l["id"]) or {}).items()}, hits=rep["lists"].get(l["id"], 0)) for l in d["adblock"]["lists"]]
-            prov = (core_json("/providers/rules") or {}).get("providers") or {}
-            return self.send(200, {**{k: v for k, v in d["adblock"].items() if k != "lists"}, "lists": lists,
-                                   "presets": AB_PRESETS, "stats": rep, "updating": AB_STATE["updating"], "msg": AB_STATE["msg"],
-                                   "custom_hits": rep["lists"].get("custom", 0),
-                                   "loaded": {k: v.get("ruleCount") for k, v in prov.items() if k.startswith("ad-")}})
-        if p == "/api/adblock" and m == "PUT":
-            return self.save_adblock(b)
-        if p == "/api/adblock/update" and m == "POST":
-            if AB_STATE["updating"]:
-                return self.send(409, {"message": "正在更新中，请稍候"})
-            threading.Thread(target=adblock_update, args=(b.get("ids"),), daemon=True).start()
-            return self.send(200, {"message": "已开始下载，完成后自动生效"})
-        if p == "/api/adblock/check" and m == "POST":
-            return self.send(200, ab_check(b.get("domain") or ""))
-        if p == "/api/dns" and m == "PUT":
-            return self.save_dns(b)
-        if p == "/api/dnsleak" and m == "GET":
-            return self.send(200, leak_check(live="nolive" not in parse_qs(q)))
-        if p == "/api/history" and m == "GET":
-            h = read_json(HISTORY_FILE, [])
-            return self.send(200, [{"id": x["id"], "t": x["t"], "changed": x["changed"]} for x in h])
-        if p == "/api/history" and m == "POST":
-            h = {x["id"]: x for x in read_json(HISTORY_FILE, [])}
-            snap = h.get(str(b.get("id") or ""))
-            if not snap:
-                return self.send(404, {"message": "快照不存在"})
-
-            def apply_snap(d):
-                d.update({k: v for k, v in snap["data"].items() if k not in HISTORY_SKIP})
-                migrate_names(d)
-            prev = update(apply_snap)
-            ab_compose(load())
-            ok, msg = reload_core(prev)
-            if ok:
-                sh(TPROXY_SH + " apply")
-            return self.reply(ok, ("已恢复到 " + time.strftime("%m-%d %H:%M", time.localtime(snap["t"])) + " 的配置") if ok else msg)
-        if p == "/api/dnsquery" and m == "POST":
-            name = clean_target(b.get("name") or "")
-            qtype = (b.get("type") or "A").upper()
-            if not name or qtype not in ("A", "AAAA", "CNAME", "MX", "TXT", "NS", "HTTPS", "SRV", "PTR"):
-                return self.send(400, {"message": "请输入域名并选择记录类型"})
-            st = time.time()
-            code, raw = core("GET", f"/dns/query?name={quote(name)}&type={qtype}", timeout=15)
-            ms = int((time.time() - st) * 1000)
-            try:
-                j = json.loads(raw)
-            except Exception:
-                j = {"message": raw.decode(errors="ignore")}
-            if code != 200:
-                return self.send(502 if code == 502 else code, {"message": j.get("message") or "查询失败"})
-            return self.send(200, {"name": name, "type": qtype, "ms": ms, "status": j.get("Status"),
-                                   "answer": j.get("Answer") or [], "policy": dns_route(name, load())})
-        if p == "/api/devices" and m == "GET":
-            ips = set(arp_table()) | set(read_leases())
-            if stats.STATS:
-                with stats.STATS.lock:
-                    for b2 in stats.STATS.data["days"].values():
-                        ips |= set(b2.get("dev", {}))
-            c = core_json("/connections", timeout=5) or {}
-            ips |= {(x.get("metadata") or {}).get("sourceIP") for x in c.get("connections") or []}
-            return self.send(200, {"map": device_map(sorted(i for i in ips if i)), "custom": load()["devices"]})
-        if p == "/api/devices" and m == "PUT":
-            devs = {}
-            for k, v in (b.get("devices") or {}).items():
-                k, v = str(k).strip().lower().replace("-", ":"), str(v).strip()[:40]
-                if k and v and (is_ip(k) or re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", k)):
-                    devs[k] = v
-            update(lambda d: d.update(devices=devs))
-            return self.send(200, {"message": f"已保存 {len(devs)} 个设备备注"})
-        if p == "/api/diag" and m == "GET":
-            return self.send(200, diagnose())
-        if p == "/api/schedule" and m == "PUT":
-            sc = {}
-            for k in ("sub_update", "core_restart", "geo_update"):
-                v = str(b.get(k) or "").strip()
-                if v and not re.fullmatch(r"([01]\\d|2[0-3]):[0-5]\\d", v):
-                    return self.send(400, {"message": f"时间格式应为 HH:MM：{v}"})
-                sc[k] = v
-            sc["latency"] = int(b.get("latency") or 0) if int(b.get("latency") or 0) in (0, 10, 30, 60, 180) else 0
-            update(lambda d: d.update(schedule=sc))
-            return self.send(200, {"message": "定时任务已保存"})
-        if p == "/api/schedule/run" and m == "POST":
-            k = b.get("task")
-            if k not in TASK_NAMES:
-                return self.send(400, {"message": "未知任务"})
-            ok, msg = run_task(k)
-            sched_event(f"手动执行 {TASK_NAMES[k]}：{'✓' if ok else '✗'} {msg}")
-            return self.reply(ok, msg)
-        if p == "/api/service" and m == "POST":
-            act = b.get("action")
-            if act == "reload":
-                return self.reply(*reload_core())
-            if act in ("restart", "stop", "start"):
-                WD["manual_stop"] = act == "stop"
-                code, out = sh(SVC + " " + act, timeout=90)
-                if act != "stop":
-                    retest_soon()
-                return self.reply(code == 0, out)
-            if act == "upgrade" and active_core() == "singbox":
-                return self.send(400, {"message": "请在 设置 → 核心 → 内核更新 里更新 sing-box"})
-            if act == "upgrade":
-                code, raw = core("POST", "/upgrade", {}, timeout=300)
-                return self.send(code if code != 502 else 500, raw or b'{"message":"ok"}')
-            if act == "geo" and active_core() == "singbox":
-                return self.reply(*run_task("geo_update"))
-            if act == "geo":
-                code, raw = core("POST", "/configs/geo", {}, timeout=120)
-                return self.send(code, raw or b'{"message":"ok"}')
-            return self.send(400, {"message": "未知操作"})
         if p == "/api/logs":
             _, out = sh(f"tail -n 300 '{MIHOMO_LOG}'")
             return self.send(200, {"log": out})
-        if p == "/api/settings" and m == "PUT":
-            allowed = {"rulesets", "bypass", "tests", "sub_interval", "region_groups", "ipv6", "watchdog", "tg_token", "tg_chat",
-                       "log_limit", "sniffer", "gh_proxy"}
-            if "gh_proxy" in b:
-                b["gh_proxy"] = str(b["gh_proxy"] or "").strip()
-                if b["gh_proxy"] and not re.match(r"^https?://[\\w.\\-:]+/?$", b["gh_proxy"]):
-                    return self.send(400, {"message": "GitHub 加速地址格式应为 https://ghfast.top/"})
-                if b["gh_proxy"] and not b["gh_proxy"].endswith("/"):
-                    b["gh_proxy"] += "/"
-            if "sniffer" in b:
-                b["sniffer"] = bool(b["sniffer"])
-            if "log_limit" in b and b["log_limit"] not in (1, 2, 5, 10, 20):
-                return self.send(400, {"message": "日志上限只能是 1 / 2 / 5 / 10 / 20 MB"})
-            prev = update(lambda d: d.update({k: v for k, v in b.items() if k in allowed}))
-            d = load()
-            msg = "已保存"
-            if set(b) & {"rulesets", "sub_interval", "region_groups", "ipv6", "sniffer"} or ("bypass" in b and d["proxy_mode"] == "tun"):
-                ok, msg = reload_core(prev)
-                if not ok:
-                    return self.send(500, {"message": msg})
-            if set(b) & {"bypass", "ipv6"} and d["proxy_mode"] != "off":
-                sh(TPROXY_SH + " apply")
-            if "watchdog" in b and not b["watchdog"]:
-                WD["status"] = "off"
-            return self.send(200, {"message": msg})
-        if p == "/api/https" and m == "PUT":
-            on = bool(b.get("enable"))
-            if on and not (os.path.isfile(CERT) and os.path.isfile(KEY)):
-                ok, out = gen_cert()
-                if not ok:
-                    return self.send(500, {"message": "生成证书失败（需要 openssl）：" + out[-200:]})
-            update(lambda d: d.update(https=on))
-            restart_self()
-            return self.send(200, {"message": "面板将以 " + ("HTTPS" if on else "HTTP") + " 重启", "scheme": "https" if on else "http"})
-        if p == "/api/tg/test" and m == "POST":
-            d = load()
-            if "tg_token" in b:
-                d.update(tg_token=b.get("tg_token", ""), tg_chat=b.get("tg_chat", ""))
-            return self.reply(*tg_send("✅ 测试消息：通知已配置成功", d))
-        if p == "/api/backup" and m == "GET":
-            d = load()
-            return self.send(200, {k: v for k, v in d.items() if k not in ("password", "pw_hash", "pw_default", "secret")})
-        if p == "/api/restore" and m == "POST":
-            keys = ("mode", "tproxy", "subs", "rules", "rulesets", "bypass", "tests", "sub_interval", "region_groups",
-                    "nodes", "ipv6", "watchdog", "tg_token", "tg_chat", "proxy_mode", "tun", "log_limit", "adblock", "dns",
-                    "devices", "schedule", "groups_cfg", "custom_groups", "sniffer", "gh_proxy")
-
-            def apply_backup(d):
-                d.update({k: b[k] for k in keys if k in b})
-                if "proxy_mode" not in b and "tproxy" in b:
-                    d["proxy_mode"] = "tproxy" if b["tproxy"] else "off"
-                migrate_names(d)  # 旧版备份里的地区组名自动换成新名称
-            prev = update(apply_backup)
-            ab_compose(load())
-            ok, msg = reload_core(prev)
-            if ok:
-                sh(TPROXY_SH + " apply")
-            return self.reply(ok, ("已恢复，" if ok else "") + msg)
-        if p == "/api/password" and m == "PUT":
-            pw = b.get("password") or ""
-            if len(pw) < 4:
-                return self.send(400, {"message": "密码至少 4 位"})
-            if pw == "admin":
-                return self.send(400, {"message": "不能使用默认密码 admin"})
-            h = pw_hash(pw)
-            update(lambda d: d.update(password="", pw_hash=h, pw_default=False))
-            sess_drop(keep=self.tok())  # 改密后其他设备全部下线
-            return self.send(200, {"token": self.tok(), "message": "密码已修改，其他设备已退出登录"})
-        if p == "/api/logout" and m == "POST":
-            if b.get("all"):
-                sess_drop()
-                return self.send(200, {"message": "所有设备已退出登录"})
-            sess_drop(self.tok())
-            return self.send(200, {"message": "已退出登录"})
-        if p == "/api/logticket" and m == "POST":
-            return self.send(200, {"ticket": ticket_new()})
+        fn = ROUTES.get((m, p))
+        if fn:
+            return fn(self, m, p, b, q)
         return self.send(404, {"message": "not found"})
+
+    @api_route("/api/state", "GET")
+    def api_state_get(self, m, p, b, q):
+        d = load()
+        _, st = sh(SVC + " status")
+        code, ver = core("GET", "/version")
+        try:
+            version = json.loads(ver).get("version", "-") if code == 200 else "-"
+        except Exception:
+            version = "-"
+        cfg = build_config(d)
+        groups = [g["name"] for g in cfg["proxy-groups"]]
+        gmeta = group_meta(d, cfg)
+        if active_core(d) == "singbox":  # 地区负载均衡并入自动优选；负载均衡 / 故障转移按自动测速运行
+            lbs = region_lb_set()
+            groups = [g for g in groups if g not in lbs]
+            for n, mt in list(gmeta.items()):
+                if n in lbs:
+                    gmeta.pop(n)
+                elif mt["type"] in ("load-balance", "fallback"):
+                    mt.update(sb_from=mt["type"], type="url-test")
+        return self.send(200, {"mode": d["mode"], "subs": d["subs"], "rules": d["rules"],
+                               "running": "started" in st or code == 200, "version": version, "groups": groups,
+                               "nodes": [{"name": n["proxy"]["name"], "type": n["proxy"]["type"],
+                                                            "server": n["proxy"]["server"], "port": n["proxy"]["port"]} for n in d["nodes"]],
+                               "rulesets": d["rulesets"], "bypass": d["bypass"], "tests": d["tests"],
+                               "sub_interval": d["sub_interval"],
+                               "ipv6": d["ipv6"], "https": d["https"],
+                               "watchdog": d["watchdog"], "tg_token": d["tg_token"], "tg_chat": d["tg_chat"],
+                               "default_exclude": DEFAULT_EXCLUDE, "proxy_mode": d["proxy_mode"], "tun": d["tun"],
+                               "log_limit": d["log_limit"], "dns": dns_cfg(d),
+                               "schedule": d["schedule"], "devices": d["devices"], "adblock_on": d["adblock"]["enabled"],
+                               "sched_events": list(SCHED["events"])[:20], "group_meta": gmeta,
+                               "sniffer": d["sniffer"],
+                               "gh_proxy": d["gh_proxy"], "panel_version": PANEL_VERSION, "core": active_core(d),
+                               "wd": {"status": WD["status"], "last_check": WD["last_check"],
+                                      "events": list(WD["events"])[:20]}})
+
+    @api_route("/api/groups", "GET")
+    def api_groups_get(self, m, p, b, q):
+        return self.groups_info()
+
+    @api_route("/api/groups/cfg", "PUT")
+    def api_groups_cfg_put(self, m, p, b, q):
+        return self.save_groups_cfg(b)
+
+    @api_route("/api/groups", "POST")
+    def api_groups_post(self, m, p, b, q):
+        return self.save_custom_group(b)
+
+    @api_route("/api/groups", "DELETE")
+    def api_groups_delete(self, m, p, b, q):
+        return self.delete_custom_group(b)
+
+    @api_route("/api/groups/preview", "POST")
+    def api_groups_preview_post(self, m, p, b, q):
+        flt = str(b.get("filter") or "").strip()
+        if not flt:
+            return self.send(200, {"matched": [], "total": 0})
+        r = rx(flt)
+        if r is None:
+            return self.send(400, {"message": "正则无效"})
+        d = load()
+        manual = [n["proxy"]["name"] for n in d["nodes"]]
+        allnodes = all_node_names(d) if b.get("subs", True) else manual
+        hit = [n for n in allnodes if r.search(n)]
+        return self.send(200, {"matched": hit[:200], "total": len(hit), "of": len(allnodes)})
+
+    @api_route("/api/groups/refresh", "POST")
+    def api_groups_refresh_post(self, m, p, b, q):
+        return self.reply(*refresh_regions())
+
+    @api_route("/api/config", "GET")
+    def api_config_get(self, m, p, b, q):
+        txt = config_view(load(), masked=True)
+        sbm = active_core() == "singbox"
+        if "download" in parse_qs(q):
+            return self.send(200, txt.encode(), "application/json" if sbm else "application/x-yaml")
+        return self.send(200, {"text": txt, "path": core_conf_path(), "size": len(txt.encode()), "core": active_core()})
+
+    @api_route("/api/sysopt", "GET")
+    def api_sysopt_get(self, m, p, b, q):
+        return self.send(200, opt_status())
+
+    @api_route("/api/sysopt", "POST")
+    def api_sysopt_post(self, m, p, b, q):
+        ids = b.get("ids")
+        if not isinstance(ids, list):
+            return self.send(400, {"message": "参数错误"})
+        ok, msg, errs = opt_apply([str(i) for i in ids])
+        return self.send(200, {"ok": ok, "message": msg, "errors": errs} | opt_status())
+
+    @api_route("/api/speedtest", "GET")
+    def api_speedtest_get(self, m, p, b, q):
+        via = q1(parse_qs(q), "via", default="proxy")
+        return self.send(200, speed_test(via == "proxy"))
+
+    @api_route("/api/bg", "GET")
+    def api_bg_get(self, m, p, b, q):
+        bm = bg_meta()
+        try:
+            return self.send(200, {"exists": True, "v": int(os.path.getmtime(BG_FILE)), "size": os.path.getsize(BG_FILE),
+                                   "url": bm.get("url", ""), "daily": bool(bm.get("daily"))})
+        except OSError:
+            return self.send(200, {"exists": False})
+
+    @api_route("/api/bg", "POST")
+    def api_bg_post(self, m, p, b, q):
+        ok, msg = bg_save(b.get("data"))
+        if not ok:
+            return self.send(400, {"message": msg})
+        bg_meta_save({})  # 改为上传的图片：不再按链接刷新
+        return self.send(200, {"message": msg, "v": int(os.path.getmtime(BG_FILE))})
+
+    @api_route("/api/bg/url", "POST")
+    def api_bg_url_post(self, m, p, b, q):
+        url = str(b.get("url") or "").strip() or bg_meta().get("url", "")
+        ok, msg = bg_fetch(url)
+        if not ok:
+            return self.send(400, {"message": msg})
+        bg_meta_save({"url": url, "daily": bool(b.get("daily")), "t": int(time.time())})
+        return self.send(200, {"message": msg, "v": int(os.path.getmtime(BG_FILE))})
+
+    @api_route("/api/bg/daily", "POST")
+    def api_bg_daily_post(self, m, p, b, q):
+        bm = bg_meta()
+        if not bm.get("url"):
+            return self.send(400, {"message": "当前背景图不是链接图片"})
+        bm["daily"] = bool(b.get("daily"))
+        bg_meta_save(bm)
+        return self.send(200, {"message": "已开启每天自动更新" if bm["daily"] else "已关闭每天自动更新"})
+
+    @api_route("/api/bg", "DELETE")
+    def api_bg_delete(self, m, p, b, q):
+        try:
+            os.remove(BG_FILE)
+        except OSError:
+            pass
+        bg_meta_save({})
+        return self.send(200, {"message": "已移除背景图"})
+
+    @api_route("/api/px", "GET")
+    def api_px_get(self, m, p, b, q):
+        px = proxies_merged()
+        if px is None:
+            return self.send(502, {"message": "核心未运行或无法连接"})
+        return self.send(200, {"proxies": px, "retesting": RETEST["pending"]})
+
+    @api_route("/api/coreswitch", "GET")
+    def api_coreswitch_get(self, m, p, b, q):
+        d = load()
+        if active_core(d) == "singbox" and not SB_STATE["warn"]:
+            SB_STATE["warn"] = build_singbox(d)[1]
+        return self.send(200, {"core": active_core(d), "versions": {"mihomo": bin_version(MIHOMO_BIN), "smart": bin_version(SMART_BIN), "singbox": sb_version()},
+                               "lgbm": os.path.isfile(LGBM_FILE),
+                               "warn": SB_STATE["warn"] if active_core(d) == "singbox" else [], "busy": CORE_UPD["busy"]})
+
+    @api_route("/api/coreswitch", "POST")
+    def api_coreswitch_post(self, m, p, b, q):
+        kind = b.get("core")
+        if kind not in CORES:
+            return self.send(400, {"message": "未知的内核"})
+        if kind == active_core():
+            return self.send(400, {"message": f"当前已经是 {CORES[kind]}"})
+        ok, msg = core_job_start(core_switch_job, kind, load().get("gh_proxy") or "")
+        return self.send(200 if ok else 409, {"message": msg})
+
+    @api_route("/api/coreupdate", "GET")
+    def api_coreupdate_get(self, m, p, b, q):
+        ch = q1(parse_qs(q), "channel", default="stable")
+        kind = "smart" if (q1(parse_qs(q), "core") or active_core()) == "smart" else "mihomo"
+        if ch not in CORE_CHANNELS:
+            return self.send(400, {"message": "未知的更新通道"})
+        ok, info = core_check(ch, load().get("gh_proxy") or "", kind)
+        info["busy"] = CORE_UPD["busy"]
+        return self.send(200 if ok else 502, info)
+
+    @api_route("/api/coreupdate/status", "GET")
+    def api_coreupdate_status_get(self, m, p, b, q):
+        return self.send(200, core_upd_status())
+
+    @api_route("/api/coreupdate", "POST")
+    def api_coreupdate_post(self, m, p, b, q):
+        kind = "smart" if (b.get("core") or active_core()) == "smart" else "mihomo"
+        if b.get("action") == "lgbm":
+            try:
+                n = lgbm_fetch(load().get("gh_proxy") or "")
+            except Exception as e:
+                return self.send(502, {"message": "模型下载失败：" + str(e)[:200]})
+            if active_core() == "smart":
+                reload_core()
+            return self.reply(True, f"LightGBM 模型已更新（{n // 2**20} MB）")
+        if b.get("action") == "rollback":
+            ok, msg = core_job_start(core_rollback_job, kind)
+        else:
+            ch = "alpha" if kind == "smart" else (b.get("channel") or "stable")
+            if ch not in CORE_CHANNELS:
+                return self.send(400, {"message": "未知的更新通道"})
+            ok, msg = core_job_start(core_update_job, ch, load().get("gh_proxy") or "", bool(b.get("force")), kind)
+        return self.send(200 if ok else 409, {"message": msg})
+
+    @api_route("/api/selfupdate", "GET")
+    def api_selfupdate_get(self, m, p, b, q):
+        ok, info = self_update(False, load().get("gh_proxy") or "")
+        return self.send(200 if ok else 502, info)
+
+    @api_route("/api/selfupdate", "POST")
+    def api_selfupdate_post(self, m, p, b, q):
+        if b.get("action") == "rollback":
+            return self.reply(*self_rollback())
+        ok, info = self_update(True, load().get("gh_proxy") or "")
+        return self.send(200 if ok else 500, info)
+
+    @api_route("/api/subs/update", "POST")
+    def api_subs_update_post(self, m, p, b, q):
+        name = b.get("name") or ""
+        names = [s["name"] for s in load()["subs"]] if not name else [name]
+        if active_core() == "singbox":
+            okl, bad = sb_update_subs(names)
+            ok2, msg2 = refresh_regions()
+            msg = ("已更新：" + "；".join(okl) if not bad else "更新失败：" + "；".join(bad)) + ("；" + msg2 if msg2 and "无变化" not in msg2 else "")
+            return self.reply(not bad, msg)
+        bad = []
+        for nm in names:
+            code, raw = core("PUT", "/providers/proxies/" + quote(nm), timeout=120)
+            if code >= 300:
+                bad.append(nm + "：" + raw.decode(errors="ignore")[:100])
+        ok2, msg2 = refresh_regions()
+        msg = ("已更新" if not bad else "更新失败：" + "；".join(bad)) + ("；" + msg2 if msg2 and "无变化" not in msg2 else "")
+        return self.reply(not bad, msg)
+
+    @api_route("/api/stats", "GET")
+    def api_stats_get(self, m, p, b, q):
+        return self.send(200, stats.STATS.report() if stats.STATS else {"today": {}, "month": {}, "days": [], "arp": {}})
+
+    @api_route("/api/ruletest", "POST")
+    def api_ruletest_post(self, m, p, b, q):
+        return self.send(200, rule_test(b.get("target") or ""))
+
+    @api_route("/api/subs", "POST")
+    def api_subs_post(self, m, p, b, q):
+        name, url = (b.get("name") or "").strip(), (b.get("url") or "").strip()
+        if not name or not url.startswith("http"):
+            return self.send(400, {"message": "名称或订阅链接无效"})
+        flt, exc = (b.get("filter") or "").strip(), (b["exclude"] if "exclude" in b else DEFAULT_EXCLUDE).strip()
+        for pat in (flt, exc):
+            try:
+                re.compile(pat)
+            except re.error as e:
+                return self.send(400, {"message": f"正则表达式无效：{pat}（{e}）"})
+        prev = update(lambda d: d.update(subs=[s for s in d["subs"] if s["name"] != name] +
+                                          [{"name": name, "url": url, "filter": flt, "exclude": exc}]))
+        if active_core() == "singbox":  # 先由面板下载节点，再生成配置
+            okl, bad = sb_update_subs([name])
+            ok, msg = reload_core(prev)
+            if ok and bad:
+                ok, msg = False, "订阅已保存，但下载失败：" + "；".join(bad)
+            return self.reply(ok, msg if not ok else "已添加：" + "；".join(okl))
+        ok, msg = reload_core(prev)
+        if ok:
+            refresh_after_sub(name)  # 订阅下载完成后按实际节点生成地区 / 均衡分组
+        return self.reply(ok, msg)
+
+    @api_route("/api/subs", "DELETE")
+    def api_subs_delete(self, m, p, b, q):
+        prev = update(lambda d: d.update(subs=[s for s in d["subs"] if s["name"] != b.get("name")]))
+        return self.reply(*reload_core(prev))
+
+    @api_route("/api/nodes", "POST")
+    def api_nodes_post(self, m, p, b, q):
+        d = load()
+        added, errs = add_links(b.get("links") or "", d["nodes"], d)
+        if not added:
+            return self.send(400, {"message": "没有可导入的节点" + ("：\\n" + "\\n".join(errs) if errs else "")})
+        prev = update(lambda d: d["nodes"].extend(added))
+        ok, msg = reload_core(prev)
+        msg = (f"已导入 {len(added)} 个节点" if ok else msg) + ("；忽略：" + "；".join(errs) if errs else "")
+        return self.reply(ok, msg)
+
+    @api_route("/api/nodes", "DELETE")
+    def api_nodes_delete(self, m, p, b, q):
+        names = set(b.get("names") or [b.get("name")])
+        prev = update(lambda d: d.update(nodes=[n for n in d["nodes"] if n["proxy"]["name"] not in names]))
+        return self.reply(*reload_core(prev))
+
+    @api_route("/api/rules", "PUT")
+    def api_rules_put(self, m, p, b, q):
+        rules = [r.strip() for r in b.get("rules", []) if r.strip()]
+        bad = bad_rule_policies([r for r in rules if not r.startswith("#")], load())
+        if bad:
+            return self.send(400, {"message": "以下规则的策略不存在：" + "；".join(bad[:5])})
+        prev = update(lambda d: d.update(rules=rules))
+        return self.reply(*reload_core(prev))
+
+    @api_route("/api/mode", "PUT")
+    def api_mode_put(self, m, p, b, q):
+        mode = b.get("mode")
+        if mode not in ("rule", "global", "direct"):
+            return self.send(400, {"message": "模式无效"})
+        with LOCK:
+            d = load()
+            d["mode"] = mode
+            save(d)
+            sb = active_core(d) == "singbox"
+            write_active_config(d)
+        core("PATCH", "/configs", {"mode": mode.capitalize() if sb else mode})
+        if mode == "global":
+            fix_global()
+        return self.send(200, {"message": "ok"})
+
+    @api_route("/api/proxymode", "PUT")
+    def api_proxymode_put(self, m, p, b, q):
+        return self.set_proxy_mode(b)
+
+    @api_route("/api/conns", "GET")
+    def api_conns_get(self, m, p, b, q):
+        # 精简后的连接列表：只保留前端用到的字段
+        c = core_json("/connections", timeout=5)
+        if c is None:
+            return self.send(502, {"message": "mihomo 未运行或无法连接"})
+        keep = ("sourceIP", "host", "sniffHost", "destinationIP", "destinationPort", "network")
+        out = [{"id": x.get("id"), "start": x.get("start"), "upload": x.get("upload", 0), "download": x.get("download", 0),
+                "rule": x.get("rule"), "rulePayload": x.get("rulePayload"), "chains": x.get("chains"),
+                "metadata": {k: (x.get("metadata") or {}).get(k) for k in keep}} for x in c.get("connections") or []]
+        return self.send(200, {"connections": out})
+
+    @api_route("/api/live", "GET")
+    def api_live_get(self, m, p, b, q):
+        out = dict(LIVE)
+        if time.time() - out["t"] > 5:  # 后台 /traffic 流未就绪（核心刚启动或已停止）时退回连接快照
+            c = core_json("/connections", timeout=3)
+            out.update(up=0, down=0, upTotal=(c or {}).get("uploadTotal", 0), downTotal=(c or {}).get("downloadTotal", 0))
+            out["stale"] = True
+        if not out["inuse"]:
+            out.update(memory_once())
+        out["running"] = time.time() - LIVE["t"] < 5 or bool(out.get("inuse"))
+        return self.send(200, out)
+
+    @api_route("/api/logs/info", "GET")
+    def api_logs_info_get(self, m, p, b, q):
+        return self.send(200, {"files": log_sizes(), "limit": load()["log_limit"], "last": LOG_STATE["last"]})
+
+    @api_route("/api/logs/clean", "POST")
+    def api_logs_clean_post(self, m, p, b, q):
+        freed = log_clean(force=True)
+        return self.send(200, {"message": f"已清理，释放 {fmt_size(freed)}", "files": log_sizes()})
+
+    @api_route("/api/adblock", "GET")
+    def api_adblock_get(self, m, p, b, q):
+        d = load()
+        meta = ab_meta()
+        rep = adblock.AD_STATS.report() if adblock.AD_STATS else {"today": 0, "top": [], "lists": {}, "days": []}
+        lists = [dict(l, **{k: v for k, v in (meta.get(l["id"]) or {}).items()}, hits=rep["lists"].get(l["id"], 0)) for l in d["adblock"]["lists"]]
+        prov = (core_json("/providers/rules") or {}).get("providers") or {}
+        return self.send(200, {**{k: v for k, v in d["adblock"].items() if k != "lists"}, "lists": lists,
+                               "presets": AB_PRESETS, "stats": rep, "updating": AB_STATE["updating"], "msg": AB_STATE["msg"],
+                               "custom_hits": rep["lists"].get("custom", 0),
+                               "loaded": {k: v.get("ruleCount") for k, v in prov.items() if k.startswith("ad-")}})
+
+    @api_route("/api/adblock", "PUT")
+    def api_adblock_put(self, m, p, b, q):
+        return self.save_adblock(b)
+
+    @api_route("/api/adblock/update", "POST")
+    def api_adblock_update_post(self, m, p, b, q):
+        if AB_STATE["updating"]:
+            return self.send(409, {"message": "正在更新中，请稍候"})
+        threading.Thread(target=adblock_update, args=(b.get("ids"),), daemon=True).start()
+        return self.send(200, {"message": "已开始下载，完成后自动生效"})
+
+    @api_route("/api/adblock/check", "POST")
+    def api_adblock_check_post(self, m, p, b, q):
+        return self.send(200, ab_check(b.get("domain") or ""))
+
+    @api_route("/api/dns", "PUT")
+    def api_dns_put(self, m, p, b, q):
+        return self.save_dns(b)
+
+    @api_route("/api/dnsleak", "GET")
+    def api_dnsleak_get(self, m, p, b, q):
+        return self.send(200, leak_check(live="nolive" not in parse_qs(q)))
+
+    @api_route("/api/history", "GET")
+    def api_history_get(self, m, p, b, q):
+        h = read_json(HISTORY_FILE, [])
+        return self.send(200, [{"id": x["id"], "t": x["t"], "changed": x["changed"]} for x in h])
+
+    @api_route("/api/history", "POST")
+    def api_history_post(self, m, p, b, q):
+        h = {x["id"]: x for x in read_json(HISTORY_FILE, [])}
+        snap = h.get(str(b.get("id") or ""))
+        if not snap:
+            return self.send(404, {"message": "快照不存在"})
+
+        def apply_snap(d):
+            d.update({k: v for k, v in snap["data"].items() if k not in HISTORY_SKIP})
+            migrate_names(d)
+        prev = update(apply_snap)
+        ab_compose(load())
+        ok, msg = reload_core(prev)
+        if ok:
+            sh(TPROXY_SH + " apply")
+        return self.reply(ok, ("已恢复到 " + time.strftime("%m-%d %H:%M", time.localtime(snap["t"])) + " 的配置") if ok else msg)
+
+    @api_route("/api/dnsquery", "POST")
+    def api_dnsquery_post(self, m, p, b, q):
+        name = clean_target(b.get("name") or "")
+        qtype = (b.get("type") or "A").upper()
+        if not name or qtype not in ("A", "AAAA", "CNAME", "MX", "TXT", "NS", "HTTPS", "SRV", "PTR"):
+            return self.send(400, {"message": "请输入域名并选择记录类型"})
+        st = time.time()
+        code, raw = core("GET", f"/dns/query?name={quote(name)}&type={qtype}", timeout=15)
+        ms = int((time.time() - st) * 1000)
+        try:
+            j = json.loads(raw)
+        except Exception:
+            j = {"message": raw.decode(errors="ignore")}
+        if code != 200:
+            return self.send(502 if code == 502 else code, {"message": j.get("message") or "查询失败"})
+        return self.send(200, {"name": name, "type": qtype, "ms": ms, "status": j.get("Status"),
+                               "answer": j.get("Answer") or [], "policy": dns_route(name, load())})
+
+    @api_route("/api/devices", "GET")
+    def api_devices_get(self, m, p, b, q):
+        ips = set(arp_table()) | set(read_leases())
+        if stats.STATS:
+            with stats.STATS.lock:
+                for b2 in stats.STATS.data["days"].values():
+                    ips |= set(b2.get("dev", {}))
+        c = core_json("/connections", timeout=5) or {}
+        ips |= {(x.get("metadata") or {}).get("sourceIP") for x in c.get("connections") or []}
+        return self.send(200, {"map": device_map(sorted(i for i in ips if i)), "custom": load()["devices"]})
+
+    @api_route("/api/devices", "PUT")
+    def api_devices_put(self, m, p, b, q):
+        devs = {}
+        for k, v in (b.get("devices") or {}).items():
+            k, v = str(k).strip().lower().replace("-", ":"), str(v).strip()[:40]
+            if k and v and (is_ip(k) or re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", k)):
+                devs[k] = v
+        update(lambda d: d.update(devices=devs))
+        return self.send(200, {"message": f"已保存 {len(devs)} 个设备备注"})
+
+    @api_route("/api/diag", "GET")
+    def api_diag_get(self, m, p, b, q):
+        return self.send(200, diagnose())
+
+    @api_route("/api/schedule", "PUT")
+    def api_schedule_put(self, m, p, b, q):
+        sc = {}
+        for k in ("sub_update", "core_restart", "geo_update"):
+            v = str(b.get(k) or "").strip()
+            if v and not re.fullmatch(r"([01]\\d|2[0-3]):[0-5]\\d", v):
+                return self.send(400, {"message": f"时间格式应为 HH:MM：{v}"})
+            sc[k] = v
+        sc["latency"] = int(b.get("latency") or 0) if int(b.get("latency") or 0) in (0, 10, 30, 60, 180) else 0
+        update(lambda d: d.update(schedule=sc))
+        return self.send(200, {"message": "定时任务已保存"})
+
+    @api_route("/api/schedule/run", "POST")
+    def api_schedule_run_post(self, m, p, b, q):
+        k = b.get("task")
+        if k not in TASK_NAMES:
+            return self.send(400, {"message": "未知任务"})
+        ok, msg = run_task(k)
+        sched_event(f"手动执行 {TASK_NAMES[k]}：{'✓' if ok else '✗'} {msg}")
+        return self.reply(ok, msg)
+
+    @api_route("/api/service", "POST")
+    def api_service_post(self, m, p, b, q):
+        act = b.get("action")
+        if act == "reload":
+            return self.reply(*reload_core())
+        if act in ("restart", "stop", "start"):
+            WD["manual_stop"] = act == "stop"
+            code, out = sh(SVC + " " + act, timeout=90)
+            if act != "stop":
+                retest_soon()
+            return self.reply(code == 0, out)
+        if act == "upgrade" and active_core() == "singbox":
+            return self.send(400, {"message": "请在 设置 → 核心 → 内核更新 里更新 sing-box"})
+        if act == "upgrade":
+            code, raw = core("POST", "/upgrade", {}, timeout=300)
+            return self.send(code if code != 502 else 500, raw or b'{"message":"ok"}')
+        if act == "geo" and active_core() == "singbox":
+            return self.reply(*run_task("geo_update"))
+        if act == "geo":
+            code, raw = core("POST", "/configs/geo", {}, timeout=120)
+            return self.send(code, raw or b'{"message":"ok"}')
+        return self.send(400, {"message": "未知操作"})
+
+    @api_route("/api/settings", "PUT")
+    def api_settings_put(self, m, p, b, q):
+        allowed = {"rulesets", "bypass", "tests", "sub_interval", "region_groups", "ipv6", "watchdog", "tg_token", "tg_chat",
+                   "log_limit", "sniffer", "gh_proxy"}
+        if "gh_proxy" in b:
+            b["gh_proxy"] = str(b["gh_proxy"] or "").strip()
+            if b["gh_proxy"] and not re.match(r"^https?://[\\w.\\-:]+/?$", b["gh_proxy"]):
+                return self.send(400, {"message": "GitHub 加速地址格式应为 https://ghfast.top/"})
+            if b["gh_proxy"] and not b["gh_proxy"].endswith("/"):
+                b["gh_proxy"] += "/"
+        if "sniffer" in b:
+            b["sniffer"] = bool(b["sniffer"])
+        if "log_limit" in b and b["log_limit"] not in (1, 2, 5, 10, 20):
+            return self.send(400, {"message": "日志上限只能是 1 / 2 / 5 / 10 / 20 MB"})
+        prev = update(lambda d: d.update({k: v for k, v in b.items() if k in allowed}))
+        d = load()
+        msg = "已保存"
+        if set(b) & {"rulesets", "sub_interval", "region_groups", "ipv6", "sniffer"} or ("bypass" in b and d["proxy_mode"] == "tun"):
+            ok, msg = reload_core(prev)
+            if not ok:
+                return self.send(500, {"message": msg})
+        if set(b) & {"bypass", "ipv6"} and d["proxy_mode"] != "off":
+            sh(TPROXY_SH + " apply")
+        if "watchdog" in b and not b["watchdog"]:
+            WD["status"] = "off"
+        return self.send(200, {"message": msg})
+
+    @api_route("/api/https", "PUT")
+    def api_https_put(self, m, p, b, q):
+        on = bool(b.get("enable"))
+        if on and not (os.path.isfile(CERT) and os.path.isfile(KEY)):
+            ok, out = gen_cert()
+            if not ok:
+                return self.send(500, {"message": "生成证书失败（需要 openssl）：" + out[-200:]})
+        update(lambda d: d.update(https=on))
+        restart_self()
+        return self.send(200, {"message": "面板将以 " + ("HTTPS" if on else "HTTP") + " 重启", "scheme": "https" if on else "http"})
+
+    @api_route("/api/tg/test", "POST")
+    def api_tg_test_post(self, m, p, b, q):
+        d = load()
+        if "tg_token" in b:
+            d.update(tg_token=b.get("tg_token", ""), tg_chat=b.get("tg_chat", ""))
+        return self.reply(*tg_send("✅ 测试消息：通知已配置成功", d))
+
+    @api_route("/api/backup", "GET")
+    def api_backup_get(self, m, p, b, q):
+        d = load()
+        return self.send(200, {k: v for k, v in d.items() if k != "secret"})
+
+    @api_route("/api/restore", "POST")
+    def api_restore_post(self, m, p, b, q):
+        keys = ("mode", "tproxy", "subs", "rules", "rulesets", "bypass", "tests", "sub_interval", "region_groups",
+                "nodes", "ipv6", "watchdog", "tg_token", "tg_chat", "proxy_mode", "tun", "log_limit", "adblock", "dns",
+                "devices", "schedule", "groups_cfg", "custom_groups", "sniffer", "gh_proxy")
+
+        def apply_backup(d):
+            d.update({k: b[k] for k in keys if k in b})
+            if "proxy_mode" not in b and "tproxy" in b:
+                d["proxy_mode"] = "tproxy" if b["tproxy"] else "off"
+            migrate_names(d)  # 旧版备份里的地区组名自动换成新名称
+        prev = update(apply_backup)
+        ab_compose(load())
+        ok, msg = reload_core(prev)
+        if ok:
+            sh(TPROXY_SH + " apply")
+        return self.reply(ok, ("已恢复，" if ok else "") + msg)
+
+    @api_route("/api/logticket", "POST")
+    def api_logticket_post(self, m, p, b, q):
+        return self.send(200, {"ticket": ticket_new()})
 '''
 _SRC['shunt.cli'] = '''""""""
 import ipaddress, os, re, signal, ssl, sys, threading
 
+from .errlog import log_err
 from . import adblock, stats
-from .base import CERT, KEY, PORT
+from .base import CERT, KEY, PANEL_DIR, PORT
 from .data import load, update
 from .mihomo import dns_cfg
 from .sb_common import active_core, write_core_file
 from .sb_config import write_active_config
 from .sysopt import opt_fix_ulimit, rfile, sh
-from .auth import sess_load
 from .latency import monitor_loop
 from .stats import Stats
 from .adblock import AdStats
@@ -7721,7 +7787,6 @@ from .schedule import sched_loop
 from .devices import rdns_loop
 from .migrate import snapshot_selections, startup_migrate
 from .https import Server, gen_cert, https_ready
-from .access import log_err
 from .update_guard import ROLLBACK_NOTE
 from .webapi import H
 def tp_env():
@@ -7760,8 +7825,8 @@ def main():
     if "--gen" in sys.argv:  # init.d/mihomo 启动前调用：按当前内核生成配置
         try:
             opt_fix_ulimit()
-        except Exception:
-            pass
+        except Exception as e:
+            print("文件句柄修正失败：", e, file=sys.stderr)
         dd = load()
         write_core_file(active_core(dd))
         print(write_active_config(dd))
@@ -7792,7 +7857,10 @@ def main():
         print(out)
         sys.exit(0 if ok else 1)
     d = load()
-    sess_load()
+    try:  # v6.8.2 起没有登录会话，删掉旧版留下的会话文件
+        os.remove(os.path.join(PANEL_DIR, "sessions.json"))
+    except FileNotFoundError:
+        pass
     signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))  # 让 finally 有机会保存统计
     STATS = stats.STATS = Stats()
     AD_STATS = adblock.AD_STATS = AdStats()
