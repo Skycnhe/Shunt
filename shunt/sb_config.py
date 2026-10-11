@@ -287,6 +287,27 @@ def sb_adblock_source(src):
     return {"version": 3, "rules": [r] if r else []}
 
 
+def sb_rule_count(path):
+    """sing-box source 规则集里的条目数（广告拦截页显示「已加载」用；sing-box 的 clash_api 不提供规则集信息）"""
+    try:
+        with open(path) as f:
+            j = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return sum(len(v) for r in j.get("rules") or [] if isinstance(r, dict) for v in r.values() if isinstance(v, list))
+
+
+def sb_ab_loaded(d):
+    """{"ad-xxx": 条目数}：只统计配置里实际引用、且已转换好的广告拦截规则集"""
+    out = {}
+    for tag, rsd in build_singbox(d)[2].items():
+        if rsd.get("kind") == "adblock":
+            path = os.path.join(SB_RULE_DIR, rsd["path"])
+            if os.path.isfile(path) and os.path.getsize(path) > 0:
+                out[tag] = sb_rule_count(path)
+    return out
+
+
 def sb_sync_assets(d, force=False, need=None):
     """下载 / 转换 sing-box 需要的规则集文件；返回失败列表"""
     if need is None:
