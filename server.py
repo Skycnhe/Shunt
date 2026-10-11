@@ -83,7 +83,7 @@ GROUPS_DEFAULT = {"type": "url-test", "lb": True, "auto": True, "strategy": "con
 SCHED_DEFAULT = {"sub_update": "", "core_restart": "", "geo_update": "", "latency": 0}
 DEFAULT = {"password": "admin", "pw_hash": "", "pw_default": False, "secret": "", "mode": "rule", "tproxy": True, "subs": [], "rules": [],
            "rulesets": [], "bypass": [], "tests": None, "sub_interval": 86400, "region_groups": True,
-           "nodes": [], "ipv6": False, "https": False, "watchdog": True, "tg_token": "", "tg_chat": "",
+           "nodes": [], "ipv6": False, "https": False, "allow_public": False, "allow_hosts": [], "watchdog": True, "tg_token": "", "tg_chat": "",
            "proxy_mode": "", "tun": TUN_DEFAULT, "log_limit": 5, "adblock": AB_DEFAULT, "dns": DNS_DEFAULT,
            "devices": {}, "schedule": SCHED_DEFAULT, "groups_cfg": GROUPS_DEFAULT, "custom_groups": [], "sniffer": True,
            "gh_proxy": "", "core": "mihomo", "schema": 0, "sysopt": [], "sysopt_orig": {}, "sysopt_mods": []}
@@ -103,7 +103,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.0.1"
+PANEL_VERSION = "7.1.0"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -2710,7 +2710,9 @@ def is_musl():
     return bool(glob.glob("/lib/ld-musl-*")) or os.path.isfile("/etc/alpine-release")
 
 
-def sb_fetch(url, gh):
+def sb_fetch(url, gh, digest=""):
+    if not digest:
+        gh = ""  # 没有校验值时不走第三方镜像
     with open_url(url, gh, timeout=60) as r:
         total = int(r.headers.get("Content-Length") or 0)
         buf, n = io.BytesIO(), 0
@@ -2726,6 +2728,8 @@ def sb_fetch(url, gh):
                 CORE_UPD["pct"] = 10 + int(50 * n / total)
     if total and n < total:
         raise ValueError(f"下载不完整 {n}/{total}")
+    if digest and hashlib.sha256(buf.getbuffer()).hexdigest() != digest:
+        raise ValueError("SHA256 与 GitHub 不一致（可能被加速镜像篡改）")
     buf.seek(0)
     return buf
 
@@ -2747,7 +2751,7 @@ def sb_install(channel, gh, force=False):
         name = f"sing-box-{ver}-linux-{arch}{v}.tar.gz"
         _cu("下载", 10, f"下载 {name}")
         try:
-            buf = sb_fetch(f"{SB_REPO}/download/v{ver}/{name}", gh)
+            buf = sb_fetch(f"{SB_REPO}/download/v{ver}/{name}", gh, release_digest(SB_REPO, "v" + ver, name))
             with tarfile.open(fileobj=buf, mode="r:gz") as tf:
                 mem = next((m for m in tf.getmembers() if m.isfile() and os.path.basename(m.name) == "sing-box"), None)
                 if not mem:
@@ -2896,8 +2900,38 @@ def local_file(f):
     return os.path.join(BASE, f)
 
 
-def fetch_raw(f, gh):
-    url = PANEL_RAW.rstrip("/") + "/" + f
+def gh_api(path, timeout=15):
+    """直连或经 mihomo 代理访问 GitHub API（绝不走第三方加速镜像：校验值必须来自 GitHub 本身）"""
+    with open_url("https://api.github.com" + path, "", timeout=timeout) as r:
+        return json.loads(r.read(8 << 20))
+
+
+def panel_manifest():
+    """返回 (commit, {路径: git blob sha1})；失败返回 (None, {})"""
+    m = re.match(r"https://raw\.githubusercontent\.com/([^/]+/[^/]+)/(.+?)/?$", PANEL_RAW)
+    if not m:
+        return None, {}
+    try:
+        c = gh_api(f"/repos/{m.group(1)}/commits/{m.group(2)}")
+        t = gh_api(f"/repos/{m.group(1)}/git/trees/{c['commit']['tree']['sha']}?recursive=1")
+        return c["sha"], {x["path"]: x["sha"] for x in t.get("tree", []) if x.get("type") == "blob"}
+    except Exception as e:
+        log_err("获取面板校验值", e)
+        return None, {}
+
+
+def git_blob_sha(data):
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def fetch_raw(f, gh, commit=None, sha=None):
+    """下载面板文件。有 GitHub 给的校验值时可以走加速镜像，下载后逐个比对；没有校验值时不走镜像"""
+    base = PANEL_RAW.rstrip("/")
+    if commit:
+        base = base.rsplit("/", 1)[0] + "/" + commit
+    url = base + "/" + f
+    if not sha:
+        gh = ""
     tries = [(gh.rstrip("/") + "/" + url, False)] if gh else []
     tries += [(url, True), (url, False)]  # 先经 mihomo 代理，再直连
     err = ""
@@ -2905,9 +2939,12 @@ def fetch_raw(f, gh):
         try:
             req = urllib.request.Request(u + ("&" if "?" in u else "?") + "t=" + str(int(time.time())), headers={"User-Agent": UA})
             with proxy_opener(use_proxy).open(req, timeout=20) as r:
-                return r.read(4 << 20)
+                data = r.read(4 << 20)
+            if sha and git_blob_sha(data) != sha:
+                raise ValueError("文件校验失败（与 GitHub 上的不一致，可能被加速镜像篡改）")
+            return data
         except Exception as e:
-            err = f"{u.split('://')[0]}{'(代理)' if use_proxy else ''}: {str(e)[:120]}"
+            err = f"{u.split('/')[2]}{'(代理)' if use_proxy else ''}: {str(e)[:120]}"
     raise IOError(f"下载 {f} 失败：{err}")
 
 
@@ -2923,8 +2960,9 @@ def self_update(apply=False, gh=""):
     UPD_STATE["busy"] = True
     try:
         files, changed = {}, []
+        commit, shas = panel_manifest()
         for f in UPD_FILES:
-            data = fetch_raw(f, gh)
+            data = fetch_raw(f, gh, commit, shas.get(f))
             files[f] = data
             try:
                 with open(local_file(f), "rb") as fh:
@@ -2934,7 +2972,7 @@ def self_update(apply=False, gh=""):
             if not same:
                 changed.append(f)
         info = {"current": PANEL_VERSION, "remote": remote_version(files["server.py"]), "changed": changed,
-                "source": PANEL_RAW}
+                "source": PANEL_RAW, "verified": bool(shas), "commit": (commit or "")[:10]}
         if not apply:
             info["message"] = "已是最新" if not changed else f"有 {len(changed)} 个文件可更新"
             return True, info
@@ -2970,8 +3008,10 @@ def self_update(apply=False, gh=""):
             os.chmod(dst + ".new", 0o755 if (f.endswith(".sh") or f.startswith("init.d/")) else 0o644)
             os.replace(dst + ".new", dst)
         shutil.rmtree(tmpd, ignore_errors=True)
+        start_update_guard(UPD_FILES)
         restart_self()
-        info["message"] = f"已更新 {len(changed)} 个文件（{'、'.join(changed)}），面板正在重启；旧版本已备份，可回滚"
+        info["message"] = (f"已更新 {len(changed)} 个文件（{'、'.join(changed)}）" + ("，已通过 GitHub 校验" if shas else "")
+                           + "，面板正在重启；新版启动失败会在 90 秒内自动回滚")
         return True, info
     except Exception as e:
         return False, {"message": str(e)}
@@ -3023,6 +3063,35 @@ def open_url(url, gh, timeout=20):
         except Exception as e:
             err = f"{u.split('/')[2]}{'(代理)' if use_proxy else ''}: {str(e)[:120]}"
     raise IOError(err)
+
+
+def release_digest(repo_url, tag, name):
+    """GitHub Release 资产的 SHA256（GitHub 自动计算，API 的 digest 字段）；拿不到返回空串"""
+    m = re.match(r"https://github\.com/([^/]+/[^/]+)/releases", repo_url)
+    if not m:
+        return ""
+    try:
+        j = gh_api(f"/repos/{m.group(1)}/releases/tags/{quote(tag)}")
+        for a in j.get("assets") or []:
+            if a.get("name") == name and str(a.get("digest") or "").startswith("sha256:"):
+                return a["digest"][7:]
+    except Exception as e:
+        log_err("获取内核校验值", e)
+    return ""
+
+
+class HashReader:
+    """边读边算 SHA256 的包装（流式解压时用）"""
+    def __init__(self, r, prog=None, total=0):
+        self.r, self.h, self.n, self.prog, self.total = r, hashlib.sha256(), 0, prog, total
+
+    def read(self, k=-1):
+        b = self.r.read(k)
+        self.h.update(b)
+        self.n += len(b)
+        if self.total and self.prog:
+            self.prog(min(1.0, self.n / self.total))
+        return b
 
 
 def core_remote_version(channel, gh, kind="mihomo"):
@@ -3099,27 +3168,19 @@ def mh_fetch(kind, channel, gh, prog=None):
     free = shutil.disk_usage(os.path.dirname(B)).free
     if free < 80 * 2**20:
         raise ValueError(f"{os.path.dirname(B)} 剩余空间不足（{free // 2**20} MB，至少需要 80 MB）")
-    if kind == "smart":
-        url = f"{SMART_REPO}/download/Prerelease-Alpha/mihomo-linux-{arch}-{ver}.gz"
-    else:
-        url = f"{CORE_REPO}/download/{'Prerelease-Alpha' if channel == 'alpha' else ver}/mihomo-linux-{arch}-{ver}.gz"
-    _cu("下载", None, f"下载 {url.rsplit('/', 1)[-1]}")
+    tag = "Prerelease-Alpha" if kind == "smart" or channel == "alpha" else ver
+    url = f"{SMART_REPO if kind == 'smart' else CORE_REPO}/download/{tag}/mihomo-linux-{arch}-{ver}.gz"
+    name = url.rsplit('/', 1)[-1]
+    digest = release_digest(SMART_REPO if kind == "smart" else CORE_REPO, tag, name)
+    if not digest and gh:
+        _cu("下载", None, "拿不到 GitHub 校验值，不使用加速镜像（避免下载到被篡改的文件）")
+        gh = ""
+    _cu("下载", None, f"下载 {name}")
     tmp = B + ".new"
     try:
         with open_url(url, gh, timeout=30) as r:
-            total = int(r.headers.get("Content-Length") or 0)
-
-            class Counter:
-                def __init__(self):
-                    self.n = 0
-
-                def read(self, k=-1):
-                    b = r.read(k)
-                    self.n += len(b)
-                    if total and prog:
-                        prog(min(1.0, self.n / total))
-                    return b
-            with gzip.GzipFile(fileobj=Counter()) as gz, open(tmp, "wb") as f:
+            hr = HashReader(r, prog, int(r.headers.get("Content-Length") or 0))
+            with gzip.GzipFile(fileobj=hr) as gz, open(tmp, "wb") as f:
                 size = 0
                 while True:
                     chunk = gz.read(1 << 16)
@@ -3129,6 +3190,11 @@ def mh_fetch(kind, channel, gh, prog=None):
                     if size > 200 * 2**20:
                         raise ValueError("解压后的文件异常过大，已中止")
                     f.write(chunk)
+            while hr.read(1 << 16):  # gzip 尾部之后若还有数据也计入校验
+                pass
+        if digest and hr.h.hexdigest() != digest:
+            raise ValueError("内核文件 SHA256 与 GitHub 不一致（可能被加速镜像篡改），未做任何替换")
+        _cu("下载", None, "SHA256 校验通过" if digest else "未能获取 GitHub 校验值，已改为直连 / 代理下载")
         os.chmod(tmp, 0o755)
         nv = bin_version(tmp)
         if not nv:
@@ -3183,7 +3249,9 @@ def lgbm_fetch(gh):
     """下载 LightGBM 模型到 /etc/mihomo/Model.bin（约 9 MB，Smart 组 uselightgbm 用）"""
     tmp = LGBM_FILE + ".new"
     try:
-        with open_url(LGBM_URL, gh, timeout=60) as r, open(tmp, "wb") as f:
+        digest = release_digest(SMART_REPO, "LightGBM-Model", "Model.bin")
+        with open_url(LGBM_URL, gh if digest else "", timeout=60) as r0, open(tmp, "wb") as f:
+            r = HashReader(r0)
             n = 0
             while True:
                 chunk = r.read(1 << 16)
@@ -3195,6 +3263,8 @@ def lgbm_fetch(gh):
                 f.write(chunk)
         if n < 1 << 20:
             raise ValueError("下载的模型文件不完整")
+        if digest and r.h.hexdigest() != digest:
+            raise ValueError("模型文件 SHA256 与 GitHub 不一致")
         os.replace(tmp, LGBM_FILE)
         return n
     finally:
@@ -5180,8 +5250,8 @@ class AdStats:
         while True:
             try:
                 self.dns_probe()
-            except Exception:
-                pass
+            except Exception as e:
+                log_err("广告拦截 DNS 统计", e)
             n += 1
             time.sleep(10 if n < 3 else 60)
 
@@ -5561,6 +5631,12 @@ def diagnose():
 
     def item(name, ok, detail, fix=""):
         out.append({"name": name, "ok": ok, "detail": detail, "fix": fix if ok is not True else ""})
+
+    recent = [e for e in ERRS if time.time() - e["t"] < 86400]
+    if recent:
+        item(f"面板内部错误（24 小时内 {len(recent)} 条）", "warn",
+             "；".join(f"{time.strftime('%m-%d %H:%M', time.localtime(e['t']))} {e['where']}：{e['msg']}" for e in recent[:5])[:600],
+             "完整记录在 /var/log/mihomo-panel.log，反馈问题时请附上")
 
     code, ver = core("GET", "/version", timeout=5)
     alive = code == 200
@@ -5991,6 +6067,121 @@ def restart_self():
     sh("(sleep 1; %s) >/dev/null 2>&1 &" % os.environ.get("PANEL_RESTART", "rc-service mihomo-panel restart"))
 
 
+# ---------------------------------------------------------------- 访问控制
+# 面板没有密码：只接受局域网来源，Host 必须是 IP / 局域网名（防 DNS 重绑定），改动类请求必须带自定义头（防跨站请求）
+LAN_EXTRA = [ipaddress.ip_network(n) for n in ("100.64.0.0/10",)]  # CGNAT / Tailscale
+LAN_SUFFIX = (".lan", ".local", ".home", ".internal", ".home.arpa", ".localdomain", ".router", ".intranet", ".ts.net")
+ACL = {"t": 0, "public": False, "hosts": set()}
+
+
+def acl_cfg():
+    if time.time() - ACL["t"] > 5:
+        d = load()
+        env = {h.strip().lower() for h in os.environ.get("PANEL_ALLOW_HOSTS", "").split(",") if h.strip()}
+        ACL.update(t=time.time(), public=bool(d.get("allow_public")) or os.environ.get("PANEL_ALLOW_PUBLIC") == "1",
+                   hosts={str(h).strip().lower() for h in d.get("allow_hosts") or [] if str(h).strip()} | env)
+    return ACL
+
+
+def ip_is_lan(ip):
+    try:
+        a = ipaddress.ip_address(str(ip).split("%")[0])
+    except ValueError:
+        return False
+    if getattr(a, "ipv4_mapped", None):
+        a = a.ipv4_mapped
+    return a.is_private or a.is_loopback or a.is_link_local or any(a in n for n in LAN_EXTRA)
+
+
+def host_name(host):
+    h = (host or "").strip().lower()
+    if h.startswith("["):
+        return h[1:h.find("]")] if "]" in h else h[1:]
+    return h.rsplit(":", 1)[0] if h.count(":") == 1 else h
+
+
+def host_ok(host):
+    h = host_name(host).rstrip(".")
+    if not h:
+        return True  # HTTP/1.0 等不带 Host：没有重绑定风险
+    try:
+        ipaddress.ip_address(h)
+        return True
+    except ValueError:
+        pass
+    a = acl_cfg()
+    return a["public"] or h == "localhost" or "." not in h or h.endswith(LAN_SUFFIX) or h in a["hosts"]
+
+
+ERRS = deque(maxlen=30)
+_ERR_SEEN = {}
+
+
+def log_err(where, e, tb=False):
+    """把原本被吞掉的异常记到面板日志和「诊断」里；同一处同一错误 10 分钟只记一次"""
+    msg = f"{type(e).__name__}: {e}"[:300] if isinstance(e, BaseException) else str(e)[:300]
+    key = (where, msg)
+    now = time.time()
+    if now - _ERR_SEEN.get(key, 0) < 600:
+        return
+    _ERR_SEEN[key] = now
+    if len(_ERR_SEEN) > 500:
+        _ERR_SEEN.clear()
+    ERRS.appendleft({"t": int(now), "where": where, "msg": msg})
+    extra = ""
+    if tb and isinstance(e, BaseException):
+        import traceback
+        extra = "\n" + "".join(traceback.format_exception(type(e), e, e.__traceback__))[-1500:]
+    print(f"[error] {where}: {msg}{extra}", flush=True)
+
+
+# ---------------------------------------------------------------- 面板更新失败自动回滚
+GUARD = os.path.join(BASE, ".update-guard.sh")
+ROLLBACK_NOTE = os.path.join(BASE, ".rollback-note")
+
+
+def update_guard_script(files):
+    """更新后由独立的 shell 脚本检查新面板：90 秒内一直打不开就把 .backup 里的旧版本放回去并重启"""
+    bak = os.path.join(BASE, ".backup")
+    cps = "\n".join(f"  [ -f '{bak}/{f}' ] && cp '{bak}/{f}' '{local_file(f)}'" for f in files)
+    restart = os.environ.get("PANEL_RESTART", "rc-service mihomo-panel restart")
+    return f"""#!/bin/sh
+# 由 Shunt 面板生成：在线更新后自动检查，新版启动失败时回滚
+sleep 30
+i=0
+while [ $i -lt 6 ]; do
+  python3 - <<'PY' && {{ rm -f "$0"; exit 0; }}
+import ssl, sys, urllib.request
+ctx = ssl._create_unverified_context()
+op = urllib.request.build_opener(urllib.request.ProxyHandler({{}}), urllib.request.HTTPSHandler(context=ctx))
+for u in ("http://127.0.0.1:{PORT}/manifest.webmanifest", "https://127.0.0.1:{PORT}/manifest.webmanifest"):
+    try:
+        op.open(u, timeout=5)
+        sys.exit(0)
+    except Exception:
+        pass
+sys.exit(1)
+PY
+  i=$((i+1)); sleep 10
+done
+{cps}
+echo "新版面板 90 秒内没有启动成功，已自动恢复为 v{PANEL_VERSION}" > '{ROLLBACK_NOTE}'
+echo "[update-guard] 新版面板启动失败，已回滚到 v{PANEL_VERSION}" >> /var/log/mihomo-panel.log
+{restart} >/dev/null 2>&1
+rm -f "$0"
+"""
+
+
+def start_update_guard(files):
+    try:
+        with open(GUARD, "w") as f:
+            f.write(update_guard_script(files))
+        os.chmod(GUARD, 0o755)
+        sh(f"(command -v setsid >/dev/null && setsid sh '{GUARD}' || sh '{GUARD}') >/dev/null 2>&1 &")
+    except OSError as e:
+        log_err("更新回滚守护", e)
+
+
 def group_kind(n, custom=()):
     if n in custom:
         return "custom"
@@ -6137,9 +6328,41 @@ class H(BaseHTTPRequestHandler):
     def do_DELETE(self): self.route("DELETE")
     def do_PATCH(self): self.route("PATCH")
 
+    def deny(self, why):
+        if self.path.startswith("/api/"):
+            return self.send(403, {"message": why})
+        from html import escape as html_escape
+        html = ("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'>"
+                "<title>Shunt</title><div style='font:15px/1.7 system-ui;max-width:640px;margin:40px auto;padding:0 16px'>"
+                f"<h3>访问被拒绝</h3><p>{html_escape(why)}</p></div>")
+        return self.send(403, html.encode(), "text/html")
+
+    def guard(self, m, p):
+        """返回拒绝原因；空串表示放行"""
+        a = acl_cfg()
+        ip = self.client_address[0]
+        if not a["public"] and not ip_is_lan(ip):
+            return (f"面板默认只允许局域网访问，你的地址 {ip} 不是局域网地址。确实需要从外网访问时，"
+                    "在路由器上执行：python3 /opt/mihomo-panel/server.py --allow-public on（面板没有密码，请自行做好防护）")
+        host = self.headers.get("Host") or ""
+        if not host_ok(host):
+            h = host_name(host)
+            return (f"域名 {h} 不在允许列表（防止 DNS 重绑定攻击）。用 IP 访问，或在路由器上执行："
+                    f"python3 /opt/mihomo-panel/server.py --allow-host {h}")
+        if m not in ("GET", "HEAD") and p.startswith("/api/"):
+            origin = self.headers.get("Origin")
+            if origin and origin != "null" and urlparse(origin).netloc.lower() != host.lower():
+                return "跨站请求已拒绝"
+            if "X-Shunt" not in self.headers and "X-Token" not in self.headers:
+                return "缺少 X-Shunt 请求头，跨站请求已拒绝（脚本调用接口请加上 -H 'X-Shunt: 1'）"
+        return ""
+
     def route(self, m):
         u = urlparse(self.path)
         p = u.path
+        why = self.guard(m, p)
+        if why:
+            return self.deny(why)
         if m == "GET" and (p in ("/", "/index.html") or p.lstrip("/") in STATIC_TYPES):
             return self.send_static("index.html" if p == "/" else p.lstrip("/"))
         if m == "GET" and p == "/manifest.webmanifest":
@@ -6186,7 +6409,10 @@ class H(BaseHTTPRequestHandler):
             return self.send(401, {"message": "未登录"})
         try:
             return self.api(m, p, u.query)
+        except (BrokenPipeError, ConnectionResetError):
+            raise
         except Exception as e:
+            log_err(f"{m} {p}", e, tb=True)
             return self.send(500, {"message": str(e)})
 
     def logstream(self, level):
@@ -7063,6 +7289,24 @@ if __name__ == "__main__":
         write_core_file(active_core(dd))
         print(write_active_config(dd))
         sys.exit(0)
+    if "--allow-public" in sys.argv:  # 允许 / 禁止从外网（非局域网地址）访问面板
+        on = (sys.argv[sys.argv.index("--allow-public") + 1:] or ["on"])[0] in ("on", "1", "yes", "true")
+        update(lambda x: x.update(allow_public=on))
+        print("已允许外网访问面板（面板没有密码，请用防火墙或反向代理自行加访问控制）" if on else "已恢复为只允许局域网访问")
+        sys.exit(0)
+    if "--allow-host" in sys.argv:  # 允许用这个域名访问面板（DDNS、反向代理等）；--allow-host -x 删除
+        args = sys.argv[sys.argv.index("--allow-host") + 1:]
+        if not args:
+            print("当前允许的域名：", ", ".join(load().get("allow_hosts") or []) or "（无，IP 和 .lan/.local 等局域网域名始终允许）")
+            sys.exit(0)
+        h = args[0].strip().lower()
+
+        def _ah(x):
+            cur = [y for y in x.get("allow_hosts") or [] if y != h.lstrip("-")]
+            x["allow_hosts"] = cur if h.startswith("-") else cur + [h]
+        update(_ah)
+        print(("已删除 " if h.startswith("-") else "已允许 ") + h.lstrip("-"))
+        sys.exit(0)
     if "--snapshot" in sys.argv:  # install.sh 升级前调用：记下各组当前选择，新配置生效后由面板恢复
         print("saved" if snapshot_selections() is not None else "skip")
         sys.exit(0)
@@ -7081,7 +7325,10 @@ if __name__ == "__main__":
     try:
         opt_fix_ulimit()
     except Exception as e:
-        print("ulimit fix", e, flush=True)
+        log_err("文件句柄修正", e)
+    if os.path.isfile(ROLLBACK_NOTE):
+        log_err("面板在线更新", rfile(ROLLBACK_NOTE))
+        os.remove(ROLLBACK_NOTE)
     srv = Server(("0.0.0.0", PORT), H)
     scheme = "http"
     if https_ready(d):
