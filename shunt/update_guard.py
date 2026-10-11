@@ -1,11 +1,11 @@
 """面板更新失败自动回滚"""
 import os
 
+from .errlog import log_err
 from .base import AUTO_TAIL, BASE, G_AUTO, G_DIRECT, G_MANUAL, G_SEL, LB_PREFIX, LB_TAIL, PANEL_VERSION, PORT, SIDE_GROUPS
 from .data import LB_ALL, map_refs
 from .panel_update import local_file
 from .sysopt import sh
-from .access import log_err
 GUARD = os.path.join(BASE, ".update-guard.sh")
 ROLLBACK_NOTE = os.path.join(BASE, ".rollback-note")
 
