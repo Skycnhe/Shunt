@@ -1,14 +1,14 @@
 """"""
 import ipaddress, os, re, signal, ssl, sys, threading
 
+from .errlog import log_err
 from . import adblock, stats
-from .base import CERT, KEY, PORT
+from .base import CERT, KEY, PANEL_DIR, PORT
 from .data import load, update
 from .mihomo import dns_cfg
 from .sb_common import active_core, write_core_file
 from .sb_config import write_active_config
 from .sysopt import opt_fix_ulimit, rfile, sh
-from .auth import sess_load
 from .latency import monitor_loop
 from .stats import Stats
 from .adblock import AdStats
@@ -18,7 +18,6 @@ from .schedule import sched_loop
 from .devices import rdns_loop
 from .migrate import snapshot_selections, startup_migrate
 from .https import Server, gen_cert, https_ready
-from .access import log_err
 from .update_guard import ROLLBACK_NOTE
 from .webapi import H
 def tp_env():
@@ -57,8 +56,8 @@ def main():
     if "--gen" in sys.argv:  # init.d/mihomo 启动前调用：按当前内核生成配置
         try:
             opt_fix_ulimit()
-        except Exception:
-            pass
+        except Exception as e:
+            print("文件句柄修正失败：", e, file=sys.stderr)
         dd = load()
         write_core_file(active_core(dd))
         print(write_active_config(dd))
@@ -89,7 +88,10 @@ def main():
         print(out)
         sys.exit(0 if ok else 1)
     d = load()
-    sess_load()
+    try:  # v6.8.2 起没有登录会话，删掉旧版留下的会话文件
+        os.remove(os.path.join(PANEL_DIR, "sessions.json"))
+    except FileNotFoundError:
+        pass
     signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))  # 让 finally 有机会保存统计
     STATS = stats.STATS = Stats()
     AD_STATS = adblock.AD_STATS = AdStats()
