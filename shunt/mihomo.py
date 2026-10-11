@@ -107,6 +107,38 @@ def build_config(d, strict=False):
         groups.append(g)
     policies = {g["name"] for g in groups} | BUILTIN_POLICIES | set(names)
 
+    dc = dns_cfg(d)
+    rule_providers, rules, ab_prov = mihomo_rules(d, policies, dc)
+    v6 = bool(d.get("ipv6"))
+    dns = mihomo_dns(d, dc, policies, ab_prov)
+    hosts = mihomo_hosts(dc)
+    tun = mihomo_tun(d)
+    extra = {}
+    if active_core(d) == "smart" and gcfg(d).get("lgbm"):  # 模型放在 -d 目录（/etc/mihomo/Model.bin），内核每 72 小时自动更新
+        gh = (d.get("gh_proxy") or "").rstrip("/")
+        extra = {"lgbm-auto-update": True, "lgbm-update-interval": 72, "lgbm-url": (gh + "/" if gh else "") + LGBM_URL}
+    return dict(extra, **{
+        "mixed-port": MIXED, "tproxy-port": 7893, "allow-lan": True, "bind-address": "*",
+        "mode": d.get("mode", "rule"), "log-level": "info", "ipv6": v6,
+        "external-controller": f"{CTRL_HOST}:{CTRL_PORT}", "secret": d["secret"],
+        "unified-delay": True, "tcp-concurrent": True, "global-ua": "clash.meta",
+        "geodata-mode": True, "geo-auto-update": True, "geo-update-interval": 24,
+        "geox-url": {
+            "geoip": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat",
+            "geosite": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat",
+            "mmdb": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.metadb",
+        },
+        "profile": {"store-selected": True, "store-fake-ip": True},
+        "sniffer": {"enable": bool(d.get("sniffer", True)), "sniff": {
+            "HTTP": {"ports": [80, "8080-8880"], "override-destination": True},
+            "TLS": {"ports": [443, 8443]}, "QUIC": {"ports": [443, 8443]}}},
+        "dns": dns, "tun": tun, "hosts": hosts,
+        "proxies": proxies,
+        "proxy-providers": providers, "rule-providers": rule_providers, "proxy-groups": groups, "rules": rules,
+    })
+
+def mihomo_rules(d, policies, dc):
+    """规则集、TUN 绕过、广告拦截、防绕过 DNS、自定义规则与内置分流规则 → (rule-providers, rules, 广告拦截 providers)"""
     rule_providers = {}
     rs_rules = []
     for r in d.get("rulesets", []):
@@ -126,7 +158,6 @@ def build_config(d, strict=False):
                 pass
     ab_prov, ab_rules = adblock_providers(d)
     rule_providers.update(ab_prov)
-    dc = dns_cfg(d)
     guard = []
     if dc["block_bypass"]:  # 阻止局域网设备绕过 mihomo DNS：拒绝 DoT/DoQ(853) 与已知公共 DoH 服务器
         rule_providers["dns-bypass-ip"] = {"type": "inline", "behavior": "ipcidr", "payload": list(DOH_IPS)}
@@ -141,6 +172,11 @@ def build_config(d, strict=False):
         f"GEOSITE,telegram,{G_TG}", f"GEOIP,telegram,{G_TG},no-resolve",
         f"GEOSITE,geolocation-!cn,{G_SEL}", "GEOSITE,cn,DIRECT", "GEOIP,CN,DIRECT", f"MATCH,{G_FINAL}",
     ]
+    return rule_providers, rules, ab_prov
+
+
+def mihomo_dns(d, dc, policies, ab_prov):
+    """dns 段：防泄露布局 + nameserver-policy"""
     v6 = bool(d.get("ipv6"))
     fx = lambda xs: [fix_dns_policy(x, policies) for x in xs]
     direct = fx(dc["direct"] or DNS_DEFAULT["direct"])
@@ -178,11 +214,19 @@ def build_config(d, strict=False):
         pol.setdefault("geosite:cn,private", direct)
     if pol:
         dns["nameserver-policy"] = pol
+    return dns
+
+
+def mihomo_hosts(dc):
     hosts = {}
     for h in dc["hosts"]:
         vals = hosts.setdefault(h["domain"], [])
         vals += [v for v in h["value"] if v not in vals]
     hosts = {k: (v[0] if len(v) == 1 else v) for k, v in hosts.items()}
+    return hosts
+
+
+def mihomo_tun(d):
     tc = d.get("tun") or TUN_DEFAULT
     if d.get("proxy_mode") == "tun":
         tun = {"enable": True, "stack": tc.get("stack") if tc.get("stack") in TUN_STACKS else "mixed",
@@ -191,29 +235,8 @@ def build_config(d, strict=False):
                "strict-route": bool(tc.get("strict_route", False))}
     else:
         tun = {"enable": False}
-    extra = {}
-    if active_core(d) == "smart" and gcfg(d).get("lgbm"):  # 模型放在 -d 目录（/etc/mihomo/Model.bin），内核每 72 小时自动更新
-        gh = (d.get("gh_proxy") or "").rstrip("/")
-        extra = {"lgbm-auto-update": True, "lgbm-update-interval": 72, "lgbm-url": (gh + "/" if gh else "") + LGBM_URL}
-    return dict(extra, **{
-        "mixed-port": MIXED, "tproxy-port": 7893, "allow-lan": True, "bind-address": "*",
-        "mode": d.get("mode", "rule"), "log-level": "info", "ipv6": v6,
-        "external-controller": f"{CTRL_HOST}:{CTRL_PORT}", "secret": d["secret"],
-        "unified-delay": True, "tcp-concurrent": True, "global-ua": "clash.meta",
-        "geodata-mode": True, "geo-auto-update": True, "geo-update-interval": 24,
-        "geox-url": {
-            "geoip": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat",
-            "geosite": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat",
-            "mmdb": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.metadb",
-        },
-        "profile": {"store-selected": True, "store-fake-ip": True},
-        "sniffer": {"enable": bool(d.get("sniffer", True)), "sniff": {
-            "HTTP": {"ports": [80, "8080-8880"], "override-destination": True},
-            "TLS": {"ports": [443, 8443]}, "QUIC": {"ports": [443, 8443]}}},
-        "dns": dns, "tun": tun, "hosts": hosts,
-        "proxies": proxies,
-        "proxy-providers": providers, "rule-providers": rule_providers, "proxy-groups": groups, "rules": rules,
-    })
+    return tun
+
 
 
 def rule_policy_index(parts):
