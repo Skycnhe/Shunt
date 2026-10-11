@@ -103,7 +103,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "6.9.9"
+PANEL_VERSION = "7.0.0"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -1277,7 +1277,15 @@ def reload_core(prev=None):
     WD["manual_stop"] = False
     retest_soon()
     if sb:
-        return sb_hot_reload()
+        ok, msg = sb_hot_reload()
+        if not ok and prev is not None:  # 配置能通过 sing-box check 但运行时启动失败（如内核缺少模块）：撤销并恢复
+            tail = sb_log_error()
+            with LOCK:
+                save(prev)
+                write_sb_config(load(), SB_CONF)
+            sh(SVC + " restart", timeout=90)
+            return False, "sing-box 启动失败，已撤销本次修改" + ("：" + tail if tail else "")
+        return ok, msg
     code, body = core("PUT", "/configs?force=true", {"path": final}, timeout=30)
     if code == 502:  # 核心没在跑，尝试启动
         sh(SVC + " restart")
@@ -2352,7 +2360,7 @@ def build_singbox(d):
     tc = d.get("tun") or TUN_DEFAULT
     if d.get("proxy_mode") == "tun":
         tun = {"type": "tun", "tag": "tun-in", "interface_name": safe_dev(tc.get("device")), "address": ["172.19.0.1/30"] + (["fdfe:dcba:9876::1/126"] if v6 else []),
-               "auto_route": True, "auto_redirect": bool(tc.get("auto_redirect", True)), "strict_route": bool(tc.get("strict_route", False)),
+               "auto_route": True, "auto_redirect": bool(tc.get("auto_redirect", True)) and nft_ok(), "strict_route": bool(tc.get("strict_route", False)),
                "stack": tc.get("stack") if tc.get("stack") in TUN_STACKS else "mixed"}
         inbounds.append(tun)
     in_tags = {i["tag"] for i in inbounds}
@@ -2594,6 +2602,21 @@ def core_pid():
         return pid
     except Exception:
         return 0
+
+
+def sb_log_error():
+    """sing-box 日志里最后一条 FATAL / ERROR"""
+    try:
+        with open(MIHOMO_LOG, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 16 * 1024))
+            lines = f.read().decode("utf-8", "ignore").splitlines()
+    except OSError:
+        return ""
+    for line in reversed(lines):
+        if "FATAL" in line or " ERROR " in line:
+            return re.sub(r"^(\S+\s+){0,3}(FATAL|ERROR)(\[\d+\])?\s*", "", line.strip())[-200:]
+    return ""
 
 
 def sb_hot_reload():
@@ -3549,6 +3572,21 @@ def config_view(d=None, masked=True):
     if masked:
         cfg["secret"] = "******"
     return json.dumps(cfg, ensure_ascii=False, indent=2)
+
+
+_NFT = {"ok": None, "t": 0}
+
+
+def nft_ok():
+    """内核是否支持 nftables（sing-box 的 TUN auto_redirect 依赖它，不支持时 sing-box 直接退出）"""
+    if _NFT["ok"] is None or (not _NFT["ok"] and time.time() - _NFT["t"] > 60):
+        try:
+            p = subprocess.run(["nft", "list", "tables"], capture_output=True, timeout=5)
+            _NFT["ok"] = p.returncode == 0
+        except Exception:
+            _NFT["ok"] = False
+        _NFT["t"] = time.time()
+    return _NFT["ok"]
 
 
 def sh(cmd, timeout=60):
@@ -5397,7 +5435,7 @@ def device_map(ips):
 def tun_runtime_error(dev, wait=4):
     """等待 TUN 网卡出现；失败时从核心日志里找出原因"""
     for _ in range(wait * 2):
-        if os.path.isdir("/sys/class/net/" + dev):
+        if os.path.exists(f"/sys/class/net/{dev}/tun_flags"):  # 必须是 TUN 网卡，避免与 eth0 等同名网卡误判
             return ""
         time.sleep(0.5)
     try:
@@ -6141,14 +6179,19 @@ class H(BaseHTTPRequestHandler):
         note = ""
         if mode == "tun":  # mihomo -t 只做语法校验；TUN 网卡创建失败时核心照常运行，需要单独确认
             err = tun_runtime_error(safe_dev(load()["tun"].get("device")))
+            if active_core() == "singbox" and load()["tun"].get("auto_redirect", True) and not nft_ok():
+                note = "（内核不支持 nftables，auto-redirect 未启用）"
             if err and "redirect" in err.lower() and load()["tun"].get("auto_redirect"):
                 # auto-redirect 依赖 nftables / iptables，内核不支持时自动关闭后重试一次
                 update(lambda d: d["tun"].update(auto_redirect=False))
                 ok, msg = reload_core()
                 err = tun_runtime_error(safe_dev(load()["tun"].get("device"))) if ok else msg
                 note = "（auto-redirect 不可用，已自动关闭）" if not err else ""
-            if err:
-                return self.send(500, {"message": "配置已生效，但 TUN 启动失败：" + err +
+            if err:  # TUN 起不来时局域网会断网：恢复为原来的代理方式
+                save(prev)
+                reload_core()
+                sh(TPROXY_SH + " apply")
+                return self.send(500, {"message": "TUN 启动失败，已恢复原来的代理方式：" + err +
                                        "。可尝试：关闭 auto-redirect、换用 gvisor 协议栈、确认以 root 运行并已加载 tun 模块（modprobe tun）"})
         if code != 0:
             return self.send(500, {"message": f"核心已切换为 {label}，但 nftables 规则处理失败：{out[-200:]}"})
