@@ -7,6 +7,9 @@ on:
     branches: [Hk001]
     paths:
       - server.py
+      - shunt/**
+      - web/**
+      - update-files.txt
       - index.html
       - install.sh
       - offline.sh
