@@ -1392,11 +1392,11 @@ async function doUpdate(){if(!confirm('从 GitHub 下载并更新面板文件？
 // 系统优化
 let SO=null;
 async function loadSysopt(){try{SO=await api('/api/sysopt');renderSysopt()}catch(e){$('#so-list').innerHTML=`<span class="bad small">${esc(e.message)}</span>`}}
-function renderSysopt(){if(!SO)return;$('#so-hw').textContent=`${SO.cpu} 核 · ${SO.mem} MB · ${SO.kernel}`;
+function renderSysopt(){if(!SO)return;$('#so-hw').textContent=`${SO.cpu} 核 · ${SO.mem} MB · ${SO.kernel}`+(SO.container?` · ${SO.container==='lxc'?'LXC':SO.container}  容器`:'');
   $('#so-list').innerHTML=SO.items.map(it=>{const st=!it.ok?`<span class="mut">不支持：${esc(it.why||'')}</span>`:it.active?'<span class="ok">● 已生效</span>':it.enabled?'<span class="warn">● 已开启，未完全生效</span>':'<span class="mut">○ 未开启</span>';
     const sh=Object.entries(it.show||{}).map(([k,v])=>`${esc(k)} ${esc(v)}`).join(' · ');
     return `<div class="opt"><div class="sp"><div class="t">${esc(it.name)}${it.rec?' <span class="tag">推荐</span>':''}</div><div class="dsc">${esc(it.desc)}</div>
-      <div class="small" style="margin-top:3px">${st}${sh?' · <span class="mut">'+sh+'</span>':''}</div></div>
+      <div class="small" style="margin-top:3px">${st}${sh?' · <span class="mut">'+sh+'</span>':''}${it.part?'<br><span class="mut">'+esc(it.part)+'</span>':''}</div></div>
       <label class="sw"><input type="checkbox" data-so="${esc(it.id)}" ${it.enabled?'checked':''} ${it.ok?'':'disabled'}><span></span></label></div>`}).join('')}
 function soPick(rec){document.querySelectorAll('[data-so]').forEach(x=>{if(!x.disabled){const it=SO.items.find(i=>i.id===x.dataset.so);x.checked=rec?it.rec:false}})}
 async function soApply(ids){if(!ids)ids=[...document.querySelectorAll('[data-so]')].filter(x=>x.checked).map(x=>x.dataset.so);
