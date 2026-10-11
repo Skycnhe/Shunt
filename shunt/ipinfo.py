@@ -23,20 +23,31 @@ def _fetch(url, via_proxy, timeout=10):
 
 
 def _phys_iface():
-    """物理网卡：取默认路由的 dev，排除 tun/mihomo。TUN 模式会拦截本机全部流量，
-    直连请求必须绑定物理网卡才能绕过 TUN 拿到真实公网 IP。"""
+    """物理网卡：优先默认路由的非 TUN dev；TUN 接管默认路由时，退化为第一个 UP 的非 TUN/非 lo 网卡。
+    TUN 模式会拦截本机全部流量，直连请求必须绑定物理网卡才能绕过 TUN 拿到真实公网 IP。"""
     try:
         out = subprocess.check_output(["ip", "-4", "route", "show", "default"],
                                       text=True, timeout=5)
         for line in out.splitlines():
             m = re.search(r"\bdev (\S+)", line)
-            if m:
-                dev = m.group(1)
-                if not (dev.startswith("tun") or dev.startswith("utun") or dev == "mihomo"):
-                    return dev
+            if m and not _is_tun(m.group(1)):
+                return m.group(1)
+    except Exception:
+        pass
+    try:
+        out = subprocess.check_output(["ip", "-o", "link", "show"], text=True, timeout=5)
+        for line in out.splitlines():
+            m = re.search(r"^\d+: (\S+?):.*state UP", line)
+            if m and m.group(1) != "lo" and not _is_tun(m.group(1)):
+                return m.group(1)
     except Exception:
         pass
     return None
+
+
+def _is_tun(dev):
+    return (dev.startswith("tun") or dev.startswith("utun") or dev == "mihomo"
+            or dev.startswith("docker") or dev.startswith("br-") or dev.startswith("veth"))
 
 
 def _fetch_direct_ip():

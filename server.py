@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.5.2"
+PANEL_VERSION = "7.5.3"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -231,7 +231,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.5.2"
+PANEL_VERSION = "7.5.3"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -6674,20 +6674,31 @@ def _fetch(url, via_proxy, timeout=10):
 
 
 def _phys_iface():
-    """物理网卡：取默认路由的 dev，排除 tun/mihomo。TUN 模式会拦截本机全部流量，
-    直连请求必须绑定物理网卡才能绕过 TUN 拿到真实公网 IP。"""
+    """物理网卡：优先默认路由的非 TUN dev；TUN 接管默认路由时，退化为第一个 UP 的非 TUN/非 lo 网卡。
+    TUN 模式会拦截本机全部流量，直连请求必须绑定物理网卡才能绕过 TUN 拿到真实公网 IP。"""
     try:
         out = subprocess.check_output(["ip", "-4", "route", "show", "default"],
                                       text=True, timeout=5)
         for line in out.splitlines():
             m = re.search(r"\\bdev (\\S+)", line)
-            if m:
-                dev = m.group(1)
-                if not (dev.startswith("tun") or dev.startswith("utun") or dev == "mihomo"):
-                    return dev
+            if m and not _is_tun(m.group(1)):
+                return m.group(1)
+    except Exception:
+        pass
+    try:
+        out = subprocess.check_output(["ip", "-o", "link", "show"], text=True, timeout=5)
+        for line in out.splitlines():
+            m = re.search(r"^\\d+: (\\S+?):.*state UP", line)
+            if m and m.group(1) != "lo" and not _is_tun(m.group(1)):
+                return m.group(1)
     except Exception:
         pass
     return None
+
+
+def _is_tun(dev):
+    return (dev.startswith("tun") or dev.startswith("utun") or dev == "mihomo"
+            or dev.startswith("docker") or dev.startswith("br-") or dev.startswith("veth"))
 
 
 def _fetch_direct_ip():
