@@ -1,6 +1,7 @@
 """面板在线更新"""
 import hashlib, json, os, re, shutil, time, urllib.request, urllib.error
 
+from .errlog import log_err
 from .base import BASE, PANEL_VERSION, UA
 PANEL_RAW = os.environ.get("PANEL_RAW", "https://raw.githubusercontent.com/Skycnhe/Shunt/Hk001")
 UPD_FILES = ["server.py", "index.html", "tproxy.sh", "selftest.sh", "init.d/mihomo", "init.d/mihomo-panel"]
@@ -172,9 +173,8 @@ def self_update(apply=False, gh=""):
 
 def _link():
     """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global open_url, proxy_opener, sh, restart_self, log_err, start_update_guard
+    global open_url, proxy_opener, sh, restart_self, start_update_guard
     from .core_update import open_url
     from .sysopt import proxy_opener, sh
     from .https import restart_self
-    from .access import log_err
     from .update_guard import start_update_guard
