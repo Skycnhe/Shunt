@@ -2,6 +2,7 @@
 import base64, json, os, re, threading, time, urllib.request, urllib.error
 from urllib.parse import quote
 
+from .errlog import log_err
 from .base import G_MANUAL, G_SEL, HC, NOTIFY_FILE, PANEL_DIR, UA, WD_INTERVAL
 from .data import load, read_json, write_json
 from .core import core, core_json, refresh_regions
@@ -56,8 +57,8 @@ def delay_merge(px):
         try:
             write_json(DELAY_FILE, data)
             DELAYS.update(saved=now, dirty=False)
-        except Exception:
-            pass
+        except OSError as e:
+            log_err("保存延迟缓存", e)
     return px
 
 
@@ -87,8 +88,8 @@ def retest_soon(wait=6):
                 core("GET", f"/group/{quote(G_MANUAL)}/delay?url={quote(HC)}&timeout=5000", timeout=60)
             RETEST["last"] = time.time()
             proxies_merged()
-        except Exception:
-            pass
+        except Exception as e:
+            log_err("定时测速", e)
         finally:
             RETEST["pending"] = False
     threading.Thread(target=run, daemon=True).start()
