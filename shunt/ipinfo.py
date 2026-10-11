@@ -50,6 +50,20 @@ def _is_tun(dev):
             or dev.startswith("docker") or dev.startswith("br-") or dev.startswith("veth"))
 
 
+def _fetch_cn_ip():
+    """经代理端口取国内 IP 查询服务。若代理按规则直连中国网站，可拿到真实公网 IP；
+    响应自带中文归属地（格式：当前 IP：x.x.x.x  来自于：...），无需再查 geo。"""
+    try:
+        with proxy_opener(True).open("https://myip.ipip.net", timeout=10) as r:
+            txt = r.read().decode(errors="ignore")
+        m = re.search(r"当前 IP：([0-9.]+)\s*来自于：(.+)", txt)
+        if m:
+            return m.group(1).strip(), m.group(2).strip()
+    except Exception:
+        pass
+    return "", ""
+
+
 def _fetch_direct_ip():
     """直连取公网 IP：
     1. 优先 https://1.1.1.1/cdn-cgi/trace（固定 IP 无需 DNS，不受 fake-ip 污染），绑定物理网卡绕过 TUN
@@ -87,9 +101,13 @@ def get_ipinfo():
     now = time.time()
     if _CACHE["v"] is not None and now - _CACHE["t"] < _TTL:
         return _CACHE["v"]
-    direct_ip = _fetch_direct_ip()
     proxy_ip = _fetch(IP_ECHO, True)
-    v = {"direct": {"ip": direct_ip, "loc": _geo(direct_ip)},
+    # 本地公网 IP：优先经代理取国内服务（代理直连中国网站时可拿到真实 IP，自带中文归属地）
+    direct_ip, direct_loc = _fetch_cn_ip()
+    if not direct_ip or direct_ip == proxy_ip:
+        direct_ip = _fetch_direct_ip()
+        direct_loc = _geo(direct_ip)
+    v = {"direct": {"ip": direct_ip, "loc": direct_loc},
          "proxy": {"ip": proxy_ip, "loc": _geo(proxy_ip)}}
     _CACHE["t"], _CACHE["v"] = now, v
     return v

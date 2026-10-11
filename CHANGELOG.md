@@ -1,5 +1,8 @@
 # 更新记录与详细说明
 
+## v7.5.5 本地 IP 改经代理取国内服务（利用中国网站直连规则）
+- 1.1.1.1 在国内被墙，直连 bypass 此路不通。现优先经代理端口取 myip.ipip.net：若代理按规则直连中国网站，即可拿到真实公网 IP（响应自带中文归属地，无需再查 geo）
+
 ## v7.5.4 本地 IP 改用 1.1.1.1 trace（绕过 fake-ip DNS 污染）
 - 发现 sing-box 的 fake-ip DNS 把 api.ipify.org 解析到 198.18.x.x，导致直连取 IP 也走代理。现优先用 https://1.1.1.1/cdn-cgi/trace（固定 IP 无需 DNS），绑定物理网卡绕过 TUN
 

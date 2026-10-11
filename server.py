@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.5.4"
+PANEL_VERSION = "7.5.5"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -231,7 +231,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.5.4"
+PANEL_VERSION = "7.5.5"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -6701,6 +6701,20 @@ def _is_tun(dev):
             or dev.startswith("docker") or dev.startswith("br-") or dev.startswith("veth"))
 
 
+def _fetch_cn_ip():
+    """经代理端口取国内 IP 查询服务。若代理按规则直连中国网站，可拿到真实公网 IP；
+    响应自带中文归属地（格式：当前 IP：x.x.x.x  来自于：...），无需再查 geo。"""
+    try:
+        with proxy_opener(True).open("https://myip.ipip.net", timeout=10) as r:
+            txt = r.read().decode(errors="ignore")
+        m = re.search(r"当前 IP：([0-9.]+)\\s*来自于：(.+)", txt)
+        if m:
+            return m.group(1).strip(), m.group(2).strip()
+    except Exception:
+        pass
+    return "", ""
+
+
 def _fetch_direct_ip():
     """直连取公网 IP：
     1. 优先 https://1.1.1.1/cdn-cgi/trace（固定 IP 无需 DNS，不受 fake-ip 污染），绑定物理网卡绕过 TUN
@@ -6738,9 +6752,13 @@ def get_ipinfo():
     now = time.time()
     if _CACHE["v"] is not None and now - _CACHE["t"] < _TTL:
         return _CACHE["v"]
-    direct_ip = _fetch_direct_ip()
     proxy_ip = _fetch(IP_ECHO, True)
-    v = {"direct": {"ip": direct_ip, "loc": _geo(direct_ip)},
+    # 本地公网 IP：优先经代理取国内服务（代理直连中国网站时可拿到真实 IP，自带中文归属地）
+    direct_ip, direct_loc = _fetch_cn_ip()
+    if not direct_ip or direct_ip == proxy_ip:
+        direct_ip = _fetch_direct_ip()
+        direct_loc = _geo(direct_ip)
+    v = {"direct": {"ip": direct_ip, "loc": direct_loc},
          "proxy": {"ip": proxy_ip, "loc": _geo(proxy_ip)}}
     _CACHE["t"], _CACHE["v"] = now, v
     return v
