@@ -1,5 +1,8 @@
 # 更新记录与详细说明
 
+## v7.4.5
+- 修复 v7.4.3 的 bug：`core.py` 的 `_link()` 里 `sb_rule_need` 漏加 `global` 声明，sing-box 用户改配置触发 `reload_core` 时会 NameError（被异常捕获不会崩，但广告规则集预同步失效）
+
 ## v7.4.4 修复 SSRF 误伤
 - 修复 v7.4.2 引入的回归：`dl_check` 用本机 DNS 校验所有下载，但在国内等 DNS 受干扰的环境会误伤合法下载（如面板在线更新拉取 raw.githubusercontent.com）。现在经 mihomo 代理下载时跳过本地 DNS 校验（由代理自己解析），字面内网 IP 无论走不走代理都拦截
 

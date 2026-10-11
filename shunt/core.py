@@ -156,7 +156,7 @@ def refresh_after_sub(name, wait=90):
 
 def _link():
     """全部模块加载后由 shunt.load() 调用：绑定后面模块里定义的名字（模块之间互相调用，放在这里避免循环导入）"""
-    global SB_CONF, active_core, build_singbox, check_sb_config, sb_hot_reload, sb_log_error, sb_sync_assets, write_sb_config
+    global SB_CONF, active_core, build_singbox, check_sb_config, sb_hot_reload, sb_log_error, sb_rule_need, sb_sync_assets, write_sb_config
     global sh, WD, core_alive, retest_soon
     from .sb_common import SB_CONF, active_core
     from .sb_config import build_singbox, check_sb_config, sb_hot_reload, sb_log_error, sb_rule_need, sb_sync_assets, write_sb_config
