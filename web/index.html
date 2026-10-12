@@ -81,21 +81,6 @@
     </div>
    </div>
   </section>
-  <!-- 检测 -->
-  <section data-tab="检测">
-    <div class="cols">
-      <div>
-        <div class="card"><div class="row"><h3 class="sp" style="margin:0">流媒体 / AI 解锁检测</h3><button class="btn g sm" id="unlock-btn" onclick="testUnlock()">检测</button></div>
-          <div class="mut small" style="margin-top:4px">经由 mixed 端口按当前规则分流检测，结果反映各服务实际走的节点</div>
-          <div class="grid" id="unlock" style="margin-top:12px;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px"><span class="mut" style="grid-column:1/-1">点击“检测”开始（约 10 秒）</span></div></div>
-      </div>
-      <div>
-        <div class="card"><div class="row"><h3 class="sp" style="margin:0">网络诊断</h3><button class="btn g" id="diag-btn" onclick="runDiag()">一键诊断</button></div>
-          <div class="mut small" style="margin-top:4px">检查核心、透明代理 / TUN、IP 转发、DNS 解析与出站连通性，并给出修复建议</div>
-          <div id="diag" style="margin-top:8px"></div></div>
-      </div>
-    </div>
-  </section>
   <!-- 节点 -->
   <section data-tab="节点">
     <div class="row ntool" style="margin-bottom:12px"><input class="sp nsearch" id="nf-q" placeholder="搜索节点 / 分组" oninput="NF.q=this.value.trim().toLowerCase();renderGroups()">
@@ -329,6 +314,9 @@
         <div class="row mt"><span class="sp mut small">auto-route、auto-detect-interface 已开启，DNS 劫持 any:53</span><button class="btn sm" onclick="applyTun()">应用 TUN 设置</button></div></div>
       <div class="opt mt"><div class="sp"><div class="t">IPv6 透明代理</div><div class="dsc">核心与 DNS 启用 IPv6，并代理 IPv6 流量；需客户端以本机作为 IPv6 网关</div></div><label class="sw"><input type="checkbox" id="v6"><span></span></label></div>
       <div class="opt"><div class="sp"><div class="t">故障自动直连（看门狗）</div><div class="dsc">核心挂掉时自动重启，仍失败则关闭透明代理保证局域网能上网</div></div><label class="sw"><input type="checkbox" id="wd"><span></span></label></div></div>
+    <div data-sg="net" class="card"><div class="row"><h3 class="sp" style="margin:0">流媒体 / AI 解锁检测</h3><button class="btn g sm" id="unlock-btn" onclick="testUnlock()">检测</button></div>
+          <div class="mut small" style="margin-top:4px">经由 mixed 端口按当前规则分流检测，结果反映各服务实际走的节点</div>
+          <div class="grid" id="unlock" style="margin-top:12px;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px"><span class="mut" style="grid-column:1/-1">点击“检测”开始（约 10 秒）</span></div></div>
     <div data-sg="net" class="card colbrk"><h3>绕过设备（不走代理）</h3>
       <div class="mut small" style="margin-bottom:6px">每行一个 IP、网段或 MAC（如 192.168.1.50、2408:xxxx::/64、AA:BB:CC:DD:EE:FF）。TUN 模式下按 IP / 网段生成直连规则（MAC 仅 TProxy 有效）。被绕过的设备请把 DNS 设为主路由。</div>
       <textarea id="bypass" rows="3"></textarea><div class="row" style="margin-top:8px"><span class="sp"></span><button class="btn" onclick="saveBypass()">保存</button></div></div>
@@ -339,6 +327,9 @@
     <div data-sg="net" class="card"><h3>订阅与分组</h3><div class="row">
       <span>订阅自动更新间隔</span><select id="sub-int"><option value="3600">1 小时</option><option value="21600">6 小时</option><option value="43200">12 小时</option><option value="86400">24 小时</option><option value="259200">3 天</option></select></div>
       <div class="row mt"><span class="sp mut small">地区分组、负载均衡、自定义策略组在「策略组」页设置</span><button class="btn g" onclick="go('策略组')">策略组</button><button class="btn" onclick="saveGroupOpts()">保存并应用</button></div></div>
+    <div data-sg="net" class="card"><div class="row"><h3 class="sp" style="margin:0">网络诊断</h3><button class="btn g" id="diag-btn" onclick="runDiag()">一键诊断</button></div>
+          <div class="mut small" style="margin-top:4px">检查核心、透明代理 / TUN、IP 转发、DNS 解析与出站连通性，并给出修复建议</div>
+          <div id="diag" style="margin-top:8px"></div></div>
     <div data-sg="core" class="card"><div class="row"><h3 class="sp" style="margin:0">内核</h3><span class="tag" id="sw-cur"></span></div>
       <div class="mut small" style="margin:4px 0 8px">订阅、节点、规则、DNS、设备等设置所有内核共用，切换时按所选内核生成对应的配置文件和策略组（mihomo / mihomo Smart：<code>/etc/mihomo/config.yaml</code>，sing-box：<code>/etc/sing-box/config.json</code>）。新配置先校验，通过后才重启；30 秒内没响应会自动切回原内核。</div>
       <div class="seg" id="sw-seg"><button data-v="mihomo">mihomo</button><button data-v="smart">mihomo Smart</button><button data-v="singbox">sing-box</button></div>
