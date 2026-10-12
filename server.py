@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.6.8"
+PANEL_VERSION = "7.6.9"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -232,7 +232,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.6.8"
+PANEL_VERSION = "7.6.9"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -272,11 +272,16 @@ DIRECT_HC = "https://www.baidu.com"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 
 
+# Fake-IP 网段：路由器自己用本机 DNS 时，公网域名会解析成这些地址，连接由 mihomo / sing-box 接管并按真实域名转发，
+# 不是内网目标，SSRF 校验放行（否则开着 Fake-IP 时在线更新、订阅下载直连全被误拦）
+FAKEIP_NETS = (ipaddress.ip_network("198.18.0.0/15"), ipaddress.ip_network("fc00::/18"), ipaddress.ip_network("fdfe:dcba:9876::/64"))
+
+
 def url_host_forbidden(url, via_proxy=False):
     """SSRF 防护：下载类 URL 的目标主机必须解析到公网地址。
 
     命中以下任一情况返回 True（禁止）：无主机名 / localhost / 字面内网 IP /
-    （直连时）DNS 解析失败或解析出的任一 IP 不是公网地址（内网、回环、链路本地、保留、组播等）。
+    （直连时）DNS 解析失败或解析出的任一 IP 不是公网地址（内网、回环、链路本地、保留、组播等；Fake-IP 网段除外）。
     via_proxy=True（经 mihomo 代理下载）时跳过 DNS 校验：DNS 由代理自己解析，
     本地校验无意义，且在 DNS 受干扰的环境（如国内）会误伤合法下载；字面 IP 仍拦截。
     注意：检查与实际建连之间存在 DNS TOCTOU 窗口，这里只防住直接的内网目标。"""
@@ -301,7 +306,7 @@ def url_host_forbidden(url, via_proxy=False):
             ip = ipaddress.ip_address(sa[0])
         except ValueError:
             return True
-        if not ip.is_global:
+        if not ip.is_global and not any(ip in n for n in FAKEIP_NETS):
             return True
     return False
 
@@ -3592,7 +3597,7 @@ def fetch_raw(f, gh, commit=None, sha=None):
         gh = ""
     tries = [(gh.rstrip("/") + "/" + url, False)] if gh else []
     tries += [(url, True), (url, False)]  # 先经 mihomo 代理，再直连
-    err = ""
+    errs = []
     for u, use_proxy in tries:
         try:
             dl_check(u, via_proxy=use_proxy)  # SSRF 防护：直连时校验 DNS，走代理时由代理解析（字面内网 IP 永远拦截）
@@ -3603,8 +3608,8 @@ def fetch_raw(f, gh, commit=None, sha=None):
                 raise ValueError("文件校验失败（与 GitHub 上的不一致，可能被加速镜像篡改）")
             return data
         except Exception as e:
-            err = f"{u.split('/')[2]}{'(代理)' if use_proxy else ''}: {str(e)[:120]}"
-    raise IOError(f"下载 {f} 失败：{err}")
+            errs.append(f"{u.split('/')[2]}{'(代理)' if use_proxy else '(直连)'}: {str(e)[:120]}")
+    raise IOError(f"下载 {f} 失败：" + "；".join(errs))  # 每条线路的失败原因都列出，便于判断是代理还是直连的问题
 
 
 def self_rollback():
