@@ -85,6 +85,9 @@ textarea{width:100%;font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
 table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:8px 9px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:middle}
 td[colspan]{white-space:normal;line-height:1.5}
 tr:last-child td{border-bottom:0}th{color:var(--sub);font-weight:500;font-size:12px}td.w{white-space:normal;word-break:break-all}
+/* v7.6.8 订阅列表：链接、过滤规则单行省略，不再撑大表格（完整内容悬停查看） */
+.subn{max-width:260px}.subu{font-size:11px;max-width:260px;overflow:hidden;text-overflow:ellipsis}
+.subf{font-size:12px;min-width:150px;max-width:240px}.subf>div{max-width:240px;overflow:hidden;text-overflow:ellipsis}
 .node{border:1px solid var(--line);border-radius:14px;padding:9px 12px;cursor:pointer;background:var(--nbg);transition:transform .15s,border-color .2s,background .2s}
 .node:hover{transform:translateY(-1px);border-color:var(--b2h)}
 .node.sel{border-color:var(--pri);background:var(--nsel)}.node .n{font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -1126,8 +1129,8 @@ async function loadSubs(){await loadState();let prov={};try{prov=(await core('/p
     const used=(si.Upload||0)+(si.Download||0);const exp=si.Expire?new Date(si.Expire*1000).toLocaleDateString('zh-CN'):'-';
     const exc=s.exclude===undefined?STATE.default_exclude:s.exclude;
     const pct=si.Total?Math.min(100,used/si.Total*100):0,days=si.Expire?Math.ceil((si.Expire*1000-Date.now())/864e5):null;
-    return `<tr><td>${esc(s.name)}<div class="mut w" style="max-width:340px;font-size:11px">${esc(s.url)}</div></td><td>${(p.proxies||[]).length}</td>
-    <td class="w" style="font-size:12px;max-width:220px">${s.filter?'保留：'+esc(s.filter)+'<br>':''}${exc?'<span class="mut">排除：'+esc(exc)+'</span>':'<span class="mut">不过滤</span>'}</td>
+    return `<tr><td class="subn" title="${esc(s.url)}"><div class="subu" style="font-size:inherit">${esc(s.name)}</div><div class="mut subu">${esc(s.url)}</div></td><td>${(p.proxies||[]).length}</td>
+    <td class="subf" title="${esc((s.filter?'保留：'+s.filter+'\n':'')+(exc?'排除：'+exc:'不过滤'))}">${s.filter?'<div>保留：'+esc(s.filter)+'</div>':''}${exc?'<div class="mut">排除：'+esc(exc)+'</div>':'<div class="mut">不过滤</div>'}</td>
     <td>${si.Total?`${fmt(used)} / ${fmt(si.Total)}<div class="ubar"><i class="${pct>90?'bad':pct>70?'warn':''}" style="width:${pct.toFixed(1)}%"></i></div>`:'-'}</td>
     <td>${exp}${days!==null?`<div class="small ${days<=3?'bad':days<=7?'warn':'mut'}">${days<0?'已过期':'剩 '+days+' 天'}</div>`:''}</td><td>${p.updatedAt?new Date(p.updatedAt).toLocaleString('zh-CN',{hour12:false}):'-'}</td>
     <td><button class="btn g sm" onclick="updSub('${encodeURIComponent(s.name)}',this)">更新</button> <button class="btn g sm" onclick="editSub('${encodeURIComponent(s.name)}')">编辑</button> <button class="btn r sm" onclick="delSub('${encodeURIComponent(s.name)}')">删除</button></td></tr>`}).join('')||'<tr><td class="mut">暂无订阅</td></tr>';
