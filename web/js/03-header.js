@@ -6,7 +6,7 @@ async function loadState(){
   try{v=(await api('/api/ping')).version}catch(e){/* 心跳失败则回退全量拉取 */}
   if(v!==null&&v===STATE_VER&&STATE.running!==undefined)return; // 配置无变化：顶栏运行状态由 1 秒实时流保持
   STATE=await api('/api/state');STATE_VER=v;
-  renderCore(STATE.running);renderMode();renderWD();renderPMStat()}
+  renderCore(STATE.running);renderMode();renderWD();renderPMStat();renderVer()}
 function renderCore(run){$('#h-dot').className='dot '+(run?'on':'off');$('#h-run').textContent=run?'运行中':'已停止';
   $('#h-ver').textContent=run&&STATE.version&&STATE.version!=='-'?STATE.version:'';
   $('#h-restart').classList.toggle('hide',!run);$('#h-stop').classList.toggle('hide',!run);$('#h-start').classList.toggle('hide',run)}
@@ -16,3 +16,23 @@ function renderHdr(l){$('#h-up').textContent=fmt(l.up)+'/s';$('#h-down').textCon
   $('#ov-tot').textContent=`累计 ↑${fmt(l.upTotal)} ↓${fmt(l.downTotal)} · 内存 ${l.inuse?fmt(l.inuse):'-'}`;
   if(l.running!==undefined&&l.running!==STATE.running){STATE.running=l.running;renderCore(l.running)}}
 function renderOverview(){renderMode();renderWD();renderPMStat();loadDevs();loadAdStat();loadQS();loadIpInfo()}
+
+// 顶栏版本：面板 / 内核当前版本，有更新时标「有更新」。检查结果按版本缓存 6 小时（检查要访问 GitHub API，
+// 未登录每小时 60 次，不能每次打开都查）；设置页手动检查后也会刷新这里
+const VER_TTL=6*3600e3,VER_BUSY={};
+function verCache(k){try{return JSON.parse(localStorage.getItem('ver-'+k)||'null')}catch(e){return null}}
+function verSave(k,cur,remote,upd){localStorage.setItem('ver-'+k,JSON.stringify({cur,remote,upd,t:Date.now()}));renderVer()}
+function verChip(id,cur,c){const el=$(id);if(!el)return;const has=!!(c&&c.cur===cur&&c.upd);
+  el.classList.toggle('new',has);el.querySelector('b').textContent=cur||'-';
+  el.querySelector('.k').innerHTML=(id==='#hv-panel'?'面板':'内核')+(has?'<em>有更新</em>':'');
+  el.title=(has?`有更新：${cur} → ${c.remote}，`:'')+'点击去设置检查更新'}
+function coreChFor(){const k=STATE.core||'mihomo',v=String(STATE.version||'');
+  return k==='smart'||/alpha/i.test(v)?'alpha':'stable'}
+async function verCheck(k,url,cur){if(VER_BUSY[k]||!cur||cur==='-')return;const c=verCache(k);
+  if(c&&c.cur===cur&&Date.now()-c.t<VER_TTL)return;VER_BUSY[k]=1;
+  try{const j=await api(url);verSave(k,cur,j.remote||'',k==='panel'?!!(j.changed&&j.changed.length):!j.latest)}catch(e){}VER_BUSY[k]=0}
+function renderVer(){const pv=STATE.panel_version?'v'+STATE.panel_version:'',cv=STATE.version&&STATE.version!=='-'?String(STATE.version):'';
+  verChip('#hv-panel',pv,verCache('panel'));verChip('#hv-core',cv,verCache('core-'+(STATE.core||'mihomo')));
+  verCheck('panel','/api/selfupdate',pv);
+  verCheck('core-'+(STATE.core||'mihomo'),`/api/coreupdate?channel=${coreChFor()}&core=${STATE.core||'mihomo'}`,cv)}
+function goUpd(id){go('设置');setTimeout(()=>{const b=$('#'+id);if(b){b.scrollIntoView({block:'center'});b.click()}},150)}
