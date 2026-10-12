@@ -475,15 +475,19 @@ def direct_rtt(timeout=6):
     2. 核心不可用时，curl 绑定物理网卡绕过 TUN，在同一连接上请求两次，只取第二次（复用连接）的耗时"""
     from .base import DIRECT_HC
     from urllib.parse import quote
-    try:
-        from .corehttp import core
-        code, raw = core("GET", f"/proxies/DIRECT/delay?url={quote(DIRECT_HC)}&timeout={timeout * 1000}", timeout=timeout + 2)
-        if code == 200:
-            ms = int(json.loads(raw).get("delay") or 0)
-            if ms > 0:
-                return ms
-    except (OSError, ValueError, TypeError):
-        pass
+    from .corehttp import core
+    got = []
+    for _ in range(2):  # 测两次取小：sing-box 没有 unified-delay，第一次会把 DNS 解析和建连也算进去（实测冷启动 1000+ ms，第二次 30 ms）
+        try:
+            code, raw = core("GET", f"/proxies/DIRECT/delay?url={quote(DIRECT_HC)}&timeout={timeout * 1000}", timeout=timeout + 2)
+            ms = int(json.loads(raw).get("delay") or 0) if code == 200 else 0
+        except (OSError, ValueError, TypeError, AttributeError):
+            ms = 0
+        if ms <= 0:
+            break
+        got.append(ms)
+    if got:
+        return min(got)
     try:
         from .ipinfo import _phys_iface
         iface = _phys_iface()
