@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.6.0"
+PANEL_VERSION = "7.6.1"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -231,7 +231,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.6.0"
+PANEL_VERSION = "7.6.1"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -266,8 +266,8 @@ SIDE_GROUPS = [G_YT, G_GG, G_TG, G_AI, G_NF, G_FINAL]
 BUILTIN_POLICIES = {"DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE"}
 HC = "https://www.gstatic.com/generate_204"
 # 直连测速用国内地址（DIRECT 是国内直连，测谷歌没有意义）；第一个不可用时试下一个
-DIRECT_HCS = ("http://connect.rom.miui.com/generate_204", "https://www.baidu.com")
-DIRECT_HC = DIRECT_HCS[0]
+# 直连测速地址：与概览「百度」卡片同一个地址、同一种测法，两处数字才可比
+DIRECT_HC = "https://www.baidu.com"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 
 
@@ -4466,14 +4466,26 @@ def site_rtt(url, timeout=6):
 
 
 def direct_rtt(timeout=6):
-    """直连（不走代理）测国内地址延迟，测法与节点延迟一致（只计往返，不计 DNS / 握手）：
-    1. 优先让核心测 DIRECT 出站（mihomo 开了 unified-delay，与节点延迟同一口径；sing-box 同样由核心测）
-    2. 核心不可用时，curl 绑定物理网卡绕过 TUN，在同一连接上请求两次，只取第二次（复用连接）的耗时"""
+    """直连（不走代理）延迟，与概览「百度」卡片同一口径：经 mixed 端口连上百度，复用连接只计第二次请求的往返。
+    规则 / 直连模式下百度按 geosite:cn 走 DIRECT，测到的就是直连；全局模式下 mixed 端口会走代理，
+    这时改由核心测 DIRECT 出站（mihomo 有 unified-delay；sing-box 没有，测两次取小）。
+    v7.5.8～v7.6.0 在 sing-box 下一律由核心测，sing-box 的测法含 TCP 握手且地址不同，直连显示 139 ms 而百度卡片 31 ms"""
     from .base import DIRECT_HC
     from urllib.parse import quote
-    from .corehttp import core
+    from .corehttp import core, core_json
+    try:
+        mode = str((core_json("/configs", timeout=3) or {}).get("mode") or "rule").lower()
+    except (OSError, ValueError, TypeError, AttributeError):
+        mode = "rule"
+    if mode != "global":
+        try:
+            ms = site_rtt(DIRECT_HC, timeout=timeout)
+            if ms and ms > 0:
+                return ms
+        except (OSError, http.client.HTTPException, ValueError):
+            pass
     got = []
-    for _ in range(2):  # 测两次取小：sing-box 没有 unified-delay，第一次会把 DNS 解析和建连也算进去（实测冷启动 1000+ ms，第二次 30 ms）
+    for _ in range(2):
         try:
             code, raw = core("GET", f"/proxies/DIRECT/delay?url={quote(DIRECT_HC)}&timeout={timeout * 1000}", timeout=timeout + 2)
             ms = int(json.loads(raw).get("delay") or 0) if code == 200 else 0
