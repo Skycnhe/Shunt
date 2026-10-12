@@ -17,6 +17,7 @@ else
   command_args="-d /etc/mihomo"
 fi
 command_background=true
+retry="TERM/15/KILL/5"  # 先给核心 15 秒正常退出：sing-box 只在正常退出时把 Fake-IP 映射写入 cache.db，被直接 kill 会全部丢失
 pidfile="/run/${RC_SVCNAME}.pid"
 output_log="/var/log/mihomo.log"
 error_log="/var/log/mihomo.log"
