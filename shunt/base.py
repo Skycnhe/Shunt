@@ -142,7 +142,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.5.7"
+PANEL_VERSION = "7.5.8"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -176,7 +176,9 @@ LB_STRATEGIES = ("consistent-hashing",)  # v6.7.1 起负载均衡只保留一致
 SIDE_GROUPS = [G_YT, G_GG, G_TG, G_AI, G_NF, G_FINAL]
 BUILTIN_POLICIES = {"DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE"}
 HC = "https://www.gstatic.com/generate_204"
-DIRECT_HC = "https://www.baidu.com"  # 直连测速用国内地址：DIRECT 是国内直连，测谷歌没有意义
+# 直连测速用国内地址（DIRECT 是国内直连，测谷歌没有意义）；第一个不可用时试下一个
+DIRECT_HCS = ("http://connect.rom.miui.com/generate_204", "https://www.baidu.com")
+DIRECT_HC = DIRECT_HCS[0]
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 
 
