@@ -27,27 +27,44 @@ class LocDedup(unittest.TestCase):
 
 
 class DirectRtt(unittest.TestCase):
-    def _core(self, seq):
+    """直连延迟与概览「百度」卡片同口径（v7.6.1）"""
+    S = sys.modules["shunt.sysopt"]
+
+    def _core(self, mode, delays):
         calls = []
+        delays = list(delays)
 
         def fake(method, path, body=None, timeout=10):
             calls.append(path)
-            v = seq.pop(0)
+            if path == "/configs":
+                return (200, json.dumps({"mode": mode}).encode()) if mode else (502, b"{}")
+            v = delays.pop(0) if delays else 0
             return (200, json.dumps({"delay": v}).encode()) if v else (502, b"{}")
         return fake, calls
 
-    def test_core_direct_with_domestic_url_min_of_two(self):
-        fake, calls = self._core([1015, 30])
-        with mock.patch.object(sys.modules["shunt.corehttp"], "core", fake):
+    def test_rule_mode_same_as_baidu_card(self):
+        fake, calls = self._core("rule", [])
+        with mock.patch.object(sys.modules["shunt.corehttp"], "core", fake), \
+                mock.patch.object(self.S, "site_rtt", return_value=31) as st:
+            self.assertEqual(server.direct_rtt(), 31)
+        st.assert_called_once()
+        self.assertEqual(st.call_args[0][0], "https://www.baidu.com")
+        self.assertFalse(any(c.startswith("/proxies/") for c in calls))
+
+    def test_global_mode_uses_core_direct_min_of_two(self):
+        fake, calls = self._core("global", [1015, 30])
+        with mock.patch.object(sys.modules["shunt.corehttp"], "core", fake), \
+                mock.patch.object(self.S, "site_rtt", return_value=999) as st:
             self.assertEqual(server.direct_rtt(), 30)
-        self.assertEqual(len(calls), 2)
-        self.assertTrue(all(c.startswith("/proxies/DIRECT/delay?url=") for c in calls))
-        self.assertIn("connect.rom.miui.com", calls[0])
-        self.assertNotIn("gstatic", calls[0])
+        st.assert_not_called()
+        px = [c for c in calls if c.startswith("/proxies/DIRECT/delay?url=")]
+        self.assertEqual(len(px), 2)
+        self.assertIn("baidu.com", px[0])
 
     def test_fallback_when_core_down(self):
-        fake, _ = self._core([0])
+        fake, _ = self._core(None, [])
         with mock.patch.object(sys.modules["shunt.corehttp"], "core", fake), \
+                mock.patch.object(self.S, "site_rtt", side_effect=OSError("refused")), \
                 mock.patch("subprocess.check_output", return_value="0.400\n0.031\n") as co:
             self.assertEqual(server.direct_rtt(), 31)
         cmd = co.call_args[0][0]
