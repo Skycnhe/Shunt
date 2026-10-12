@@ -295,6 +295,9 @@ nav .ico{display:none}nav .more{display:none}
   .dnsmain #dns-lists>.lbox{break-inside:avoid;border-bottom:0}
   .abft{display:none}
   .sgrid>.card{display:block}.sgrid>.colbrk{break-before:column}
+  /* v7.7.0 连接表：主机 / 规则 / 链路单行省略（悬停看全文），不再被挤成一字一行 */
+  .ctable td.ch,.ctable td.cr,.ctable td.cc{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;word-break:normal}
+  .ctable td.ch,.ctable td.cr,.ctable td.cc{max-width:0}.ctable td.ch{width:22%}.ctable td.cr{width:24%}.ctable td.cc{width:26%}
   .ntool .nsearch{flex:1 1 220px;max-width:360px;margin-right:auto}
   .nfilter:has(#nf-r:empty){margin-bottom:12px}
 }
