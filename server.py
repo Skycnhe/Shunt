@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.6.6"
+PANEL_VERSION = "7.6.7"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -221,7 +221,7 @@ TESTS = [
     {"name": "Telegram", "url": "https://api.telegram.org"},
     {"name": "GitHub", "url": "https://github.com"},
     {"name": "百度", "url": "https://www.baidu.com"},
-    {"name": "哔哩哔哩", "url": "https://www.bilibili.com"},
+    {"name": "淘宝", "url": "https://www.taobao.com"},
 ]
 G_SEL, G_YT, G_GG, G_TG, G_FINAL = "🚀 节点选择", "📹 YouTube", "🔍 Google", "📲 Telegram", "🐟 漏网之鱼"
 G_AI, G_NF = "🤖 AI 服务", "🎬 Netflix"
@@ -232,7 +232,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.6.6"
+PANEL_VERSION = "7.6.7"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -422,11 +422,15 @@ def _load_uncached():
     dirty = False
     if not d["tests"]:
         d["tests"] = [dict(t) for t in TESTS]
-        d["tests_rev"] = 1
-    elif int(d.get("tests_rev") or 0) < 1:  # v7.6.6 默认站点加了「哔哩哔哩」：仍是旧默认五个站点的补上，改过的不动
-        if [(t.get("name"), t.get("url")) for t in d["tests"]] == [(t["name"], t["url"]) for t in TESTS[:5]]:
+        d["tests_rev"] = 2
+    elif int(d.get("tests_rev") or 0) < 2:  # 默认站点第六个：v7.6.6 是哔哩哔哩，v7.6.7 改为淘宝；仍是默认列表的补上 / 换掉，改过的不动
+        cur = [(t.get("name"), t.get("url")) for t in d["tests"]]
+        base5 = [(t["name"], t["url"]) for t in TESTS[:5]]
+        if cur == base5:
             d["tests"].append(dict(TESTS[5]))
-        d["tests_rev"] = 1
+        elif cur == base5 + [("哔哩哔哩", "https://www.bilibili.com")]:
+            d["tests"][5] = dict(TESTS[5])
+        d["tests_rev"] = 2
         dirty = True
     if any(k in d for k in OLD_PW_KEYS):  # v6.8.2 起面板不再有密码：清掉旧版留下的密码字段
         for k in OLD_PW_KEYS:
