@@ -1,5 +1,6 @@
 // 节点：可折叠的策略组卡片 + 策略选择
 let PROXIES={},NSORT=localStorage.getItem('mp_nsort')||'default',GL=[],GALL=[],HIDEDEAD=localStorage.getItem('mp_hidedead')==='1';
+let DIRECT_D;  // 直连国内延迟：DIRECT 是国内直连，单独测百度，不用核心测谷歌的结果
 const isDead=n=>!isGroup(n)&&(()=>{const d=lastDelay(n);return d!==undefined&&d<=0})();
 function toggleDead(){HIDEDEAD=!HIDEDEAD;localStorage.setItem('mp_hidedead',HIDEDEAD?'1':'0');renderGroups();if(TAB==='概览')loadQS()}
 let GOPEN=(()=>{try{const o=JSON.parse(localStorage.getItem('mp_gopen')||'{}');return o&&typeof o==='object'&&!Array.isArray(o)?o:{}}catch{return {}}})();
@@ -9,8 +10,8 @@ const GTC={Selector:'k-sel',URLTest:'k-auto',Smart:'k-auto',Fallback:'k-fb',Load
 const LBS={'consistent-hashing':'一致性哈希','round-robin':'轮询','sticky-sessions':'粘性会话'};
 const isGroup=n=>!!(PROXIES[n]&&PROXIES[n].all);
 async function loadProxies(){document.querySelectorAll('#nsort button').forEach(b=>{b.classList.toggle('on',b.dataset.v===NSORT);b.onclick=()=>{NSORT=b.dataset.v;localStorage.setItem('mp_nsort',NSORT);renderGroups()}});
-  try{PROXIES=await loadPX();renderGroups()}catch(e){$('#groups').innerHTML=`<div class="card bad">${esc(e.message)}</div>`;$('#policies').innerHTML=''}}
-function rawDelay(n){const p=PROXIES[n];if(!p)return undefined;if(p._d!==undefined)return p._d;
+  try{PROXIES=await loadPX();try{const j=await api('/api/direct_delay');if(j.ms>0)DIRECT_D=j.ms}catch(e){}renderGroups()}catch(e){$('#groups').innerHTML=`<div class="card bad">${esc(e.message)}</div>`;$('#policies').innerHTML=''}}
+function rawDelay(n){if(n==='DIRECT'&&DIRECT_D!==undefined)return DIRECT_D;const p=PROXIES[n];if(!p)return undefined;if(p._d!==undefined)return p._d;
   let best;[p.history||[],...Object.values(p.extra||{}).map(x=>x?.history||[])].forEach(h=>{const e=h[h.length-1];if(e&&(!best||String(e.time||'')>String(best.time||'')))best=e});
   return best?best.delay:undefined}
 // 负载均衡组没有单一的“当前节点”，组延迟取成员中最快的可用节点；成员都没测过时再用组自身的记录

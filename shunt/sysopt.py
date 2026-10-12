@@ -469,6 +469,28 @@ def site_rtt(url, timeout=6):
         c.close()
 
 
+def direct_rtt(timeout=6):
+    """直连（不走代理）测国内地址延迟：DIRECT 是国内直连，测谷歌没有意义。"""
+    from .base import DIRECT_HC
+    u = urlsplit(DIRECT_HC)
+    https = u.scheme == "https"
+    port = u.port or (443 if https else 80)
+    try:
+        st = time.time()
+        if https:
+            c = http.client.HTTPSConnection(u.hostname, port, timeout=timeout, context=_rtt_ctx())
+        else:
+            c = http.client.HTTPConnection(u.hostname, port, timeout=timeout)
+        c.request("HEAD", u.path or "/", headers={"User-Agent": "curl/8", "Accept": "*/*"})
+        r = c.getresponse()
+        r.read()
+        ms = int((time.time() - st) * 1000)
+        c.close()
+        return max(1, ms)
+    except Exception:
+        return -1
+
+
 SITE_HIST, SITE_LOCK, SITE_LAST = {}, threading.Lock(), {"t": 0, "r": None}
 SITE_HIST_N = 30  # 每个站点保留最近 30 次（约 30 分钟）
 

@@ -793,6 +793,12 @@ class H(BaseHTTPRequestHandler):
         via = q1(parse_qs(q), "via", default="proxy")
         return self.send(200, speed_test(via == "proxy"))
 
+    @api_route("/api/direct_delay", "GET")
+    def api_direct_delay_get(self, m, p, b, q):
+        """直连国内延迟：DIRECT 是国内直连，单独测百度"""
+        from .sysopt import direct_rtt
+        return self.send(200, {"ms": direct_rtt()})
+
     @api_route("/api/bg", "GET")
     def api_bg_get(self, m, p, b, q):
         bm = bg_meta()

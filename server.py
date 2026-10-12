@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.5.6"
+PANEL_VERSION = "7.5.7"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -231,7 +231,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.5.6"
+PANEL_VERSION = "7.5.7"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -265,6 +265,7 @@ LB_STRATEGIES = ("consistent-hashing",)  # v6.7.1 起负载均衡只保留一致
 SIDE_GROUPS = [G_YT, G_GG, G_TG, G_AI, G_NF, G_FINAL]
 BUILTIN_POLICIES = {"DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE"}
 HC = "https://www.gstatic.com/generate_204"
+DIRECT_HC = "https://www.baidu.com"  # 直连测速用国内地址：DIRECT 是国内直连，测谷歌没有意义
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 
 
@@ -4459,6 +4460,28 @@ def site_rtt(url, timeout=6):
         c.close()
 
 
+def direct_rtt(timeout=6):
+    """直连（不走代理）测国内地址延迟：DIRECT 是国内直连，测谷歌没有意义。"""
+    from .base import DIRECT_HC
+    u = urlsplit(DIRECT_HC)
+    https = u.scheme == "https"
+    port = u.port or (443 if https else 80)
+    try:
+        st = time.time()
+        if https:
+            c = http.client.HTTPSConnection(u.hostname, port, timeout=timeout, context=_rtt_ctx())
+        else:
+            c = http.client.HTTPConnection(u.hostname, port, timeout=timeout)
+        c.request("HEAD", u.path or "/", headers={"User-Agent": "curl/8", "Accept": "*/*"})
+        r = c.getresponse()
+        r.read()
+        ms = int((time.time() - st) * 1000)
+        c.close()
+        return max(1, ms)
+    except Exception:
+        return -1
+
+
 SITE_HIST, SITE_LOCK, SITE_LAST = {}, threading.Lock(), {"t": 0, "r": None}
 SITE_HIST_N = 30  # 每个站点保留最近 30 次（约 30 分钟）
 
@@ -7856,6 +7879,12 @@ class H(BaseHTTPRequestHandler):
     def api_speedtest_get(self, m, p, b, q):
         via = q1(parse_qs(q), "via", default="proxy")
         return self.send(200, speed_test(via == "proxy"))
+
+    @api_route("/api/direct_delay", "GET")
+    def api_direct_delay_get(self, m, p, b, q):
+        """直连国内延迟：DIRECT 是国内直连，单独测百度"""
+        from .sysopt import direct_rtt
+        return self.send(200, {"ms": direct_rtt()})
 
     @api_route("/api/bg", "GET")
     def api_bg_get(self, m, p, b, q):

@@ -7,6 +7,7 @@ async function testGroupKeep(g){const fx=PROXIES[g]?.fixed;
 // 面板合并 /proxies 与订阅节点，并用缓存补上核心暂时没有的延迟（重载 / 重启后核心记录会清空）
 async function loadPX(){const j=await api('/api/px');return j.proxies||{}}
 async function loadQS(){let px;try{px=await loadPX()}catch(e){$('#qs-card').classList.add('hide');return}
+  try{const j=await api('/api/direct_delay');if(j.ms>0)DIRECT_D=j.ms}catch(e){}
   const g=px[SEL];$('#qs-card').classList.toggle('hide',!g);if(!g)return;PROXIES=px;
   const ch=nowChain(SEL);$('#qs-now').textContent=ch.length?'当前：'+ch.join(' → '):'';
   $('#qs').innerHTML=g.all.map((n,j)=>{if(HIDEDEAD&&n!==g.now&&isDead(n))return '';const d=lastDelay(n),p=px[n]||{},sub=p.type==='Smart'?'智能竞技':p.now?'→ '+p.now:(p.type==='LoadBalance'?'负载均衡':'');
