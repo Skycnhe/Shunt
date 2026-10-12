@@ -91,7 +91,9 @@ def loc_dedup(loc):
     """归属地去掉相邻重复的地名：「中国 重庆 重庆 电信」→「中国 重庆 电信」，「北京市 北京」也算重复"""
     out = []
     for p in (loc or "").split():
-        if out and _LOC_SUFFIX.sub("", p) == _LOC_SUFFIX.sub("", out[-1]):
+        prev = out[-1] if out else ""
+        # 完全相同，或只差一个「市 / 省」后缀（重庆市 / 重庆）才算重复；吉林省 / 吉林市 是两级地名，保留
+        if out and (p == prev or (_LOC_SUFFIX.sub("", p) == _LOC_SUFFIX.sub("", prev) and (p == _LOC_SUFFIX.sub("", p) or prev == _LOC_SUFFIX.sub("", prev)))):
             if len(p) < len(out[-1]):
                 out[-1] = p  # 保留更短的写法（重庆 而不是 重庆市）
             continue
