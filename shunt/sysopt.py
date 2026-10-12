@@ -470,23 +470,23 @@ def site_rtt(url, timeout=6):
 
 
 def direct_rtt(timeout=6):
-    """直连（不走代理）测国内地址延迟：DIRECT 是国内直连，测谷歌没有意义。"""
+    """直连（不走代理）测国内地址延迟：DIRECT 是国内直连，测谷歌没有意义。
+    必须绑定物理网卡绕过 TUN，否则面板自身的流量会被 sing-box 拦截。"""
     from .base import DIRECT_HC
-    u = urlsplit(DIRECT_HC)
-    https = u.scheme == "https"
-    port = u.port or (443 if https else 80)
     try:
-        st = time.time()
-        if https:
-            c = http.client.HTTPSConnection(u.hostname, port, timeout=timeout, context=_rtt_ctx())
-        else:
-            c = http.client.HTTPConnection(u.hostname, port, timeout=timeout)
-        c.request("HEAD", u.path or "/", headers={"User-Agent": "curl/8", "Accept": "*/*"})
-        r = c.getresponse()
-        r.read()
-        ms = int((time.time() - st) * 1000)
-        c.close()
-        return max(1, ms)
+        from .ipinfo import _phys_iface
+        iface = _phys_iface()
+    except Exception:
+        iface = None
+    try:
+        import shlex, subprocess
+        cmd = ["curl", "-o", "/dev/null", "-s", "-w", "%{time_total}",
+               "--max-time", str(timeout), DIRECT_HC]
+        if iface:
+            cmd[1:1] = ["--interface", iface]
+        out = subprocess.check_output(cmd, text=True, timeout=timeout + 2).strip()
+        ms = int(float(out) * 1000)
+        return max(1, ms) if ms > 0 else -1
     except Exception:
         return -1
 
