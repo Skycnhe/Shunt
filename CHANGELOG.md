@@ -1,13 +1,9 @@
 # 更新记录与详细说明
 
-## v7.5.8 直连延迟改用和节点相同的测法
-- 根因：v7.5.7 的直连延迟用 curl 访问 https://www.baidu.com 并取总耗时，包含 DNS 解析、TCP 建连、TLS 握手和整页下载，约 4～5 个往返；而代理节点由核心测速，开了 unified-delay，只计一次往返。两种测法放在一起比，直连显得只比日本节点快一点，实际直连并不慢
-- 现在直连延迟改为经核心的 DIRECT 出站测国内地址（/proxies/DIRECT/delay，先测 connect.rom.miui.com/generate_204，不可用再测百度），和节点延迟同一种测法，mihomo 与 sing-box 都支持；核心不可用时退回 curl 直连，只计建连之后到首字节的时间
-- 已检查国内 DNS（geosite:cn、private 走直连 DoH，直连连接用 direct-nameserver）、规则顺序（私有网段最先直连）和 TProxy 层，都不会拖慢国内直连，未改动
-
 ## v7.5.8 直连延迟口径修正 + 归属地去重
 - 根因：节点延迟由核心测（unified-delay，只计一次往返），而 v7.5.7 的直连延迟用 curl 测 https://www.baidu.com 的总耗时，包含 DNS、TCP、TLS 握手和整页下载，相当于 4～5 次往返，所以直连看起来和日本节点差不多。国内直连本身并不慢
 - 直连延迟改为让核心测 DIRECT 出站（与节点同一口径），测速地址换成国内 204 地址 http://connect.rom.miui.com/generate_204；核心不可用时 curl 绑定物理网卡、复用连接只取第二次请求的耗时
+- 已检查国内 DNS（geosite:cn、private 走直连 DoH，直连连接用 direct-nameserver）、规则顺序（私有网段最先直连）和 TProxy 层，都不会拖慢国内直连，未改动
 - IP 信息归属地去掉相邻重复地名：「中国 重庆 重庆 电信」显示为「中国 重庆 电信」，「北京市 北京」这类也只显示一次
 
 ## v7.5.7 直连延迟改测国内
