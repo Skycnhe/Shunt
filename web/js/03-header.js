@@ -35,4 +35,4 @@ function renderVer(){const pv=STATE.panel_version?'v'+STATE.panel_version:'',cv=
   verChip('#hv-panel',pv,verCache('panel'));verChip('#hv-core',cv,verCache('core-'+(STATE.core||'mihomo')));
   verCheck('panel','/api/selfupdate',pv);
   verCheck('core-'+(STATE.core||'mihomo'),`/api/coreupdate?channel=${coreChFor()}&core=${STATE.core||'mihomo'}`,cv)}
-function goUpd(id){go('设置');setTimeout(()=>{const b=$('#'+id);if(b){b.scrollIntoView({block:'center'});b.click()}},150)}
+function goUpd(id){go('设置');setTimeout(()=>{const b=$('#'+id),g=b&&b.closest('[data-sg]');if(g&&g.dataset.sg!==SG){SG=g.dataset.sg;localStorage.setItem('mp_sg',SG);renderSG()}if(b){b.scrollIntoView({block:'center'});b.click()}},150)}
