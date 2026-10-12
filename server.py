@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.5.5"
+PANEL_VERSION = "7.5.6"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -231,7 +231,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.5.5"
+PANEL_VERSION = "7.5.6"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -5834,7 +5834,7 @@ class AdStats:
     def flush(self):
         with self.lock:
             self._merge_req_locked()
-            keep = sorted(self.data["days"])[-14:]
+            keep = sorted(self.data["days"])[-2:]
             self.data["days"] = {k: self.data["days"][k] for k in keep}
             hk = sorted(self.data["hours"])[-48:]
             self.data["hours"] = {k: self.data["hours"][k] for k in hk}

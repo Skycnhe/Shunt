@@ -450,7 +450,7 @@ class AdStats:
     def flush(self):
         with self.lock:
             self._merge_req_locked()
-            keep = sorted(self.data["days"])[-14:]
+            keep = sorted(self.data["days"])[-2:]
             self.data["days"] = {k: self.data["days"][k] for k in keep}
             hk = sorted(self.data["hours"])[-48:]
             self.data["hours"] = {k: self.data["hours"][k] for k in hk}
