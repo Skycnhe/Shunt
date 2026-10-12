@@ -306,6 +306,10 @@ nav .ico{display:none}nav .more{display:none}
 .chip b{font-size:16px;font-weight:800}
 nav button{font-size:15.5px;font-weight:600;opacity:.85}nav button.on{font-weight:800}
 @media (min-width:721px){.ib{font-size:14.5px}nav button{font-size:16px}}
+/* v7.6.5 顶栏「运行中」后不再显示内核版本（版本在右侧版本卡片里），启停按钮放大 */
+.corebox .ver{display:none}
+@media (min-width:721px){.corebox{gap:8px;padding:4px 5px 4px 14px}.corebox .pill{font-size:16px}.corebox .dot{width:9px;height:9px}
+  .corebox .ib{height:40px;padding:0 18px;font-size:15.5px;gap:6px}.corebox .ib svg{width:17px;height:17px}}
 @media (max-width:720px){
   .chip{padding:4px 6px;min-width:0}.chip .k{font-size:11px}.chip b{font-size:13px}
   nav button{font-size:14.5px;padding:6px 12px}.pill{font-size:13.5px}}
