@@ -330,12 +330,16 @@ class H(BaseHTTPRequestHandler):
             q.append(line)
             ev.set()
 
+        cname = CORES.get(active_core(load()), "mihomo")
+
         def reader():
             try:
                 core_stream(f"/logs?level={level}", sink, stop)
-                sink(json.dumps({"type": "warning", "payload": "日志流已结束（mihomo 可能已重启），正在重连…"}))
+                sink(json.dumps({"type": "warning", "payload": "日志流已结束（%s 可能已重启），正在重连…" % cname}))
+            except ConnectionRefusedError:  # 核心进程不在（重启中 / 已停止 / 崩溃）：控制端口没人监听
+                sink(json.dumps({"type": "warning", "payload": "%s 内核未运行或正在重启，等待恢复…" % cname, "retry": 1}))
             except Exception as e:
-                sink(json.dumps({"type": "error", "payload": "无法连接 mihomo 日志流：%s" % e}))
+                sink(json.dumps({"type": "error", "payload": "无法连接 %s 日志流：%s" % (cname, e)}))
             stop["ended"] = True
             ev.set()
 
