@@ -110,7 +110,8 @@ def sb_dns(d, cfg, policies, rs, alias, v6):
         rules.append({"domain": sorted(exact), "action": "route", "server": "dns-hosts"})
     cn_cond = {"rule_set": [rs.use_geo("geosite", "cn"), rs.use_geo("geosite", "private")]}
     if dc["mode"] == "fake-ip":
-        servers.append({"type": "fakeip", "tag": "dns-fake", "inet4_range": "198.18.0.0/15",
+        # 与 mihomo 的 fake-ip-range 198.18.0.1/16 同网段；映射由 cache_file(store_fakeip) 持久化
+        servers.append({"type": "fakeip", "tag": "dns-fake", "inet4_range": "198.18.0.0/16",
                         **({"inet6_range": "fc00::/18"} if v6 else {})})
         conds = {}
         for x in dc["fake_filter"]:
@@ -131,7 +132,9 @@ def sb_dns(d, cfg, policies, rs, alias, v6):
             if dc["policy"] and t_proxy:
                 rules.append({"type": "logical", "mode": "and", "rules": [fc, cn_cond], "action": "route", "server": t_direct})
             rules.append(dict(fc, action="route", server=final))
-        rules.append({"query_type": ["A", "AAAA"], "action": "route", "server": "dns-fake"})
+        # TTL 改成 1（与 mihomo 的 fake-ip 一致）：sing-box 默认 600 秒，内核被强制结束或切换内核后映射丢失时，
+        # 客户端还会拿缓存的 198.18.x 连 10 分钟，日志刷「missing fakeip record」，期间这些网站都打不开
+        rules.append({"query_type": ["A", "AAAA"], "action": "route", "server": "dns-fake", "rewrite_ttl": 1})
     if dc["policy"] and t_proxy:
         rules.append(dict(cn_cond, action="route", server=t_direct))
     out = {"servers": servers, "rules": rules, "final": final, "strategy": "prefer_ipv4" if v6 else "ipv4_only",
