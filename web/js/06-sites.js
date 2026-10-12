@@ -12,5 +12,5 @@ async function testSites(force){const el=$('#sites');if(!el.children.length)el.i
 async function testUnlock(){const b=$('#unlock-btn');b.disabled=true;b.textContent='检测中…';$('#unlock').innerHTML='<span class="mut" style="grid-column:1/-1">检测中，约需 10 秒…</span>';
   try{const r=await api('/api/unlock');$('#unlock').innerHTML=r.map(s=>{const c=s.ok===true?'ok':s.ok==='partial'?'warn':'bad';
     return `<div class="node"><div class="n">${esc(s.name)}</div><div class="d ${c}" style="font-size:14px;font-weight:600;justify-content:flex-start">${esc(s.text)}${s.region?` <span class="tag">${esc(s.region)}</span>`:''}</div></div>`}).join('')}
-  catch(e){$('#unlock').innerHTML=`<span class="bad">${esc(e.message)}</span>`}b.disabled=false;b.textContent='检测'}
+  catch(e){$('#unlock').innerHTML=`<span class="bad">${esc(e.message)}</span>`}b.disabled=false;b.textContent='检测';balanceSG()}
 
