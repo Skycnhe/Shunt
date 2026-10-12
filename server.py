@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.5.9"
+PANEL_VERSION = "7.6.0"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -231,7 +231,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.5.9"
+PANEL_VERSION = "7.6.0"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -4635,6 +4635,20 @@ def core_alive():
     return code == 200
 
 
+def core_alive_confirmed(retries=2, gap=3):
+    """看门狗用：一次 /version 超时不算无响应，再隔几秒复查，连续都失败才判定故障。
+    小路由上 sing-box 加载大规则集、重载配置或 GC 时会短暂卡几秒；以前一次超时就重启，
+    重启若被强制结束（kill），sing-box 的 Fake-IP 映射全部丢失，客户端随后大量「missing fakeip record」"""
+    if core_alive():
+        return True
+    for _ in range(retries):
+        time.sleep(gap)
+        code, _ = core("GET", "/version", timeout=8)
+        if code == 200:
+            return True
+    return False
+
+
 def watchdog_tick():
     if CORE_UPD["busy"]:  # 内核更新过程中核心会重启，不算故障
         return
@@ -4647,7 +4661,7 @@ def watchdog_tick():
         return
     redirecting = d["proxy_mode"] != "off"  # TProxy 或 TUN（TUN 模式下 tproxy.sh 仍负责 DNS 重定向）
     cname = CORES.get(active_core(d), "mihomo")
-    if core_alive():
+    if core_alive_confirmed():
         if WD["status"] in ("restarting", "direct"):
             msg = f"{cname} 核心已恢复"
             if WD["tp_off"] and redirecting:
