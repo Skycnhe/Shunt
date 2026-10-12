@@ -8,10 +8,18 @@ const PM_DESC={tproxy:'TProxy：nftables 把局域网 TCP/UDP 透明转发到 mi
 let TUNF={};
 let SG=localStorage.getItem('mp_sg')||'net';
 function renderSG(){document.querySelectorAll('#snav button').forEach(b=>{b.classList.toggle('on',b.dataset.g===SG);b.onclick=()=>{SG=b.dataset.g;localStorage.setItem('mp_sg',SG);renderSG()}});
-  document.querySelectorAll('[data-sg]').forEach(c=>c.classList.toggle('hide',c.dataset.sg!==SG))}
+  document.querySelectorAll('[data-sg]').forEach(c=>c.classList.toggle('hide',c.dataset.sg!==SG));balanceSG()}
+// v7.7.0 桌面双栏：把较短一栏的最后一张卡片拉长，两栏底部对齐
+function balanceSG(){requestAnimationFrame(()=>{const cs=[...document.querySelectorAll('.sgrid>.card')];cs.forEach(c=>c.style.minHeight='');
+  if(MQ.matches||TAB!=='设置')return;const vis=cs.filter(c=>!c.classList.contains('hide')&&c.offsetHeight),col={};
+  vis.forEach(c=>(col[c.offsetLeft]=col[c.offsetLeft]||[]).push(c));const ks=Object.keys(col);if(ks.length<2)return;
+  const bot=k=>Math.max(...col[k].map(c=>c.offsetTop+c.offsetHeight)),mx=Math.max(...ks.map(bot));
+  ks.forEach(k=>{const d=mx-bot(k);if(d>1){const l=col[k].reduce((a,c)=>c.offsetTop>a.offsetTop?c:a);l.style.minHeight=(l.offsetHeight+d)+'px'}})})}
+addEventListener('resize',()=>{if(TAB==='设置')balanceSG()});
+document.addEventListener('click',e=>{if(TAB==='设置'&&e.target.closest('.sgrid'))setTimeout(balanceSG,60)});
 async function renderSettings(){renderSG();renderLook();await loadState().catch(()=>{});fillSettings();loadCoreSw();if(!CORE_POLL){$('#core-kind').value=STATE.core||'mihomo';coreKindUI()}
   segv('#pm',STATE.proxy_mode,v=>setPM(v));$('#pm-desc').textContent=PM_DESC[STATE.proxy_mode]||'';
-  TUNF=Object.assign({},STATE.tun);renderTunForm();
+  TUNF=Object.assign({},STATE.tun);renderTunForm();setTimeout(balanceSG,200);setTimeout(balanceSG,1500);
   sw('#v6',STATE.ipv6,v=>saveSettings({ipv6:v},'IPv6 已'+(v?'开启':'关闭')));
   sw('#wd',STATE.watchdog,v=>saveSettings({watchdog:v},'看门狗已'+(v?'开启':'关闭')));
   sw('#https',STATE.https,async v=>{if(!confirm(`面板将以 ${v?'HTTPS':'HTTP'} 重启，确定？`))throw 0;
