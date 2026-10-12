@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.5.7"
+PANEL_VERSION = "7.5.8"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -231,7 +231,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.5.7"
+PANEL_VERSION = "7.5.8"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -265,7 +265,9 @@ LB_STRATEGIES = ("consistent-hashing",)  # v6.7.1 起负载均衡只保留一致
 SIDE_GROUPS = [G_YT, G_GG, G_TG, G_AI, G_NF, G_FINAL]
 BUILTIN_POLICIES = {"DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE"}
 HC = "https://www.gstatic.com/generate_204"
-DIRECT_HC = "https://www.baidu.com"  # 直连测速用国内地址：DIRECT 是国内直连，测谷歌没有意义
+# 直连测速用国内地址（DIRECT 是国内直连，测谷歌没有意义）；第一个不可用时试下一个
+DIRECT_HCS = ("http://connect.rom.miui.com/generate_204", "https://www.baidu.com")
+DIRECT_HC = DIRECT_HCS[0]
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 
 
@@ -3990,7 +3992,7 @@ def core_upd_status():
 
 '''
 _SRC['shunt.sysopt'] = '''"""Alpine 系统优化"""
-import http.client, os, re, ssl, subprocess, threading, time, urllib.request, urllib.error
+import http.client, json, os, re, ssl, subprocess, threading, time, urllib.request, urllib.error
 from collections import deque
 from urllib.parse import urlsplit
 
@@ -4461,24 +4463,33 @@ def site_rtt(url, timeout=6):
 
 
 def direct_rtt(timeout=6):
-    """直连（不走代理）测国内地址延迟：DIRECT 是国内直连，测谷歌没有意义。
-    必须绑定物理网卡绕过 TUN，否则面板自身的流量会被 sing-box 拦截。"""
+    """直连（不走代理）测国内地址延迟，测法与节点延迟一致（只计往返，不计 DNS / 握手）：
+    1. 优先让核心测 DIRECT 出站（mihomo 开了 unified-delay，与节点延迟同一口径；sing-box 同样由核心测）
+    2. 核心不可用时，curl 绑定物理网卡绕过 TUN，在同一连接上请求两次，只取第二次（复用连接）的耗时"""
     from .base import DIRECT_HC
+    from urllib.parse import quote
+    try:
+        from .corehttp import core
+        code, raw = core("GET", f"/proxies/DIRECT/delay?url={quote(DIRECT_HC)}&timeout={timeout * 1000}", timeout=timeout + 2)
+        if code == 200:
+            ms = int(json.loads(raw).get("delay") or 0)
+            if ms > 0:
+                return ms
+    except (OSError, ValueError, TypeError):
+        pass
     try:
         from .ipinfo import _phys_iface
         iface = _phys_iface()
-    except Exception:
+    except (OSError, ImportError):
         iface = None
     try:
-        import shlex, subprocess
-        cmd = ["curl", "-o", "/dev/null", "-s", "-w", "%{time_total}",
-               "--max-time", str(timeout), DIRECT_HC]
+        cmd = ["curl", "-s", "-I", "-o", "/dev/null", "-o", "/dev/null", "-w", "%{time_total}\\\\n", "--max-time", str(timeout), DIRECT_HC, DIRECT_HC]
         if iface:
             cmd[1:1] = ["--interface", iface]
-        out = subprocess.check_output(cmd, text=True, timeout=timeout + 2).strip()
-        ms = int(float(out) * 1000)
+        out = subprocess.check_output(cmd, text=True, timeout=timeout * 2 + 2).split()
+        ms = int(float(out[-1]) * 1000) if out else 0
         return max(1, ms) if ms > 0 else -1
-    except Exception:
+    except (OSError, ValueError, subprocess.SubprocessError):
         return -1
 
 
@@ -6758,6 +6769,21 @@ def _fetch_direct_ip():
     return _fetch(IP_ECHO, False)
 
 
+_LOC_SUFFIX = re.compile(r"(?:省|市|自治区|特别行政区|壮族自治区|回族自治区|维吾尔自治区)$")
+
+
+def loc_dedup(loc):
+    """归属地去掉相邻重复的地名：「中国 重庆 重庆 电信」→「中国 重庆 电信」，「北京市 北京」也算重复"""
+    out = []
+    for p in (loc or "").split():
+        if out and _LOC_SUFFIX.sub("", p) == _LOC_SUFFIX.sub("", out[-1]):
+            if len(p) < len(out[-1]):
+                out[-1] = p  # 保留更短的写法（重庆 而不是 重庆市）
+            continue
+        out.append(p)
+    return " ".join(out)
+
+
 def _geo(ip):
     if not ip:
         return ""
@@ -6781,8 +6807,8 @@ def get_ipinfo():
     if not direct_ip or direct_ip == proxy_ip:
         direct_ip = _fetch_direct_ip()
         direct_loc = _geo(direct_ip)
-    v = {"direct": {"ip": direct_ip, "loc": direct_loc},
-         "proxy": {"ip": proxy_ip, "loc": _geo(proxy_ip)}}
+    v = {"direct": {"ip": direct_ip, "loc": loc_dedup(direct_loc)},
+         "proxy": {"ip": proxy_ip, "loc": loc_dedup(_geo(proxy_ip))}}
     _CACHE["t"], _CACHE["v"] = now, v
     return v
 '''
