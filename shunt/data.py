@@ -69,9 +69,15 @@ def _load_uncached():
     if d["proxy_mode"] not in PROXY_MODES:  # 旧版只有 tproxy 布尔值
         d["proxy_mode"] = "tproxy" if d.get("tproxy", True) else "off"
     d["tproxy"] = d["proxy_mode"] == "tproxy"
+    dirty = False
     if not d["tests"]:
         d["tests"] = [dict(t) for t in TESTS]
-    dirty = False
+        d["tests_rev"] = 1
+    elif int(d.get("tests_rev") or 0) < 1:  # v7.6.6 默认站点加了「哔哩哔哩」：仍是旧默认五个站点的补上，改过的不动
+        if [(t.get("name"), t.get("url")) for t in d["tests"]] == [(t["name"], t["url"]) for t in TESTS[:5]]:
+            d["tests"].append(dict(TESTS[5]))
+        d["tests_rev"] = 1
+        dirty = True
     if any(k in d for k in OLD_PW_KEYS):  # v6.8.2 起面板不再有密码：清掉旧版留下的密码字段
         for k in OLD_PW_KEYS:
             d.pop(k, None)
@@ -247,7 +253,7 @@ _HISTORY_LOCK = threading.Lock()  # history.json 读-改-写原子性（update �
 
 HISTORY_FILE = os.path.join(PANEL_DIR, "history.json")
 HISTORY_MAX = 10
-HISTORY_SKIP = {"core", "secret", "devices", "https", "schema", "sysopt", "sysopt_orig", "sysopt_mods"}
+HISTORY_SKIP = {"tests_rev", "core", "secret", "devices", "https", "schema", "sysopt", "sysopt_orig", "sysopt_mods"}
 KEY_LABEL = {"subs": "订阅", "nodes": "节点", "rules": "自定义规则", "rulesets": "规则集", "dns": "DNS", "adblock": "广告拦截",
              "custom_groups": "自定义策略组", "groups_cfg": "地区分组", "region_groups": "地区分组", "proxy_mode": "代理方式",
              "tun": "TUN", "ipv6": "IPv6", "bypass": "绕过设备", "mode": "代理模式", "sniffer": "域名嗅探", "schedule": "定时任务",
