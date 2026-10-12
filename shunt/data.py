@@ -72,11 +72,15 @@ def _load_uncached():
     dirty = False
     if not d["tests"]:
         d["tests"] = [dict(t) for t in TESTS]
-        d["tests_rev"] = 1
-    elif int(d.get("tests_rev") or 0) < 1:  # v7.6.6 默认站点加了「哔哩哔哩」：仍是旧默认五个站点的补上，改过的不动
-        if [(t.get("name"), t.get("url")) for t in d["tests"]] == [(t["name"], t["url"]) for t in TESTS[:5]]:
+        d["tests_rev"] = 2
+    elif int(d.get("tests_rev") or 0) < 2:  # 默认站点第六个：v7.6.6 是哔哩哔哩，v7.6.7 改为淘宝；仍是默认列表的补上 / 换掉，改过的不动
+        cur = [(t.get("name"), t.get("url")) for t in d["tests"]]
+        base5 = [(t["name"], t["url"]) for t in TESTS[:5]]
+        if cur == base5:
             d["tests"].append(dict(TESTS[5]))
-        d["tests_rev"] = 1
+        elif cur == base5 + [("哔哩哔哩", "https://www.bilibili.com")]:
+            d["tests"][5] = dict(TESTS[5])
+        d["tests_rev"] = 2
         dirty = True
     if any(k in d for k in OLD_PW_KEYS):  # v6.8.2 起面板不再有密码：清掉旧版留下的密码字段
         for k in OLD_PW_KEYS:
