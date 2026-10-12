@@ -66,6 +66,9 @@ textarea{width:100%;font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
 table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:8px 9px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:middle}
 td[colspan]{white-space:normal;line-height:1.5}
 tr:last-child td{border-bottom:0}th{color:var(--sub);font-weight:500;font-size:12px}td.w{white-space:normal;word-break:break-all}
+/* v7.6.8 订阅列表：链接、过滤规则单行省略，不再撑大表格（完整内容悬停查看） */
+.subn{max-width:260px}.subu{font-size:11px;max-width:260px;overflow:hidden;text-overflow:ellipsis}
+.subf{font-size:12px;min-width:150px;max-width:240px}.subf>div{max-width:240px;overflow:hidden;text-overflow:ellipsis}
 .node{border:1px solid var(--line);border-radius:14px;padding:9px 12px;cursor:pointer;background:var(--nbg);transition:transform .15s,border-color .2s,background .2s}
 .node:hover{transform:translateY(-1px);border-color:var(--b2h)}
 .node.sel{border-color:var(--pri);background:var(--nsel)}.node .n{font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
