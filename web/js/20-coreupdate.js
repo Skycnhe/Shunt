@@ -7,7 +7,7 @@ function coreKindUI(){const sm=coreKind()==='smart';if(sm)$('#core-ch').value='a
 async function coreCheck(){const b=$('#core-chk');b.disabled=true;$('#core-r').innerHTML='<span class="mut">正在检查…</span>';
   try{await saveGhProxy();const j=await api('/api/coreupdate?channel='+coreCh()+'&core='+coreKind());coreShow(j)}
   catch(e){$('#core-r').innerHTML=`<span class="bad">${esc(e.message)}</span>`}b.disabled=false}
-function coreShow(j){$('#cv').textContent='当前 '+(j.current||'-');
+function coreShow(j){if(j.current&&coreKind()===(STATE.core||'mihomo')&&j.current===String(STATE.version))verSave('core-'+coreKind(),j.current,j.remote||'',!j.latest);$('#cv').textContent='当前 '+(j.current||'-');
   $('#core-r').innerHTML=(j.latest?`<span class="ok">● 已是最新</span> ${esc(j.current)}`:`<span class="warn">● 有更新</span> ${esc(j.current)} → ${esc(j.remote)}`)+
     ` · 架构 ${esc(j.arch)}`+(j.backup?` · 可回滚到 ${esc(j.backup)}`:'');$('#core-btn').textContent=j.latest?'重新安装':'更新内核';$('#core-btn').dataset.force=j.latest?'1':''}
 async function coreUpdate(){const force=!!$('#core-btn').dataset.force;
