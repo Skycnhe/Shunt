@@ -619,7 +619,7 @@ nav button{font-size:15.5px;font-weight:600;opacity:.85}nav button.on{font-weigh
   </section>
   <!-- 设置 -->
   <section data-tab="设置">
-    <div class="snav" id="snav"><button data-g="net">网络</button><button data-g="core">核心</button><button data-g="sys">系统</button><button data-g="sec">通知与安全</button><button data-g="bak">备份与更新</button><button data-g="look">外观</button></div>
+    <div class="snav" id="snav"><button data-g="net">网络</button><button data-g="core">核心</button><button data-g="sec">通知与安全</button><button data-g="bak">备份与更新</button><button data-g="look">外观</button></div>
     <div class="sgrid">
     <div data-sg="net" class="card"><h3>代理方式</h3>
       <div class="row"><span class="sp mut small">把客户端（或主路由 DHCP 下发）的网关和 DNS 指向本机即可全局透明代理</span>
@@ -637,6 +637,14 @@ nav button{font-size:15.5px;font-weight:600;opacity:.85}nav button.on{font-weigh
     <div data-sg="net" class="card"><div class="row"><h3 class="sp" style="margin:0">流媒体 / AI 解锁检测</h3><button class="btn g sm" id="unlock-btn" onclick="testUnlock()">检测</button></div>
           <div class="mut small" style="margin-top:4px">经由 mixed 端口按当前规则分流检测，结果反映各服务实际走的节点</div>
           <div class="grid" id="unlock" style="margin-top:12px;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px"><span class="mut" style="grid-column:1/-1">点击“检测”开始（约 10 秒）</span></div></div>
+    <div data-sg="net" class="card"><div class="row"><h3 class="sp" style="margin:0">系统优化</h3><span class="tag" id="so-hw"></span></div>
+      <div class="mut small" style="margin:4px 0 8px">针对旁路由调优 Alpine 内核网络参数，数值按本机内存和 CPU 自动计算。开机自动生效；关闭某项或「全部恢复」会还原为优化前的原值。</div>
+      <div id="so-list"></div>
+      <div class="row mt"><button class="btn g" onclick="soPick(true)">选推荐项</button><button class="btn g" onclick="soRevert()">全部恢复</button><span class="sp"></span><button class="btn" id="so-btn" onclick="soApply()">应用</button></div>
+      <div id="so-r" class="small mt"></div>
+      <div class="opt" style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px"><div class="sp"><div class="t">下载测速</div><div class="dsc">从 Cloudflare 下载最多 50MB / 10 秒，优化前后各测一次对比效果</div></div>
+        <button class="btn g sm" onclick="speedTest('direct',this)">直连</button><button class="btn g sm" onclick="speedTest('proxy',this)">经代理</button></div>
+      <div id="sp-r" class="small mt"></div></div>
     <div data-sg="net" class="card colbrk"><h3>绕过设备（不走代理）</h3>
       <div class="mut small" style="margin-bottom:6px">每行一个 IP、网段或 MAC（如 192.168.1.50、2408:xxxx::/64、AA:BB:CC:DD:EE:FF）。TUN 模式下按 IP / 网段生成直连规则（MAC 仅 TProxy 有效）。被绕过的设备请把 DNS 设为主路由。</div>
       <textarea id="bypass" rows="3"></textarea><div class="row" style="margin-top:8px"><span class="sp"></span><button class="btn" onclick="saveBypass()">保存</button></div></div>
@@ -658,6 +666,14 @@ nav button{font-size:15.5px;font-weight:600;opacity:.85}nav button.on{font-weigh
       <div id="sw-prog" class="hide mt"><div style="height:6px;border-radius:3px;background:rgba(127,127,127,.2);overflow:hidden"><div id="sw-bar" style="height:6px;width:0;background:var(--pri);transition:width .3s"></div></div>
         <div id="sw-log" class="mut small mt" style="white-space:pre-line;max-height:120px;overflow:auto"></div></div>
       <div class="row mt"><span class="sp"></span><button class="btn" id="sw-btn" onclick="switchCore()" disabled>切换内核</button></div></div>
+    <div data-sg="core" class="card"><div class="row"><h3 class="sp" style="margin:0">内核更新</h3><span class="tag" id="cv"></span></div>
+      <div class="mut small" style="margin:4px 0 8px">从 GitHub（MetaCubeX/mihomo、vernesong/mihomo（Smart，只有预览版）或 SagerNet/sing-box）下载对应 CPU 架构的程序，使用「备份与更新 → 面板更新」里填写的 GitHub 加速地址。新程序先校验能否运行、能否读取当前配置，通过后才替换；正在使用的内核会重启，30 秒内没响应会自动换回旧版本。</div>
+      <div class="row"><select id="core-kind" onchange="$('#core-r').innerHTML='';$('#cv').textContent='';coreKindUI()"><option value="mihomo">mihomo</option><option value="smart">mihomo Smart</option><option value="singbox">sing-box</option></select><select id="core-ch"><option value="stable">稳定版</option><option value="alpha">预览版 Alpha</option></select><span class="sp"></span>
+        <button class="btn g" onclick="coreCheck()" id="core-chk">检查更新</button></div>
+      <div id="core-r" class="small mt"></div>
+      <div id="core-prog" class="hide mt"><div style="height:6px;border-radius:3px;background:rgba(127,127,127,.2);overflow:hidden"><div id="core-bar" style="height:6px;width:0;background:var(--pri);transition:width .3s"></div></div>
+        <div id="core-log" class="mut small mt" style="white-space:pre-line;max-height:120px;overflow:auto"></div></div>
+      <div class="row mt"><span class="sp"></span><button class="btn g" onclick="coreRollback()" id="core-rb">回滚内核</button><button class="btn" id="core-btn" onclick="coreUpdate()">更新内核</button></div></div>
     <div data-sg="core" class="card"><h3>核心服务</h3><div class="row">
       <button class="btn" onclick="svc('reload')">重载配置</button><button class="btn g" onclick="svc('geo')">更新 GEO 数据库</button>
       <button class="btn g" onclick="flushFake()">清空 Fake-IP 缓存</button></div>
@@ -681,22 +697,6 @@ nav button{font-size:15.5px;font-weight:600;opacity:.85}nav button.on{font-weigh
         <div class="seg" id="log-limit"><button data-v="1">1M</button><button data-v="2">2M</button><button data-v="5">5M</button><button data-v="10">10M</button><button data-v="20">20M</button></div></div>
       <div id="log-sizes" class="mt small"></div>
       <div class="row mt"><span class="sp"></span><button class="btn g" onclick="cleanLogs()">立即清理</button></div></div>
-    <div data-sg="sys" class="card"><div class="row"><h3 class="sp" style="margin:0">系统优化</h3><span class="tag" id="so-hw"></span></div>
-      <div class="mut small" style="margin:4px 0 8px">针对旁路由调优 Alpine 内核网络参数，数值按本机内存和 CPU 自动计算。开机自动生效；关闭某项或「全部恢复」会还原为优化前的原值。</div>
-      <div id="so-list"></div>
-      <div class="row mt"><button class="btn g" onclick="soPick(true)">选推荐项</button><button class="btn g" onclick="soRevert()">全部恢复</button><span class="sp"></span><button class="btn" id="so-btn" onclick="soApply()">应用</button></div>
-      <div id="so-r" class="small mt"></div>
-      <div class="opt" style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px"><div class="sp"><div class="t">下载测速</div><div class="dsc">从 Cloudflare 下载最多 50MB / 10 秒，优化前后各测一次对比效果</div></div>
-        <button class="btn g sm" onclick="speedTest('direct',this)">直连</button><button class="btn g sm" onclick="speedTest('proxy',this)">经代理</button></div>
-      <div id="sp-r" class="small mt"></div></div>
-    <div data-sg="sys" class="card"><div class="row"><h3 class="sp" style="margin:0">内核更新</h3><span class="tag" id="cv"></span></div>
-      <div class="mut small" style="margin:4px 0 8px">从 GitHub（MetaCubeX/mihomo、vernesong/mihomo（Smart，只有预览版）或 SagerNet/sing-box）下载对应 CPU 架构的程序，使用「备份与更新 → 面板更新」里填写的 GitHub 加速地址。新程序先校验能否运行、能否读取当前配置，通过后才替换；正在使用的内核会重启，30 秒内没响应会自动换回旧版本。</div>
-      <div class="row"><select id="core-kind" onchange="$('#core-r').innerHTML='';$('#cv').textContent='';coreKindUI()"><option value="mihomo">mihomo</option><option value="smart">mihomo Smart</option><option value="singbox">sing-box</option></select><select id="core-ch"><option value="stable">稳定版</option><option value="alpha">预览版 Alpha</option></select><span class="sp"></span>
-        <button class="btn g" onclick="coreCheck()" id="core-chk">检查更新</button></div>
-      <div id="core-r" class="small mt"></div>
-      <div id="core-prog" class="hide mt"><div style="height:6px;border-radius:3px;background:rgba(127,127,127,.2);overflow:hidden"><div id="core-bar" style="height:6px;width:0;background:var(--pri);transition:width .3s"></div></div>
-        <div id="core-log" class="mut small mt" style="white-space:pre-line;max-height:120px;overflow:auto"></div></div>
-      <div class="row mt"><span class="sp"></span><button class="btn g" onclick="coreRollback()" id="core-rb">回滚内核</button><button class="btn" id="core-btn" onclick="coreUpdate()">更新内核</button></div></div>
     <div data-sg="sec" class="card"><h3>面板安全</h3>
       <div class="opt"><div class="sp"><div class="t">HTTPS（自签名证书）</div><div class="dsc">开启后面板改用 https:// 访问，浏览器提示证书不受信任时选择继续。面板已取消登录密码，局域网内能打开地址的设备都能管理，请勿把面板端口暴露到公网。</div></div>
         <label class="sw"><input type="checkbox" id="https"><span></span></label></div>
@@ -849,7 +849,7 @@ function renderVer(){const pv=STATE.panel_version?'v'+STATE.panel_version:'',cv=
   verChip('#hv-panel',pv,verCache('panel'));verChip('#hv-core',cv,verCache('core-'+(STATE.core||'mihomo')));
   verCheck('panel','/api/selfupdate',pv);
   verCheck('core-'+(STATE.core||'mihomo'),`/api/coreupdate?channel=${coreChFor()}&core=${STATE.core||'mihomo'}`,cv)}
-function goUpd(id){go('设置');setTimeout(()=>{const b=$('#'+id);if(b){b.scrollIntoView({block:'center'});b.click()}},150)}
+function goUpd(id){go('设置');setTimeout(()=>{const b=$('#'+id),g=b&&b.closest('[data-sg]');if(g&&g.dataset.sg!==SG){SG=g.dataset.sg;localStorage.setItem('mp_sg',SG);renderSG()}if(b){b.scrollIntoView({block:'center'});b.click()}},150)}
 // 概览：🚀 节点选择 快速切换
 const SEL='🚀 节点选择',G_MANUAL='\u{1F590}\uFE0F 手动选择';
 // /proxies 只返回 config 里的节点和策略组；订阅（proxy-providers）节点及其延迟在 /providers/proxies 里，需合并
@@ -1290,7 +1290,7 @@ const PM_DESC={tproxy:'TProxy：nftables 把局域网 TCP/UDP 透明转发到 mi
   tun:'TUN：mihomo 创建虚拟网卡并接管路由（auto-route），旁路由转发的流量进入 TUN；nftables 只保留 DNS 重定向。需要 tun 内核模块。',
   off:'关闭：不做透明代理，客户端可手动设置 HTTP/SOCKS 代理 本机IP:7890。'};
 let TUNF={};
-let SG=localStorage.getItem('mp_sg')||'net';
+let SG=localStorage.getItem('mp_sg')||'net';if(SG==='sys')SG='net';  // v7.7.4 「系统」分组已并入「网络」
 function renderSG(){document.querySelectorAll('#snav button').forEach(b=>{b.classList.toggle('on',b.dataset.g===SG);b.onclick=()=>{SG=b.dataset.g;localStorage.setItem('mp_sg',SG);renderSG()}});
   document.querySelectorAll('[data-sg]').forEach(c=>c.classList.toggle('hide',c.dataset.sg!==SG));balanceSG()}
 // v7.7.0 桌面双栏：把较短一栏的最后一张卡片拉长，两栏底部对齐
