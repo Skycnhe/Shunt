@@ -6,7 +6,7 @@ const PM_DESC={tproxy:'TProxy：nftables 把局域网 TCP/UDP 透明转发到 mi
   tun:'TUN：mihomo 创建虚拟网卡并接管路由（auto-route），旁路由转发的流量进入 TUN；nftables 只保留 DNS 重定向。需要 tun 内核模块。',
   off:'关闭：不做透明代理，客户端可手动设置 HTTP/SOCKS 代理 本机IP:7890。'};
 let TUNF={};
-let SG=localStorage.getItem('mp_sg')||'net';
+let SG=localStorage.getItem('mp_sg')||'net';if(SG==='sys')SG='net';  // v7.7.4 「系统」分组已并入「网络」
 function renderSG(){document.querySelectorAll('#snav button').forEach(b=>{b.classList.toggle('on',b.dataset.g===SG);b.onclick=()=>{SG=b.dataset.g;localStorage.setItem('mp_sg',SG);renderSG()}});
   document.querySelectorAll('[data-sg]').forEach(c=>c.classList.toggle('hide',c.dataset.sg!==SG));balanceSG()}
 // v7.7.0 桌面双栏：把较短一栏的最后一张卡片拉长，两栏底部对齐
