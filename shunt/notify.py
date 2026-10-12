@@ -51,6 +51,20 @@ def core_alive():
     return code == 200
 
 
+def core_alive_confirmed(retries=2, gap=3):
+    """看门狗用：一次 /version 超时不算无响应，再隔几秒复查，连续都失败才判定故障。
+    小路由上 sing-box 加载大规则集、重载配置或 GC 时会短暂卡几秒；以前一次超时就重启，
+    重启若被强制结束（kill），sing-box 的 Fake-IP 映射全部丢失，客户端随后大量「missing fakeip record」"""
+    if core_alive():
+        return True
+    for _ in range(retries):
+        time.sleep(gap)
+        code, _ = core("GET", "/version", timeout=8)
+        if code == 200:
+            return True
+    return False
+
+
 def watchdog_tick():
     if CORE_UPD["busy"]:  # 内核更新过程中核心会重启，不算故障
         return
@@ -63,7 +77,7 @@ def watchdog_tick():
         return
     redirecting = d["proxy_mode"] != "off"  # TProxy 或 TUN（TUN 模式下 tproxy.sh 仍负责 DNS 重定向）
     cname = CORES.get(active_core(d), "mihomo")
-    if core_alive():
+    if core_alive_confirmed():
         if WD["status"] in ("restarting", "direct"):
             msg = f"{cname} 核心已恢复"
             if WD["tp_off"] and redirecting:
