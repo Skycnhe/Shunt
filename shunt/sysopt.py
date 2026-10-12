@@ -1,5 +1,5 @@
 """Alpine 系统优化"""
-import http.client, os, re, ssl, subprocess, threading, time, urllib.request, urllib.error
+import http.client, json, os, re, ssl, subprocess, threading, time, urllib.request, urllib.error
 from collections import deque
 from urllib.parse import urlsplit
 
@@ -470,24 +470,33 @@ def site_rtt(url, timeout=6):
 
 
 def direct_rtt(timeout=6):
-    """直连（不走代理）测国内地址延迟：DIRECT 是国内直连，测谷歌没有意义。
-    必须绑定物理网卡绕过 TUN，否则面板自身的流量会被 sing-box 拦截。"""
+    """直连（不走代理）测国内地址延迟，测法与节点延迟一致（只计往返，不计 DNS / 握手）：
+    1. 优先让核心测 DIRECT 出站（mihomo 开了 unified-delay，与节点延迟同一口径；sing-box 同样由核心测）
+    2. 核心不可用时，curl 绑定物理网卡绕过 TUN，在同一连接上请求两次，只取第二次（复用连接）的耗时"""
     from .base import DIRECT_HC
+    from urllib.parse import quote
+    try:
+        from .corehttp import core
+        code, raw = core("GET", f"/proxies/DIRECT/delay?url={quote(DIRECT_HC)}&timeout={timeout * 1000}", timeout=timeout + 2)
+        if code == 200:
+            ms = int(json.loads(raw).get("delay") or 0)
+            if ms > 0:
+                return ms
+    except (OSError, ValueError, TypeError):
+        pass
     try:
         from .ipinfo import _phys_iface
         iface = _phys_iface()
-    except Exception:
+    except (OSError, ImportError):
         iface = None
     try:
-        import shlex, subprocess
-        cmd = ["curl", "-o", "/dev/null", "-s", "-w", "%{time_total}",
-               "--max-time", str(timeout), DIRECT_HC]
+        cmd = ["curl", "-s", "-I", "-o", "/dev/null", "-o", "/dev/null", "-w", "%{time_total}\\n", "--max-time", str(timeout), DIRECT_HC, DIRECT_HC]
         if iface:
             cmd[1:1] = ["--interface", iface]
-        out = subprocess.check_output(cmd, text=True, timeout=timeout + 2).strip()
-        ms = int(float(out) * 1000)
+        out = subprocess.check_output(cmd, text=True, timeout=timeout * 2 + 2).split()
+        ms = int(float(out[-1]) * 1000) if out else 0
         return max(1, ms) if ms > 0 else -1
-    except Exception:
+    except (OSError, ValueError, subprocess.SubprocessError):
         return -1
 
 
