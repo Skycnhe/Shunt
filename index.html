@@ -930,7 +930,7 @@ async function editDev(ip){const mac=DEVS[ip]?.mac;const cur=(STATE.devices||{})
 
 // 节点：可折叠的策略组卡片 + 策略选择
 let PROXIES={},NSORT=localStorage.getItem('mp_nsort')||'default',GL=[],GALL=[],HIDEDEAD=localStorage.getItem('mp_hidedead')==='1';
-let DIRECT_D;  // 直连国内延迟：DIRECT 是国内直连，单独测百度，不用核心测谷歌的结果
+let DIRECT_D;  // 直连国内延迟：DIRECT 是国内直连，单独测国内 204 地址，不用核心测谷歌的结果
 const isDead=n=>!isGroup(n)&&(()=>{const d=lastDelay(n);return d!==undefined&&d<=0})();
 function toggleDead(){HIDEDEAD=!HIDEDEAD;localStorage.setItem('mp_hidedead',HIDEDEAD?'1':'0');renderGroups();if(TAB==='概览')loadQS()}
 let GOPEN=(()=>{try{const o=JSON.parse(localStorage.getItem('mp_gopen')||'{}');return o&&typeof o==='object'&&!Array.isArray(o)?o:{}}catch{return {}}})();
