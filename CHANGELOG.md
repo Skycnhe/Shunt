@@ -1,5 +1,11 @@
 # 更新记录与详细说明
 
+## v7.5.9 sing-box Fake-IP 失效修复 + 直连测速冷启动
+- 修复 sing-box 日志大量「missing fakeip record」、部分网站打不开：sing-box 的 Fake-IP 应答 TTL 默认 600 秒，而映射表只在正常退出时写入 cache.db（实测 kill -9 / 断电 / 内存不足被杀后映射全部丢失，重新从 198.18.0.2 分配）。客户端拿着缓存的 198.18.x 继续连 10 分钟，全部失败。现在 Fake-IP 应答 TTL 改为 1 秒（与 mihomo 一致），映射丢失或切换内核后客户端几秒内就会重新解析
+- sing-box Fake-IP 网段改为 198.18.0.0/16，与 mihomo 的 198.18.0.1/16 一致（升级后 sing-box 的 Fake-IP 映射会重建一次）。cache_file（store_fakeip）原本就已开启，正常重启 / 重载配置时映射保留，已实测
+- 直连延迟：sing-box 没有 unified-delay，第一次测速把 DNS 和建连也算进去（实测 1015 ms，第二次 24 ms）。现在由核心连测两次取小值，mihomo / Smart / sing-box 口径一致
+- 新增单元测试：归属地去重（重庆 重庆、重庆市 重庆、北京 北京市、不重复的不变）、直连测速走核心 DIRECT + 国内 204 地址及核心不可用时的回退、sing-box Fake-IP TTL / 网段 / 持久化配置
+
 ## v7.5.8 直连延迟口径修正 + 归属地去重
 - 根因：节点延迟由核心测（unified-delay，只计一次往返），而 v7.5.7 的直连延迟用 curl 测 https://www.baidu.com 的总耗时，包含 DNS、TCP、TLS 握手和整页下载，相当于 4～5 次往返，所以直连看起来和日本节点差不多。国内直连本身并不慢
 - 直连延迟改为让核心测 DIRECT 出站（与节点同一口径），测速地址换成国内 204 地址 http://connect.rom.miui.com/generate_204；核心不可用时 curl 绑定物理网卡、复用连接只取第二次请求的耗时
