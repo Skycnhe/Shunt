@@ -1,5 +1,10 @@
 # 更新记录与详细说明
 
+## v7.6.1 直连延迟与百度卡片统一口径
+- 问题：sing-box 下节点页「🏠 直连 → DIRECT」显示 139 ms，而概览「百度」卡片是 31 ms。两者测法不同：百度卡片经 mixed 端口复用连接，只计一次往返；直连由 sing-box 核心测，sing-box 没有 unified-delay，每次都含 TCP 握手，测的还是另一个地址（connect.rom.miui.com）
+- 现在直连延迟与百度卡片完全同一口径：经 mixed 端口连 https://www.baidu.com（规则 / 直连模式下按 geosite:cn 走 DIRECT），复用连接只计第二次请求。实测 mihomo、sing-box 下直连与百度卡片数值一致
+- 全局模式下 mixed 端口会走代理，此时才改由核心测 DIRECT（mihomo 有 unified-delay；sing-box 测两次取小，会比百度卡片偏高）；核心不可用时 curl 绑定物理网卡直连测
+
 ## v7.6.0 看门狗不再因一次超时就重启核心
 - 根因：看门狗每 30 秒查一次核心 /version，只要一次 5 秒内没响应就立即重启。小路由上 sing-box 加载大规则集（广告规则 50 万条）、重载配置或 GC 时会短暂卡几秒，就被误判"无响应"重启；重启若被强制结束，sing-box 的 Fake-IP 映射全部丢失，局域网设备拿着旧的 198.18.x 连不上，日志大量「missing fakeip record」、活动连接为 0
 - 现在一次超时后隔 3 秒再复查两次，都失败才判定无响应（实测核心冻结 7 秒不再重启，冻结 30 秒仍会正常重启）
