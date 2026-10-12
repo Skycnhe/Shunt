@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.5.8"
+PANEL_VERSION = "7.5.9"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -231,7 +231,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.5.8"
+PANEL_VERSION = "7.5.9"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -2729,7 +2729,8 @@ def sb_dns(d, cfg, policies, rs, alias, v6):
         rules.append({"domain": sorted(exact), "action": "route", "server": "dns-hosts"})
     cn_cond = {"rule_set": [rs.use_geo("geosite", "cn"), rs.use_geo("geosite", "private")]}
     if dc["mode"] == "fake-ip":
-        servers.append({"type": "fakeip", "tag": "dns-fake", "inet4_range": "198.18.0.0/15",
+        # 与 mihomo 的 fake-ip-range 198.18.0.1/16 同网段；映射由 cache_file(store_fakeip) 持久化
+        servers.append({"type": "fakeip", "tag": "dns-fake", "inet4_range": "198.18.0.0/16",
                         **({"inet6_range": "fc00::/18"} if v6 else {})})
         conds = {}
         for x in dc["fake_filter"]:
@@ -2750,7 +2751,9 @@ def sb_dns(d, cfg, policies, rs, alias, v6):
             if dc["policy"] and t_proxy:
                 rules.append({"type": "logical", "mode": "and", "rules": [fc, cn_cond], "action": "route", "server": t_direct})
             rules.append(dict(fc, action="route", server=final))
-        rules.append({"query_type": ["A", "AAAA"], "action": "route", "server": "dns-fake"})
+        # TTL 改成 1（与 mihomo 的 fake-ip 一致）：sing-box 默认 600 秒，内核被强制结束或切换内核后映射丢失时，
+        # 客户端还会拿缓存的 198.18.x 连 10 分钟，日志刷「missing fakeip record」，期间这些网站都打不开
+        rules.append({"query_type": ["A", "AAAA"], "action": "route", "server": "dns-fake", "rewrite_ttl": 1})
     if dc["policy"] and t_proxy:
         rules.append(dict(cn_cond, action="route", server=t_direct))
     out = {"servers": servers, "rules": rules, "final": final, "strategy": "prefer_ipv4" if v6 else "ipv4_only",
@@ -4468,15 +4471,19 @@ def direct_rtt(timeout=6):
     2. 核心不可用时，curl 绑定物理网卡绕过 TUN，在同一连接上请求两次，只取第二次（复用连接）的耗时"""
     from .base import DIRECT_HC
     from urllib.parse import quote
-    try:
-        from .corehttp import core
-        code, raw = core("GET", f"/proxies/DIRECT/delay?url={quote(DIRECT_HC)}&timeout={timeout * 1000}", timeout=timeout + 2)
-        if code == 200:
-            ms = int(json.loads(raw).get("delay") or 0)
-            if ms > 0:
-                return ms
-    except (OSError, ValueError, TypeError):
-        pass
+    from .corehttp import core
+    got = []
+    for _ in range(2):  # 测两次取小：sing-box 没有 unified-delay，第一次会把 DNS 解析和建连也算进去（实测冷启动 1000+ ms，第二次 30 ms）
+        try:
+            code, raw = core("GET", f"/proxies/DIRECT/delay?url={quote(DIRECT_HC)}&timeout={timeout * 1000}", timeout=timeout + 2)
+            ms = int(json.loads(raw).get("delay") or 0) if code == 200 else 0
+        except (OSError, ValueError, TypeError, AttributeError):
+            ms = 0
+        if ms <= 0:
+            break
+        got.append(ms)
+    if got:
+        return min(got)
     try:
         from .ipinfo import _phys_iface
         iface = _phys_iface()
@@ -6776,7 +6783,9 @@ def loc_dedup(loc):
     """归属地去掉相邻重复的地名：「中国 重庆 重庆 电信」→「中国 重庆 电信」，「北京市 北京」也算重复"""
     out = []
     for p in (loc or "").split():
-        if out and _LOC_SUFFIX.sub("", p) == _LOC_SUFFIX.sub("", out[-1]):
+        prev = out[-1] if out else ""
+        # 完全相同，或只差一个「市 / 省」后缀（重庆市 / 重庆）才算重复；吉林省 / 吉林市 是两级地名，保留
+        if out and (p == prev or (_LOC_SUFFIX.sub("", p) == _LOC_SUFFIX.sub("", prev) and (p == _LOC_SUFFIX.sub("", p) or prev == _LOC_SUFFIX.sub("", prev)))):
             if len(p) < len(out[-1]):
                 out[-1] = p  # 保留更短的写法（重庆 而不是 重庆市）
             continue
