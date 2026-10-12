@@ -84,6 +84,21 @@ def _fetch_direct_ip():
     return _fetch(IP_ECHO, False)
 
 
+_LOC_SUFFIX = re.compile(r"(?:省|市|自治区|特别行政区|壮族自治区|回族自治区|维吾尔自治区)$")
+
+
+def loc_dedup(loc):
+    """归属地去掉相邻重复的地名：「中国 重庆 重庆 电信」→「中国 重庆 电信」，「北京市 北京」也算重复"""
+    out = []
+    for p in (loc or "").split():
+        if out and _LOC_SUFFIX.sub("", p) == _LOC_SUFFIX.sub("", out[-1]):
+            if len(p) < len(out[-1]):
+                out[-1] = p  # 保留更短的写法（重庆 而不是 重庆市）
+            continue
+        out.append(p)
+    return " ".join(out)
+
+
 def _geo(ip):
     if not ip:
         return ""
@@ -107,7 +122,7 @@ def get_ipinfo():
     if not direct_ip or direct_ip == proxy_ip:
         direct_ip = _fetch_direct_ip()
         direct_loc = _geo(direct_ip)
-    v = {"direct": {"ip": direct_ip, "loc": direct_loc},
-         "proxy": {"ip": proxy_ip, "loc": _geo(proxy_ip)}}
+    v = {"direct": {"ip": direct_ip, "loc": loc_dedup(direct_loc)},
+         "proxy": {"ip": proxy_ip, "loc": loc_dedup(_geo(proxy_ip))}}
     _CACHE["t"], _CACHE["v"] = now, v
     return v
