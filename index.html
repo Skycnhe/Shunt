@@ -367,7 +367,7 @@ nav button{font-size:15.5px;font-weight:600;opacity:.85}nav button.on{font-weigh
         <div class="ipr"><span class="k">本地公网</span><b id="ip-direct">-</b><span class="mut small" id="loc-direct"></span></div>
         <div class="ipr"><span class="k">代理出口</span><b id="ip-proxy">-</b><span class="mut small" id="loc-proxy"></span></div>
       </div>
-      <div class="mut small" style="margin-top:6px">归属地始终显示；IP 可一键隐藏（仅前端脱敏）</div></div>
+      <div class="mut small" style="margin-top:6px">隐藏后 IP 和归属地都显示假地址，方便截图（仅前端替换）</div></div>
     <div class="o3 card"><div class="row"><h3 class="sp" style="margin:0">实时流量（近 2 分钟）</h3><span class="small" style="color:var(--pri)">● 下载</span><span class="small" style="color:var(--ok)">● 上传</span></div>
       <div class="spd"><span class="dn"><span class="k">↓</span><b id="ov-down">-</b></span><span class="upx"><span class="k">↑</span><b id="ov-up">-</b></span><span class="monly mut small" id="ov-tot" style="margin-left:auto"></span></div>
       <canvas id="chart" height="110" style="width:100%;margin-top:8px;display:block"></canvas></div>
@@ -877,16 +877,23 @@ const WDS={ok:['ok','正常'],restarting:['warn','正在重启核心'],direct:['
   $('#wd-status').innerHTML=`<span class="${s[0]}">● ${s[1]}</span>`+(w.last_check?` <span class="mut small">上次检查 ${new Date(w.last_check*1000).toLocaleTimeString('zh-CN',{hour12:false})}</span>`:'');
   $('#wd-events').innerHTML=(w.events||[]).map(e=>`<div class="ev"><span class="mut">${new Date(e.t*1000).toLocaleString('zh-CN',{hour12:false})}</span> ${esc(e.msg)}</div>`).join('')||'<div class="mut small">暂无事件</div>'}
 
-// IP 信息：本地公网 / 代理出口 + 归属地；IP 可脱敏隐藏，归属地始终显示
+// IP 信息：本地公网 / 代理出口 + 归属地。隐藏时 IP 和归属地都换成假的（本地公网换成别的省市运营商，
+// 代理出口只留国家），截图不泄露真实位置；同一浏览器每次显示同一个假地址，不会刷新一下变一个
 let IPMASK=localStorage.getItem('ipmask')==='1';
-function maskIp(ip){if(!ip)return '-';if(!IPMASK)return ip;
-  const v4=ip.split('.');if(v4.length===4)return v4[0]+'.'+v4[1]+'.*.*';
-  const v6=ip.split(':');if(v6.length>2)return v6.slice(0,2).join(':')+'::****';
-  return '****'}
+const DECOY_LOC=['中国 广东 深圳 电信','中国 浙江 杭州 移动','中国 上海 联通','中国 江苏 南京 电信','中国 四川 成都 移动',
+  '中国 湖北 武汉 联通','中国 北京 电信','中国 福建 厦门 移动','中国 山东 青岛 联通','中国 陕西 西安 电信'];
+function decoySeed(){let s=+localStorage.getItem('ipmask-seed');
+  if(!s){s=1+Math.floor(Math.random()*2147483646);localStorage.setItem('ipmask-seed',s)}return s}
+const CN_A=[36,39,58,60,61,101,106,110,111,112,113,114,115,116,117,118,119,120,121,123,124,180,182,183,222,223];
+function decoy(k){const s=(decoySeed()*(k+7)*2654435761>>>0);
+  return {ip:[k?1+s%223:CN_A[s%CN_A.length],(s>>>8)%256,(s>>>16)%256,1+(s>>>24)%254].join('.'),loc:DECOY_LOC[s%DECOY_LOC.length]}}
 async function loadIpInfo(){let j;try{j=await api('/api/ipinfo')}catch(e){return}
-  const set=(ipEl,locEl,d)=>{const el=$(ipEl);el.textContent=maskIp(d.ip);el.title=d.ip||'';
-    $(locEl).textContent=d.loc||''};
-  set('#ip-direct','#loc-direct',j.direct||{});set('#ip-proxy','#loc-proxy',j.proxy||{});
+  const set=(ipEl,locEl,d,k)=>{const el=$(ipEl),f=decoy(k);
+    if(!d.ip){el.textContent='-';el.title='';$(locEl).textContent=d.loc||'';return}
+    if(IPMASK){el.textContent=f.ip;el.title='已隐藏，显示的是假地址';
+      $(locEl).textContent=k?((d.loc||'').split(' ')[0]||''):f.loc}
+    else{el.textContent=d.ip;el.title='';$(locEl).textContent=d.loc||''}};
+  set('#ip-direct','#loc-direct',j.direct||{},0);set('#ip-proxy','#loc-proxy',j.proxy||{},1);
   $('#ipmask-btn').textContent=IPMASK?'显示 IP':'隐藏 IP'}
 function toggleIpMask(){IPMASK=!IPMASK;localStorage.setItem('ipmask',IPMASK?'1':'0');loadIpInfo()}
 // 每秒：/api/live（速率、累计、内存）；概览 / 连接页额外拉取连接列表
