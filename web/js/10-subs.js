@@ -6,8 +6,8 @@ async function loadSubs(){await loadState();let prov={};try{prov=(await core('/p
     const used=(si.Upload||0)+(si.Download||0);const exp=si.Expire?new Date(si.Expire*1000).toLocaleDateString('zh-CN'):'-';
     const exc=s.exclude===undefined?STATE.default_exclude:s.exclude;
     const pct=si.Total?Math.min(100,used/si.Total*100):0,days=si.Expire?Math.ceil((si.Expire*1000-Date.now())/864e5):null;
-    return `<tr><td>${esc(s.name)}<div class="mut w" style="max-width:340px;font-size:11px">${esc(s.url)}</div></td><td>${(p.proxies||[]).length}</td>
-    <td class="w" style="font-size:12px;max-width:220px">${s.filter?'保留：'+esc(s.filter)+'<br>':''}${exc?'<span class="mut">排除：'+esc(exc)+'</span>':'<span class="mut">不过滤</span>'}</td>
+    return `<tr><td class="subn" title="${esc(s.url)}"><div class="subu" style="font-size:inherit">${esc(s.name)}</div><div class="mut subu">${esc(s.url)}</div></td><td>${(p.proxies||[]).length}</td>
+    <td class="subf" title="${esc((s.filter?'保留：'+s.filter+'\n':'')+(exc?'排除：'+exc:'不过滤'))}">${s.filter?'<div>保留：'+esc(s.filter)+'</div>':''}${exc?'<div class="mut">排除：'+esc(exc)+'</div>':'<div class="mut">不过滤</div>'}</td>
     <td>${si.Total?`${fmt(used)} / ${fmt(si.Total)}<div class="ubar"><i class="${pct>90?'bad':pct>70?'warn':''}" style="width:${pct.toFixed(1)}%"></i></div>`:'-'}</td>
     <td>${exp}${days!==null?`<div class="small ${days<=3?'bad':days<=7?'warn':'mut'}">${days<0?'已过期':'剩 '+days+' 天'}</div>`:''}</td><td>${p.updatedAt?new Date(p.updatedAt).toLocaleString('zh-CN',{hour12:false}):'-'}</td>
     <td><button class="btn g sm" onclick="updSub('${encodeURIComponent(s.name)}',this)">更新</button> <button class="btn g sm" onclick="editSub('${encodeURIComponent(s.name)}')">编辑</button> <button class="btn r sm" onclick="delSub('${encodeURIComponent(s.name)}')">删除</button></td></tr>`}).join('')||'<tr><td class="mut">暂无订阅</td></tr>';
