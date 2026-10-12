@@ -61,7 +61,7 @@ def fetch_raw(f, gh, commit=None, sha=None):
         gh = ""
     tries = [(gh.rstrip("/") + "/" + url, False)] if gh else []
     tries += [(url, True), (url, False)]  # 先经 mihomo 代理，再直连
-    err = ""
+    errs = []
     for u, use_proxy in tries:
         try:
             dl_check(u, via_proxy=use_proxy)  # SSRF 防护：直连时校验 DNS，走代理时由代理解析（字面内网 IP 永远拦截）
@@ -72,8 +72,8 @@ def fetch_raw(f, gh, commit=None, sha=None):
                 raise ValueError("文件校验失败（与 GitHub 上的不一致，可能被加速镜像篡改）")
             return data
         except Exception as e:
-            err = f"{u.split('/')[2]}{'(代理)' if use_proxy else ''}: {str(e)[:120]}"
-    raise IOError(f"下载 {f} 失败：{err}")
+            errs.append(f"{u.split('/')[2]}{'(代理)' if use_proxy else '(直连)'}: {str(e)[:120]}")
+    raise IOError(f"下载 {f} 失败：" + "；".join(errs))  # 每条线路的失败原因都列出，便于判断是代理还是直连的问题
 
 
 def self_rollback():
