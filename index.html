@@ -314,6 +314,9 @@ nav .ico{display:none}nav .more{display:none}
   .dnsmain #dns-lists>.lbox{break-inside:avoid;border-bottom:0}
   .abft{display:none}
   .sgrid>.card{display:block}.sgrid>.colbrk{break-before:column}
+  /* v7.7.0 连接表：主机 / 规则 / 链路单行省略（悬停看全文），不再被挤成一字一行 */
+  .ctable td.ch,.ctable td.cr,.ctable td.cc{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;word-break:normal}
+  .ctable td.ch,.ctable td.cr,.ctable td.cc{max-width:0}.ctable td.ch{width:22%}.ctable td.cr{width:24%}.ctable td.cc{width:26%}
   .ntool .nsearch{flex:1 1 220px;max-width:360px;margin-right:auto}
   .nfilter:has(#nf-r:empty){margin-bottom:12px}
 }
@@ -1237,8 +1240,8 @@ function renderConns(list){const f=$('#c-filter').value.toLowerCase();const now=
   $('#conns').innerHTML=list.filter(c=>!f||(JSON.stringify(c)+dname(c.metadata?.sourceIP)).toLowerCase().includes(f)).slice(0,300).map(c=>{const m=c.metadata||{};
     const r=rates.get(c.id),ds=r[0],us=r[1];
     const host=(m.host||m.sniffHost||m.destinationIP)+':'+m.destinationPort;const sec=Math.floor((now-new Date(c.start))/1000);
-    return `<tr><td class="w" style="max-width:260px">${esc(host)}</td><td>${devCell(m.sourceIP)}</td><td>${esc(m.network)}</td><td>${esc(c.rule)}${c.rulePayload?' <span class="mut">'+esc(c.rulePayload.length>40?c.rulePayload.slice(0,40)+'…':c.rulePayload)+'</span>':''}</td>
-    <td class="w">${esc((c.chains||[]).slice().reverse().join(' → '))}</td><td>${fmt(ds)}/s</td><td>${fmt(us)}/s</td><td>${fmt(c.download)}</td>
+    return `<tr><td class="w ch" title="${esc(host)}">${esc(host)}</td><td>${devCell(m.sourceIP)}</td><td>${esc(m.network)}</td><td class="cr" title="${esc(c.rule+(c.rulePayload?' '+c.rulePayload:''))}">${esc(c.rule)}${c.rulePayload?' <span class="mut">'+esc(c.rulePayload.length>40?c.rulePayload.slice(0,40)+'…':c.rulePayload)+'</span>':''}</td>
+    <td class="w cc" title="${esc((c.chains||[]).slice().reverse().join(' → '))}">${esc((c.chains||[]).slice().reverse().join(' → '))}</td><td>${fmt(ds)}/s</td><td>${fmt(us)}/s</td><td>${fmt(c.download)}</td>
     <td>${sec<60?sec+'s':Math.floor(sec/60)+'m'}</td><td><button class="btn g sm" onclick="closeConn('${c.id}')">断开</button></td></tr>`}).join('')||'<tr><td class="mut" colspan="10">暂无连接</td></tr>'}
 async function closeConn(id){try{await core('/connections/'+id,'DELETE')}catch(e){toast(e.message)}}
 async function closeAll(){if(!confirm('断开全部连接？'))return;try{await core('/connections','DELETE');toast('已断开')}catch(e){toast(e.message)}}
@@ -1298,10 +1301,18 @@ const PM_DESC={tproxy:'TProxy：nftables 把局域网 TCP/UDP 透明转发到 mi
 let TUNF={};
 let SG=localStorage.getItem('mp_sg')||'net';
 function renderSG(){document.querySelectorAll('#snav button').forEach(b=>{b.classList.toggle('on',b.dataset.g===SG);b.onclick=()=>{SG=b.dataset.g;localStorage.setItem('mp_sg',SG);renderSG()}});
-  document.querySelectorAll('[data-sg]').forEach(c=>c.classList.toggle('hide',c.dataset.sg!==SG))}
+  document.querySelectorAll('[data-sg]').forEach(c=>c.classList.toggle('hide',c.dataset.sg!==SG));balanceSG()}
+// v7.7.0 桌面双栏：把较短一栏的最后一张卡片拉长，两栏底部对齐
+function balanceSG(){requestAnimationFrame(()=>{const cs=[...document.querySelectorAll('.sgrid>.card')];cs.forEach(c=>c.style.minHeight='');
+  if(MQ.matches||TAB!=='设置')return;const vis=cs.filter(c=>!c.classList.contains('hide')&&c.offsetHeight),col={};
+  vis.forEach(c=>(col[c.offsetLeft]=col[c.offsetLeft]||[]).push(c));const ks=Object.keys(col);if(ks.length<2)return;
+  const bot=k=>Math.max(...col[k].map(c=>c.offsetTop+c.offsetHeight)),mx=Math.max(...ks.map(bot));
+  ks.forEach(k=>{const d=mx-bot(k);if(d>1){const l=col[k].reduce((a,c)=>c.offsetTop>a.offsetTop?c:a);l.style.minHeight=(l.offsetHeight+d)+'px'}})})}
+addEventListener('resize',()=>{if(TAB==='设置')balanceSG()});
+document.addEventListener('click',e=>{if(TAB==='设置'&&e.target.closest('.sgrid'))setTimeout(balanceSG,60)});
 async function renderSettings(){renderSG();renderLook();await loadState().catch(()=>{});fillSettings();loadCoreSw();if(!CORE_POLL){$('#core-kind').value=STATE.core||'mihomo';coreKindUI()}
   segv('#pm',STATE.proxy_mode,v=>setPM(v));$('#pm-desc').textContent=PM_DESC[STATE.proxy_mode]||'';
-  TUNF=Object.assign({},STATE.tun);renderTunForm();
+  TUNF=Object.assign({},STATE.tun);renderTunForm();setTimeout(balanceSG,200);setTimeout(balanceSG,1500);
   sw('#v6',STATE.ipv6,v=>saveSettings({ipv6:v},'IPv6 已'+(v?'开启':'关闭')));
   sw('#wd',STATE.watchdog,v=>saveSettings({watchdog:v},'看门狗已'+(v?'开启':'关闭')));
   sw('#https',STATE.https,async v=>{if(!confirm(`面板将以 ${v?'HTTPS':'HTTP'} 重启，确定？`))throw 0;
