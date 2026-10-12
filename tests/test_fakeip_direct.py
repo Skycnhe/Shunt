@@ -21,6 +21,7 @@ class LocDedup(unittest.TestCase):
         self.assertEqual(f("中国 广东省 深圳市 电信"), "中国 广东省 深圳市 电信")
         self.assertEqual(f("日本 东京都 Minato"), "日本 东京都 Minato")
         self.assertEqual(f("美国 加利福尼亚 洛杉矶"), "美国 加利福尼亚 洛杉矶")
+        self.assertEqual(f("中国 吉林省 吉林市 联通"), "中国 吉林省 吉林市 联通")  # 省、市两级同名不算重复
         self.assertEqual(f(""), "")
         self.assertEqual(f(None), "")
 
