@@ -8,7 +8,7 @@ async function loadState(){
   STATE=await api('/api/state');STATE_VER=v;
   renderCore(STATE.running);renderMode();renderWD();renderPMStat();renderVer()}
 function renderCore(run){$('#h-dot').className='dot '+(run?'on':'off');$('#h-run').textContent=run?'运行中':'已停止';
-  $('#h-ver').textContent=run&&STATE.version&&STATE.version!=='-'?STATE.version:'';
+  $('#h-ver').textContent=run&&STATE.version&&STATE.version!=='-'?STATE.version:'';$('#h-run').parentNode.title=run&&STATE.version&&STATE.version!=='-'?(CORE_LABEL[STATE.core]||STATE.core||'')+' '+STATE.version:'';
   $('#h-restart').classList.toggle('hide',!run);$('#h-stop').classList.toggle('hide',!run);$('#h-start').classList.toggle('hide',run)}
 function renderHdr(l){$('#h-up').textContent=fmt(l.up)+'/s';$('#h-down').textContent=fmt(l.down)+'/s';
   $('#h-ut').textContent=fmt(l.upTotal);$('#h-dt').textContent=fmt(l.downTotal);$('#h-mem').textContent=l.inuse?fmt(l.inuse):'-';
