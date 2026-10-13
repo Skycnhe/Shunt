@@ -4,7 +4,7 @@ from collections import deque
 from urllib.parse import quote
 
 from .errlog import log_err
-from .base import G_MANUAL, HC, SVC
+from .base import G_MANUAL, HC
 from .data import load
 from .core import refresh_regions, reload_core
 from .corehttp import core, core_json
@@ -12,7 +12,7 @@ from .sb_common import active_core
 from .groups import sb_sub_cache
 from .sb_subs import sb_update_subs
 from .sb_config import sb_sync_assets
-from .sysopt import sh
+from .sysopt import svc_restart
 from .notify import WD
 from .latency import bg_fetch, bg_meta, bg_meta_save
 from .adblock import AB_STATE, ab_meta, adblock_update
@@ -50,7 +50,7 @@ def run_task(name):
         return not bad, "订阅已更新" if not bad else "以下订阅更新失败：" + "、".join(bad)
     if name == "core_restart":
         WD["manual_stop"] = False
-        code, out = sh(SVC + " restart", timeout=90)
+        code, out = svc_restart(timeout=90)
         return code == 0, "核心已重启" if code == 0 else out[-200:]
     if name == "geo_update":
         code, raw = core("POST", "/configs/geo", {}, timeout=180)
