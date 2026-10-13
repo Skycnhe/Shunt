@@ -167,6 +167,11 @@ def validate_groups(d):
     return errs
 
 
+def ad_today():
+    """顶栏「广告拦截」：今天（本地自然日）拦截数，与概览「今日拦截广告」同一口径"""
+    return adblock.AD_STATS.today() if adblock.AD_STATS else 0
+
+
 class H(BaseHTTPRequestHandler):
     timeout = 30  # 读请求/TLS 握手的超时：卡住不发数据的连接不再永久占用线程（日志流只写不读，不受影响）
 
@@ -736,7 +741,7 @@ class H(BaseHTTPRequestHandler):
     @api_route("/api/ping", "GET")
     def api_ping_get(self, m, p, b, q):
         """轻量心跳：前端 15 秒轮询，version（data.json 每次 save 自增）变化时才拉全量 /api/state"""
-        return self.send(200, {"ok": True, "core": active_core(), "version": config_version()})
+        return self.send(200, {"ok": True, "core": active_core(), "version": config_version(), "ad_today": ad_today()})
 
     @api_route("/api/groups", "GET")
     def api_groups_get(self, m, p, b, q):
