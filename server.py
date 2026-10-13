@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.7.6"
+PANEL_VERSION = "7.7.7"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -248,7 +248,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.7.6"
+PANEL_VERSION = "7.7.7"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -5986,6 +5986,10 @@ class AdStats:
             write_json(AB_STATS_FILE, self.data)
         self.saved = time.time()
 
+    def today(self):
+        with self.lock:
+            return int((self.data["days"].get(time.strftime("%Y-%m-%d")) or {}).get("count", 0))
+
     def report(self):
         with self.lock:
             days = copy.deepcopy(self.data["days"])
@@ -7458,6 +7462,11 @@ def validate_groups(d):
     return errs
 
 
+def ad_today():
+    """顶栏「广告拦截」：今天（本地自然日）拦截数，与概览「今日拦截广告」同一口径"""
+    return adblock.AD_STATS.today() if adblock.AD_STATS else 0
+
+
 class H(BaseHTTPRequestHandler):
     timeout = 30  # 读请求/TLS 握手的超时：卡住不发数据的连接不再永久占用线程（日志流只写不读，不受影响）
 
@@ -8027,7 +8036,7 @@ class H(BaseHTTPRequestHandler):
     @api_route("/api/ping", "GET")
     def api_ping_get(self, m, p, b, q):
         """轻量心跳：前端 15 秒轮询，version（data.json 每次 save 自增）变化时才拉全量 /api/state"""
-        return self.send(200, {"ok": True, "core": active_core(), "version": config_version()})
+        return self.send(200, {"ok": True, "core": active_core(), "version": config_version(), "ad_today": ad_today()})
 
     @api_route("/api/groups", "GET")
     def api_groups_get(self, m, p, b, q):
@@ -8575,7 +8584,7 @@ class H(BaseHTTPRequestHandler):
         return self.send(200, {"ticket": ticket_new()})
 '''
 _SRC['shunt.cli'] = '''""""""
-import ipaddress, os, re, signal, ssl, sys, threading
+import ipaddress, os, re, signal, ssl, sys, threading, time
 
 from .svcmigrate import svc_migrate
 from .errlog import log_err
@@ -8621,8 +8630,19 @@ def tp_env():
             f"MODE={d['proxy_mode']}\\nDNS_ALL={1 if dns_cfg(d)['block_bypass'] else 0}")
 
 
+def default_tz():
+    """设备没设时区（无 /etc/localtime 也无 TZ，Alpine 默认即 UTC）时按北京时间算「今天」：
+    广告拦截 / 流量的今日统计在本地 0 点清零，定时任务的时刻也按北京时间。设备自己设了时区则以设备为准"""
+    if os.environ.get("TZ") or os.path.exists("/etc/localtime"):
+        return False
+    os.environ["TZ"] = "CST-8"
+    time.tzset()
+    return True
+
+
 def main():
     """命令行入口：带参数时执行一次性命令，否则启动面板"""
+    default_tz()
     if "--bypass" in sys.argv:  # 兼容旧版 tproxy.sh
         env = dict(l.split("=", 1) for l in tp_env().splitlines())
         print(env["B_IP"].strip("'") + "|" + env["B_MAC"].strip("'"))
