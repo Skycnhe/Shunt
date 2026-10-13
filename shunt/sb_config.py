@@ -2,9 +2,7 @@
 import ipaddress, json, os, re, signal, threading, time, urllib.request, urllib.error
 
 from .base import (
-    AB_DIR, BUILTIN_POLICIES, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, SVC, UA,
-    dl_check,
-)
+    AB_DIR, BUILTIN_POLICIES, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, UA, dl_check, wd_hold)
 from .data import auto_name, lb_dropped_names, lb_names, lb_old_name, load, safe, write_json
 from .groups import PROV, gcfg, rx
 from .mihomo import BUILTIN_GEO, build_config, build_rule_providers, dns_cfg, policy_parts, tun_params, write_config
@@ -16,7 +14,7 @@ from .sb_nodes import sb_outbound
 from .sb_rules import SBRules, geo_srs_entry
 from .ruleutil import _mh_domain
 from .sb_dns import sb_dns
-from .sysopt import nft_ok, proxy_opener, sh
+from .sysopt import nft_ok, proxy_opener, sh, svc_restart
 from .notify import core_alive
 def build_singbox(d):
     """把 build_config 生成的 mihomo 结构翻译成 sing-box 配置；返回 (配置, 警告列表, 需要的规则集文件)"""
@@ -478,6 +476,7 @@ def sb_hot_reload():
     pid = core_pid()
     if pid:
         try:
+            wd_hold(45, "sing-box 重载配置")  # 重载期间控制端口短暂不可用，看门狗不要当成故障
             os.kill(pid, signal.SIGHUP)
             for _ in range(20):
                 time.sleep(0.5)
@@ -486,7 +485,7 @@ def sb_hot_reload():
             return False, "sing-box 重载后未响应，请查看日志"
         except OSError:
             pass
-    sh(SVC + " restart", timeout=90)
+    svc_restart(timeout=90)
     return True, "已写入配置并重启 sing-box"
 
 
