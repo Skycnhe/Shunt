@@ -13,7 +13,7 @@ def update_guard_script(files):
     """更新后由独立的 shell 脚本检查新面板：90 秒内一直打不开就把 .backup 里的旧版本放回去并重启"""
     bak = os.path.join(BASE, ".backup")
     cps = "\n".join(f"  [ -f '{bak}/{f}' ] && cp '{bak}/{f}' '{local_file(f)}'" for f in files)
-    restart = os.environ.get("PANEL_RESTART", "rc-service mihomo-panel restart")
+    restart = os.environ.get("PANEL_RESTART", "rc-service shunt restart 2>/dev/null || rc-service mihomo-panel restart")  # 回滚时服务可能已改名
     return f"""#!/bin/sh
 # 由 Shunt 面板生成：在线更新后自动检查，新版启动失败时回滚
 sleep 30
