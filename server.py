@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.7.8"
+PANEL_VERSION = "7.7.9"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -248,7 +248,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.7.8"
+PANEL_VERSION = "7.7.9"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -4456,6 +4456,11 @@ def svc_restart(timeout=90, why="面板重启核心"):
         return sh(SVC + " restart", timeout=timeout)
     finally:
         wd_hold(60, why, reset=True)  # 命令返回后只再给 60 秒加载时间
+        try:
+            from .ipinfo import reset as ip_reset
+            ip_reset()  # 概览 IP 信息：重启后重新查，出口可能已变
+        except Exception:
+            pass
 
 
 def proxy_opener(proxy=True):
@@ -6815,17 +6820,44 @@ _SRC['shunt.ipinfo'] = '''"""公网 IP 与归属地查询（概览页展示）""
 import json
 import re
 import shlex
+import socket
 import subprocess
+import threading
 import time
 
+from .base import MIXED
+from .corehttp import core
 from .errlog import log_err
 from .sysopt import proxy_opener, sh
 
 IP_ECHO = "https://api.ipify.org"  # 返回纯文本公网 IP
 GEO_URL = "http://ip-api.com/json/%s?lang=zh-CN&fields=status,country,regionName,city"
 
-_CACHE = {"t": 0, "v": None}
-_TTL = 600  # 公网 IP 变化不频繁，缓存 10 分钟
+_CACHE = {"t": 0, "v": None, "fail": 0, "next": 0}
+_TTL = 600  # 两边都查到才缓存 10 分钟；公网 IP 变化不频繁
+_LOCK = threading.Lock()
+
+
+def _backoff(n):
+    """查询失败后的重试间隔：5、10、20、40、60、60… 秒"""
+    return min(60, 5 * 2 ** max(0, n - 1))
+
+
+def reset():
+    """核心重启 / 切换后作废缓存：出口可能变了，失败的结果也立刻允许重查"""
+    _CACHE.update(t=0, v=None, fail=0, next=0)
+
+
+def core_ready():
+    """代理出口查询的前提：核心控制接口有响应、mixed 端口能连上。重启瞬间两者都不在，此时查只会白等超时"""
+    try:
+        code, _ = core("GET", "/version", timeout=3)
+        if code != 200:
+            return False
+        with socket.create_connection(("127.0.0.1", MIXED), timeout=2):
+            return True
+    except Exception:
+        return False
 
 
 def _fetch(url, via_proxy, timeout=10):
@@ -6895,6 +6927,11 @@ def _fetch_direct_ip():
         out = out.strip()
         if code == 0 and re.fullmatch(r"[0-9a-fA-F:.]+", out):
             return out
+    # 不绑网卡、也不走代理：1.1.1.1 是字面 IP，不依赖本机 DNS（核心重启时本机 DNS 可能指向还没起来的核心）
+    code, out = sh("curl -s --noproxy '*' --max-time 8 https://1.1.1.1/cdn-cgi/trace", timeout=12)
+    m = re.search(r"^ip=([0-9a-fA-F:.]+)", out or "", re.M) if code == 0 else None
+    if m:
+        return m.group(1)
     return _fetch(IP_ECHO, False)
 
 
@@ -6927,21 +6964,49 @@ def _geo(ip):
     return ""
 
 
-def get_ipinfo():
-    """返回 {"direct": {"ip","loc"}, "proxy": {"ip","loc"}}；失败时 ip/loc 为空串，前端显示 '-'"""
-    now = time.time()
-    if _CACHE["v"] is not None and now - _CACHE["t"] < _TTL:
-        return _CACHE["v"]
-    proxy_ip = _fetch(IP_ECHO, True)
-    # 本地公网 IP：优先经代理取国内服务（代理直连中国网站时可拿到真实 IP，自带中文归属地）
-    direct_ip, direct_loc = _fetch_cn_ip()
+def _query():
+    """代理出口强制经核心 mixed 端口；本地公网先经代理取国内服务（规则直连中国网站时拿到真实 IP，自带中文归属地），
+    拿不到或与出口相同时改为绕过核心直连查询。两边并行，避免串行超时累加到半分钟以上"""
+    res = {}
+
+    def proxy_side():
+        ip = _fetch(IP_ECHO, True) if core_ready() else ""
+        res["proxy"] = {"ip": ip, "loc": loc_dedup(_geo(ip))}
+
+    t = threading.Thread(target=proxy_side, daemon=True)
+    t.start()
+    direct_ip, direct_loc = _fetch_cn_ip() if core_ready() else ("", "")
+    t.join(40)
+    proxy_ip = (res.get("proxy") or {}).get("ip", "")
     if not direct_ip or direct_ip == proxy_ip:
         direct_ip = _fetch_direct_ip()
         direct_loc = _geo(direct_ip)
-    v = {"direct": {"ip": direct_ip, "loc": loc_dedup(direct_loc)},
-         "proxy": {"ip": proxy_ip, "loc": loc_dedup(_geo(proxy_ip))}}
-    _CACHE["t"], _CACHE["v"] = now, v
-    return v
+    return {"direct": {"ip": direct_ip, "loc": loc_dedup(direct_loc)},
+            "proxy": res.get("proxy") or {"ip": "", "loc": ""}}
+
+
+def get_ipinfo(query=None):
+    """返回 {"direct": {"ip","loc"}, "proxy": {"ip","loc"}, "retry": 秒}；查不到的一边 ip 为空串。
+    以前查询失败（核心刚重启、开机网络未就绪）的空结果也缓存 10 分钟，前端又只在进概览时拉一次，于是一直显示「-」。
+    现在只有两边都查到才缓存；有失败就按 5→60 秒退避重查，retry 告诉前端多久后再来拉"""
+    query = query or _query
+    with _LOCK:
+        now = time.time()
+        v = _CACHE["v"]
+        if v is not None:
+            if not _CACHE["fail"] and now - _CACHE["t"] < _TTL:
+                return v
+            if _CACHE["fail"] and now < _CACHE["next"]:
+                return dict(v, retry=max(1, int(_CACHE["next"] - now + 0.999)))
+        v = query()
+        now = time.time()
+        if v["direct"]["ip"] and v["proxy"]["ip"]:
+            _CACHE.update(t=now, v=v, fail=0, next=0)
+            return v
+        _CACHE["fail"] += 1
+        wait = _backoff(_CACHE["fail"])
+        _CACHE.update(t=now, v=v, next=now + wait)
+        return dict(v, retry=wait)
 '''
 _SRC['shunt.migrate'] = '''"""v5 → v6 升级：保留节点选择"""
 import os, time
