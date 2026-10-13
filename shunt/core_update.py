@@ -4,12 +4,12 @@ from collections import deque
 from urllib.parse import quote
 
 from .errlog import log_err
-from .base import CONF_DIR, CORE_UPD, LGBM_URL, MIHOMO_LOG, SVC, UA, UPD_STATE, dl_check
+from .base import CONF_DIR, CORE_UPD, LGBM_URL, MIHOMO_LOG, UA, UPD_STATE, dl_check
 from .data import load
 from .mihomo import mh_bin, write_config
 from .core import reload_core
 from .sb_common import CORES, active_core
-from .sysopt import proxy_opener, sh
+from .sysopt import proxy_opener, sh, svc_restart
 from .notify import core_alive, notify
 CORE_REPO = os.environ.get("CORE_REPO", "https://github.com/MetaCubeX/mihomo/releases")
 CORE_CHANNELS = {"stable": "latest/download", "alpha": "download/Prerelease-Alpha"}
@@ -141,7 +141,7 @@ def _core_swap_and_restart(src, label, kind="mihomo"):
         _cu("完成", 95, f"已替换为 {label}（当前内核是 {CORES[active_core()]}，切到 {CORES[kind]} 时生效）")
         return True, ""
     _cu("重启核心", 90, f"已替换为 {label}，正在重启核心")
-    sh(SVC + " restart", timeout=90)
+    svc_restart(timeout=90)
     for _ in range(30):
         time.sleep(1)
         if core_alive():
@@ -149,7 +149,7 @@ def _core_swap_and_restart(src, label, kind="mihomo"):
     if had_old and src != bak:  # 新核心起不来 → 自动恢复
         _cu("自动回滚", 95, "新核心 30 秒内未响应，正在恢复原核心")
         shutil.copy2(bak, B)
-        sh(SVC + " restart", timeout=90)
+        svc_restart(timeout=90)
         return False, "新核心启动失败，已自动恢复为原核心。日志：" + sh(f"tail -n 5 '{MIHOMO_LOG}'")[1][-300:]
     return False, "核心重启后 30 秒内未响应，请查看日志"
 
