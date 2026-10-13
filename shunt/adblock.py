@@ -462,6 +462,10 @@ class AdStats:
             write_json(AB_STATS_FILE, self.data)
         self.saved = time.time()
 
+    def today(self):
+        with self.lock:
+            return int((self.data["days"].get(time.strftime("%Y-%m-%d")) or {}).get("count", 0))
+
     def report(self):
         with self.lock:
             days = copy.deepcopy(self.data["days"])
