@@ -925,9 +925,13 @@ function decoySeed(){let s=+localStorage.getItem('ipmask-seed');
 const CN_A=[36,39,58,60,61,101,106,110,111,112,113,114,115,116,117,118,119,120,121,123,124,180,182,183,222,223];
 function decoy(k){const s=(decoySeed()*(k+7)*2654435761>>>0);
   return {ip:[k?1+s%223:CN_A[s%CN_A.length],(s>>>8)%256,(s>>>16)%256,1+(s>>>24)%254].join('.'),loc:DECOY_LOC[s%DECOY_LOC.length]}}
-async function loadIpInfo(){let j;try{j=await api('/api/ipinfo')}catch(e){return}
+// 有一边没查到（核心刚重启、开机网络未就绪）时，按后端给的 retry 秒数自动重查，只在概览页
+let IP_RETRY=null,IP_FAIL=0;
+function ipRetry(sec){clearTimeout(IP_RETRY);IP_RETRY=setTimeout(()=>{IP_RETRY=null;if(TAB!=='概览')return;if(document.hidden)ipRetry(sec);else loadIpInfo()},sec*1000)}
+async function loadIpInfo(){let j;try{j=await api('/api/ipinfo')}catch(e){IP_FAIL++;ipRetry(Math.min(60,5*2**(IP_FAIL-1)));return}
+  IP_FAIL=0;if(j.retry)ipRetry(j.retry);else{clearTimeout(IP_RETRY);IP_RETRY=null}
   const set=(ipEl,locEl,d,k)=>{const el=$(ipEl),f=decoy(k);
-    if(!d.ip){el.textContent='-';el.title='';$(locEl).textContent=d.loc||'';return}
+    if(!d.ip){el.textContent=j.retry?'查询中…':'-';el.title=j.retry?j.retry+' 秒后自动重试（核心刚启动时可能暂时查不到）':'';$(locEl).textContent=d.loc||'';return}
     if(IPMASK){el.textContent=f.ip;el.title='已隐藏，显示的是假地址';
       $(locEl).textContent=k?((d.loc||'').split(' ')[0]||''):f.loc}
     else{el.textContent=d.ip;el.title='';$(locEl).textContent=d.loc||''}};
