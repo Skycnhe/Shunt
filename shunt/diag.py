@@ -125,7 +125,7 @@ def diagnose():
                           ("cn", "经代理访问国内", "核心或 7890 端口异常，查看日志"),
                           ("proxy", "经代理访问国外", "当前节点不可用：去「节点」测速并切换，或更新订阅")):
         ok, v = res.get(k, (False, "超时"))
-        item(label, ok, f"{v} ms" if ok else v, fix)
+        item(label, ok, f"{v} ms（完整请求：DNS + TCP + TLS + 首包，比概览的复用连接延迟高）" if ok else v, fix)
     try:
         du = shutil.disk_usage(CONF_DIR)
         free = du.free / 2**20
