@@ -5,6 +5,7 @@ import shlex
 import subprocess
 import time
 
+from .errlog import log_err
 from .sysopt import proxy_opener, sh
 
 IP_ECHO = "https://api.ipify.org"  # 返回纯文本公网 IP
@@ -59,8 +60,8 @@ def _fetch_cn_ip():
         m = re.search(r"当前 IP：([0-9.]+)\s*来自于：(.+)", txt)
         if m:
             return m.group(1).strip(), m.group(2).strip()
-    except Exception:
-        pass
+    except Exception as e:
+        log_err("出口 IP 查询 (myip.ipip.net)", e)
     return "", ""
 
 
@@ -108,8 +109,8 @@ def _geo(ip):
         j = json.loads(_fetch(GEO_URL % ip, False, timeout=10))
         if j.get("status") == "success":
             return " ".join(p for p in (j.get("country"), j.get("regionName"), j.get("city")) if p)
-    except Exception:
-        pass
+    except Exception as e:
+        log_err("IP 归属地查询", e)
     return ""
 
 
