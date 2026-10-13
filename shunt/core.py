@@ -1,14 +1,14 @@
 """核心交互"""
 import os, threading, time
 
-from .base import CONF_DIR, LOCK, SVC
+from .base import CONF_DIR, LOCK, wd_hold
 from .corehttp import core, core_json
 from .data import load, read_json, save
 from .groups import provider_nodes
 from .mihomo import build_config, check_config, write_config
 from .sb_common import SB_CONF, active_core
 from .sb_config import build_singbox, check_sb_config, sb_hot_reload, sb_log_error, sb_rule_need, sb_sync_assets, write_sb_config
-from .sysopt import sh
+from .sysopt import svc_restart
 from .notify import WD, core_alive
 
 
@@ -68,12 +68,13 @@ def reload_core(prev=None):
             with LOCK:
                 save(prev)
                 write_sb_config(load(), SB_CONF)
-            sh(SVC + " restart", timeout=90)
+            svc_restart(timeout=90)
             return False, "sing-box 启动失败，已撤销本次修改" + ("：" + tail if tail else "")
         return ok, msg
+    wd_hold(45, "mihomo 重载配置")
     code, body = core("PUT", "/configs?force=true", {"path": final}, timeout=30)
     if code == 502:  # 核心没在跑，尝试启动
-        sh(SVC + " restart")
+        svc_restart()
         return True, "已写入配置并重启 mihomo"
     return code < 300, body.decode(errors="ignore") or "配置已重载"
 
