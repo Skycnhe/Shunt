@@ -15,6 +15,17 @@ CONF_DIR = os.environ.get("MIHOMO_DIR", "/etc/mihomo")
 DATA_FILE = os.environ.get("PANEL_DATA", "/etc/mihomo-panel/data.json")
 LGBM_URL = os.environ.get("SMART_REPO", "https://github.com/vernesong/mihomo/releases") + "/download/LightGBM-Model/Model.bin"
 UPD_STATE = {"busy": False}  # 面板在线更新忙标志：panel_update 与 core_update 共用，避免循环导入
+WD_HOLD = {"until": 0.0, "why": ""}  # 面板自己在重启 / 重载核心：这段时间内看门狗不判定故障（sysopt.svc_restart、sb_hot_reload 置位）
+
+
+def wd_hold(sec, why="", reset=False):
+    """reset=True：直接改成「从现在起 sec 秒」，用于重启命令返回后缩短暂停期"""
+    import time as _t
+    t = _t.time() + sec
+    WD_HOLD["until"] = t if reset else max(WD_HOLD["until"], t)
+    WD_HOLD["why"] = why
+
+
 CORE_UPD = {"busy": False, "stage": "", "pct": 0, "ok": None, "message": "", "log": deque(maxlen=30), "t": 0}  # 内核更新状态：core_update 与 notify 共用
 MASS_TEST = {"n": 0}  # 进行中的全节点测速（/group/*/delay）计数：corehttp 置位，notify 看门狗据此暂停故障判定，避免高负载误判
 
@@ -143,7 +154,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.7.4"
+PANEL_VERSION = "7.7.5"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
