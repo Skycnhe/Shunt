@@ -1,4 +1,5 @@
 #!/sbin/openrc-run
+# 旧服务名，v7.7.6 起改为 shunt-core。只为兼容很老的面板在线更新而保留，新安装与已迁移设备不再使用
 # SPDX-License-Identifier: GPL-3.0-or-later
 # 代理核心：按 /etc/mihomo-panel/core 选择 mihomo、mihomo Smart 或 sing-box（面板「设置 → 核心 → 内核」切换）
 CORE=$(cat /etc/mihomo-panel/core 2>/dev/null)
