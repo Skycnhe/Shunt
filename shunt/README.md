@@ -32,7 +32,7 @@ python3 tools/build.py --split  # 直接改了 server.py 时，把内嵌源码�
 | sysopt | Alpine 系统优化、测速 |
 | notify / latency / stats / unlock / ruletest / logstream | Telegram 与故障直连、延迟缓存、流量统计、流媒体解锁、规则测试、实时日志 |
 | adblock / live / logclean / schedule / devices / diag / dnsleak | 广告拦截、实时速率、日志清理、定时任务、设备名、网络诊断、DNS 防泄露 |
-| migrate / https / access / update_guard | 升级迁移、HTTPS、访问控制、更新回滚守护 |
+| migrate / https / access / update_guard / svcmigrate | 升级迁移、HTTPS、访问控制、更新回滚守护、服务改名迁移（mihomo-panel → shunt） |
 | static / webapi / cli | 静态资源、HTTP 接口（`@api_route` 路由表）、命令行入口 |
 
 ## 前端与测试
