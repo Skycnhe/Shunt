@@ -88,7 +88,7 @@ PY
   [ -n "$REF" ] || { REF="$BRANCH"; rm -f "$MAN"; echo "!! 无法访问 GitHub API，下载的文件不做完整性校验"; }
   RAW="${GH}https://raw.githubusercontent.com/$REPO/$REF"
   echo ">> 下载面板文件 ($REPO@$REF)"
-  FILES="server.py index.html tproxy.sh selftest.sh init.d/mihomo init.d/mihomo-panel"
+  FILES="server.py index.html tproxy.sh selftest.sh init.d/shunt init.d/shunt-core"
   if curl -fsSL --retry 3 -o "$SRC/update-files.txt" "$RAW/update-files.txt"; then
     L=$(sed 's/#.*//' "$SRC/update-files.txt" | tr -s ' \t\r' '\n' | grep -E '^[A-Za-z0-9_][A-Za-z0-9_./-]*$' | grep -v '\.\.' | tr '\n' ' ')
     [ -n "$L" ] && FILES="update-files.txt $L"
@@ -144,8 +144,14 @@ echo ">> 安装面板"
 cp "$SRC/server.py" "$SRC/index.html" "$SRC/tproxy.sh" "$SRC/selftest.sh" /opt/mihomo-panel/
 for f in icon.svg icon-180.png icon-512.png; do [ -f "$SRC/$f" ] && cp "$SRC/$f" /opt/mihomo-panel/; done
 chmod +x /opt/mihomo-panel/tproxy.sh /opt/mihomo-panel/selftest.sh
-cp "$SRC/init.d/mihomo" "$SRC/init.d/mihomo-panel" /etc/init.d/
-chmod +x /etc/init.d/mihomo /etc/init.d/mihomo-panel
+# v7.7.6 起服务名为 shunt（面板）/ shunt-core（核心）：覆盖安装旧版时先停掉并删除旧服务
+for s in mihomo-panel mihomo; do
+  if [ -f /etc/init.d/$s ]; then
+    rc-service $s stop >/dev/null 2>&1; rc-update del $s default >/dev/null 2>&1; rc-service $s zap >/dev/null 2>&1; rm -f /etc/init.d/$s
+  fi
+done
+cp "$SRC/init.d/shunt" "$SRC/init.d/shunt-core" /etc/init.d/
+chmod +x /etc/init.d/shunt /etc/init.d/shunt-core
 
 if [ ! -f /etc/mihomo-panel/data.json ]; then
   printf '{"secret":"","mode":"rule","tproxy":true,"subs":[],"rules":[]}\n' > /etc/mihomo-panel/data.json
@@ -208,10 +214,10 @@ if [ -n "$SELFTEST" ]; then
   echo ">> 校验配置"
   sh /opt/mihomo-panel/selftest.sh || echo "!! 自检未全部通过，请把输出反馈给作者"
 fi
-rc-update add mihomo default >/dev/null
-rc-update add mihomo-panel default >/dev/null
-rc-service mihomo restart
-rc-service mihomo-panel restart
+rc-update add shunt-core default >/dev/null
+rc-update add shunt default >/dev/null
+rc-service shunt-core restart
+rc-service shunt restart
 
 IP=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.*src \([0-9.]*\).*/\1/p')
 SCHEME=http; grep -q '"https": *true' /etc/mihomo-panel/data.json && [ -f /etc/mihomo-panel/cert.pem ] && SCHEME=https
