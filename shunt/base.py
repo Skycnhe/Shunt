@@ -75,7 +75,11 @@ MIXED = 7890
 WD_INTERVAL = int(os.environ.get("PANEL_WD_INTERVAL", "30"))  # 看门狗检查间隔（秒）
 LOCK = threading.RLock()  # 可重入：load() 内迁移写盘时可能已在 update() 的锁内
 
-SVC = os.environ.get("PANEL_SVC", "rc-service mihomo")  # 核心服务控制命令（测试环境可覆盖）
+# v7.7.6 起服务名为 shunt（面板）/ shunt-core（核心）；还没迁移的旧设备仍是 mihomo-panel / mihomo（svcmigrate.py 负责迁移）
+SVC_NEW = os.path.isfile("/etc/init.d/shunt-core")
+CORE_SVC = "shunt-core" if SVC_NEW else "mihomo"
+PANEL_SVC = "shunt" if os.path.isfile("/etc/init.d/shunt") else "mihomo-panel"
+SVC = os.environ.get("PANEL_SVC", "rc-service " + CORE_SVC)  # 核心服务控制命令（测试环境可覆盖）
 LOG_FILES = [x for x in os.environ.get("PANEL_LOGS", "/var/log/mihomo.log,/var/log/mihomo-panel.log").split(",") if x]
 MIHOMO_LOG = LOG_FILES[0] if LOG_FILES else "/var/log/mihomo.log"
 AB_DIR = os.path.join(CONF_DIR, "adblock")
@@ -154,7 +158,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.7.5"
+PANEL_VERSION = "7.7.6"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
