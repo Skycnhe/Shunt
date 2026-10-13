@@ -31,7 +31,7 @@ function spark(vals,col,empty){let pts=vals.map((v,i)=>[i,v]).filter(p=>p[1]!=nu
     <path d="${d} L${xy[xy.length-1][0].toFixed(1)},${H} L${xy[0][0].toFixed(1)},${H} Z" fill="url(#${id})"/><path d="${d}" fill="none" stroke="${col}" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`}
 async function loadAdStat(){let a;try{a=await api('/api/adblock')}catch(e){return}
   const n=v=>(+v||0).toLocaleString('zh-CN'),rules=Object.entries(a.loaded||{}).filter(([k])=>k!=='ad-allow').reduce((s,[,v])=>s+(v||0),0);
-  $('#s-ad').textContent=a.enabled?n(a.stats.today):'未开启';$('#s-ad2').textContent=a.enabled?'规则 '+n(rules)+' 条':'在“广告拦截”中开启';
+  $('#s-ad').textContent=a.enabled?n(a.stats.today):'未开启';AD_TODAY=a.stats.today;STATE.adblock_on=a.enabled;renderAdChip();$('#s-ad2').textContent=a.enabled?'规则 '+n(rules)+' 条':'在“广告拦截”中开启';
   const on=$('#ovab-on');on.checked=a.enabled;on.disabled=!!a.updating;
   on.onchange=async e=>{const v=e.target.checked;try{toast('正在应用…');const j=await api('/api/adblock','PUT',{enabled:v});toast(/下载/.test(j.message||'')?j.message:'广告拦截已'+(v?'开启':'关闭'))}catch(x){toast(x.message)}loadAdStat()};
   const H=a.stats.hours||[],req=H.reduce((s,h)=>s+h.req,0),blk=H.reduce((s,h)=>s+h.blk,0),dv=H.filter(h=>h.dns!=null),
