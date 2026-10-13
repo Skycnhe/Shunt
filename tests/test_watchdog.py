@@ -49,7 +49,7 @@ class Watchdog(unittest.TestCase):
     def test_hold_skips_check(self):
         """面板自己在重启 / 重载核心时（WD_HOLD），看门狗不判定、不重启"""
         N.WD_HOLD["until"] = N.time.time() + 30
-        with mock.patch.object(N, "core", seq_core([])) as _c, mock.patch.object(N.time, "sleep"), \
+        with mock.patch.object(N, "core", seq_core([])), mock.patch.object(N.time, "sleep"), \
                 mock.patch.object(N, "svc_restart") as rs:
             N.watchdog_tick()
         rs.assert_not_called()
