@@ -427,6 +427,11 @@ def svc_restart(timeout=90, why="面板重启核心"):
         return sh(SVC + " restart", timeout=timeout)
     finally:
         wd_hold(60, why, reset=True)  # 命令返回后只再给 60 秒加载时间
+        try:
+            from .ipinfo import reset as ip_reset
+            ip_reset()  # 概览 IP 信息：重启后重新查，出口可能已变
+        except Exception:
+            pass
 
 
 def proxy_opener(proxy=True):
