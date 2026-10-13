@@ -1,6 +1,7 @@
 """"""
 import ipaddress, os, re, signal, ssl, sys, threading
 
+from .svcmigrate import svc_migrate
 from .errlog import log_err
 from . import adblock, stats
 from .base import CERT, KEY, PANEL_DIR, PORT
@@ -53,7 +54,7 @@ def main():
     if "--tpenv" in sys.argv:
         print(tp_env())
         sys.exit(0)
-    if "--gen" in sys.argv:  # init.d/mihomo 启动前调用：按当前内核生成配置
+    if "--gen" in sys.argv:  # init.d/shunt-core 启动前调用：按当前内核生成配置
         try:
             opt_fix_ulimit()
         except Exception as e:
@@ -102,6 +103,7 @@ def main():
         opt_fix_ulimit()
     except Exception as e:
         log_err("文件句柄修正", e)
+    svc_migrate()  # v7.7.6 服务改名：旧设备在线更新后自动迁移到 shunt / shunt-core
     if os.path.isfile(ROLLBACK_NOTE):
         log_err("面板在线更新", rfile(ROLLBACK_NOTE))
         os.remove(ROLLBACK_NOTE)
