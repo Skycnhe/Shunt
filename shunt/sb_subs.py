@@ -1,6 +1,7 @@
 """订阅：sing-box 不能自己拉取订阅，由面板下载、解析成节点后写进配置"""
 import json, os, re, threading, time, urllib.request, urllib.error
 
+from .errlog import log_err
 from .base import CONF_DIR, DEFAULT_EXCLUDE, PANEL_DIR, dl_check
 from .data import load, safe, write_json
 from .links import b64d, parse_link
@@ -64,8 +65,8 @@ def _yaml_items(sec):
             v = (v or {}).get("x")
             if isinstance(v, list) and v and isinstance(v[0], dict):
                 out.append(v[0])
-        except Exception:
-            pass
+        except Exception as e:
+            log_err("订阅节点解析（跳过一条）", e)
     return out
 
 
