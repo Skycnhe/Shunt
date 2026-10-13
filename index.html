@@ -57,6 +57,7 @@ a.ib{text-decoration:none}
 .chip{display:flex;flex-direction:column;justify-content:center;min-width:92px;padding:3px 11px;border-radius:12px;background:var(--b2);line-height:1.25}
 .chip .k{font-size:10.5px;color:var(--sub);white-space:nowrap}.chip b{font-size:13px;font-weight:650;font-variant-numeric:tabular-nums;white-space:nowrap}
 .chip .k i{font-style:normal;font-weight:700}
+.chip.ad{cursor:pointer}.chip.ad i{color:#ff9f0a}
 .vchips{display:flex;gap:6px;margin-left:6px}.vchip{cursor:pointer}.vchip .k em{font-style:normal;color:var(--warn);font-weight:700;margin-left:4px}.vchip.new{box-shadow:inset 0 0 0 1.5px var(--warn)}.up i{color:var(--ok)}.down i{color:var(--pri)}
 .theme .sun{display:none}:root:not([data-theme=light]) .theme .sun{display:block}:root:not([data-theme=light]) .theme .moon{display:none}
 nav{display:flex;gap:2px;margin-top:8px;padding:2px;border-radius:12px;background:var(--segbg);overflow-x:auto;scrollbar-width:none;width:max-content;max-width:100%}
@@ -339,6 +340,12 @@ nav button{font-size:15.5px;font-weight:600;opacity:.85}nav button.on{font-weigh
   .chip{padding:4px 6px;min-width:0}.chip .k{font-size:11px}.chip b{font-size:13px}
   nav button{font-size:14.5px;padding:6px 12px}.pill{font-size:13.5px}}
 .iplist{display:grid;gap:8px;margin-top:8px}.ipr{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}.ipr .k{color:var(--mut);min-width:64px}.ipr b{font-variant-numeric:tabular-nums}
+/* 桌面顶栏：统计条（8 张卡片）单独占第二行并铺满，卡片等宽伸展，避免右侧留空或把主题 / GitHub 按钮挤到下一行 */
+@media (min-width:721px){
+  .hrow>.theme{order:2;margin-left:auto}.hrow>.gh{order:3}
+  .hstats{order:4;flex:1 1 100%;margin-left:0}
+  .hstats>.chip,.vchips .chip{flex:1 0 auto}.vchips{flex:2 0 auto;margin-left:0}
+}
 </style>
 </head>
 <body><div id="bgimg"></div><div id="bgdim"></div>
@@ -359,6 +366,7 @@ nav button{font-size:15.5px;font-weight:600;opacity:.85}nav button.on{font-weigh
       <div class="chip up" title="核心启动以来累计上传"><span class="k">累计上传</span><b id="h-ut">-</b></div>
       <div class="chip down" title="核心启动以来累计下载"><span class="k">累计下载</span><b id="h-dt">-</b></div>
       <div class="chip" title="mihomo 内存占用"><span class="k">内存</span><b id="h-mem">-</b></div>
+      <div class="chip ad" id="h-ad" onclick="go('广告拦截')" title="今天拦截的广告请求（本地时间 0 点清零，与概览「今日拦截广告」一致），点击查看"><span class="k"><i>⊘</i> 广告拦截</span><b>-</b></div>
       <div class="vchips"><div class="chip vchip" id="hv-panel" onclick="goUpd('upd-chk')" title="面板版本，点击去设置检查更新"><span class="k">面板</span><b>-</b></div>
       <div class="chip vchip" id="hv-core" onclick="goUpd('core-chk')" title="内核版本，点击去设置检查更新"><span class="k">内核</span><b>-</b></div></div>
     </div>
@@ -814,13 +822,18 @@ function go(t){if(TAB==='日志'&&t!=='日志')stopLive();TAB=t;nav();scrollTo({
 
 // 顶栏：核心状态 + 启停 + 实时数据
 const PM_TXT={tproxy:'TProxy',tun:'TUN',off:'已关闭'};
+let AD_TODAY=null; // 今日拦截数（/api/ping 每 15 秒带回）
+function renderAdChip(){const el=$('#h-ad');if(!el)return;const on=STATE.adblock_on!==false;
+  el.querySelector('b').textContent=!on||AD_TODAY==null?'-':(+AD_TODAY||0).toLocaleString('zh-CN');
+  el.title=on?'今天拦截的广告请求（本地时间 0 点清零，与概览「今日拦截广告」一致），点击查看':'广告拦截未开启，点击去开启'}
 let STATE_VER=-1; // data.json 的版本（每次 save 自增），变化时才拉全量 /api/state
 async function loadState(){
   let v=null;
-  try{v=(await api('/api/ping')).version}catch(e){/* 心跳失败则回退全量拉取 */}
+  try{const pg=await api('/api/ping');v=pg.version;AD_TODAY=pg.ad_today}catch(e){/* 心跳失败则回退全量拉取 */}
+  renderAdChip();
   if(v!==null&&v===STATE_VER&&STATE.running!==undefined)return; // 配置无变化：顶栏运行状态由 1 秒实时流保持
   STATE=await api('/api/state');STATE_VER=v;
-  renderCore(STATE.running);renderMode();renderWD();renderPMStat();renderVer()}
+  renderCore(STATE.running);renderAdChip();renderMode();renderWD();renderPMStat();renderVer()}
 function renderCore(run){$('#h-dot').className='dot '+(run?'on':'off');$('#h-run').textContent=run?'运行中':'已停止';
   $('#h-ver').textContent=run&&STATE.version&&STATE.version!=='-'?STATE.version:'';$('#h-run').parentNode.title=run&&STATE.version&&STATE.version!=='-'?(CORE_LABEL[STATE.core]||STATE.core||'')+' '+STATE.version:'';
   $('#h-restart').classList.toggle('hide',!run);$('#h-stop').classList.toggle('hide',!run);$('#h-start').classList.toggle('hide',run)}
@@ -883,7 +896,7 @@ function spark(vals,col,empty){let pts=vals.map((v,i)=>[i,v]).filter(p=>p[1]!=nu
     <path d="${d} L${xy[xy.length-1][0].toFixed(1)},${H} L${xy[0][0].toFixed(1)},${H} Z" fill="url(#${id})"/><path d="${d}" fill="none" stroke="${col}" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`}
 async function loadAdStat(){let a;try{a=await api('/api/adblock')}catch(e){return}
   const n=v=>(+v||0).toLocaleString('zh-CN'),rules=Object.entries(a.loaded||{}).filter(([k])=>k!=='ad-allow').reduce((s,[,v])=>s+(v||0),0);
-  $('#s-ad').textContent=a.enabled?n(a.stats.today):'未开启';$('#s-ad2').textContent=a.enabled?'规则 '+n(rules)+' 条':'在“广告拦截”中开启';
+  $('#s-ad').textContent=a.enabled?n(a.stats.today):'未开启';AD_TODAY=a.stats.today;STATE.adblock_on=a.enabled;renderAdChip();$('#s-ad2').textContent=a.enabled?'规则 '+n(rules)+' 条':'在“广告拦截”中开启';
   const on=$('#ovab-on');on.checked=a.enabled;on.disabled=!!a.updating;
   on.onchange=async e=>{const v=e.target.checked;try{toast('正在应用…');const j=await api('/api/adblock','PUT',{enabled:v});toast(/下载/.test(j.message||'')?j.message:'广告拦截已'+(v?'开启':'关闭'))}catch(x){toast(x.message)}loadAdStat()};
   const H=a.stats.hours||[],req=H.reduce((s,h)=>s+h.req,0),blk=H.reduce((s,h)=>s+h.blk,0),dv=H.filter(h=>h.dns!=null),
