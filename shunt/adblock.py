@@ -1,10 +1,10 @@
 """广告拦截（AdGuard Home 风格的域名过滤）"""
-import copy, hashlib, json, os, re, secrets, threading, time, urllib.request, urllib.error
+import copy, hashlib, ipaddress, json, os, re, secrets, threading, time, urllib.request, urllib.error
 from collections import deque
 from urllib.parse import quote
 
 from .errlog import log_err
-from .base import AB_DIR, AB_STATS_FILE, CONF_DIR, UA, dl_check, udp_dns_query
+from .base import AB_DIR, AB_STATS_FILE, CONF_DIR, FAKEIP_NETS, UA, dl_check, udp_dns_query
 from .data import load, read_json, write_json
 from .mihomo import build_config
 from .core import reload_core
@@ -326,6 +326,15 @@ def ab_check(target):
             "blocked": bool(blocked) and not allowed and bool(ab.get("enabled"))}
 
 
+def is_fake_ip(host):
+    """Fake-IP 网段（198.18.0.0/15 等）的地址：没反查到域名的连接，不能当成「被拦截的域名」进排行"""
+    try:
+        ip = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return False
+    return any(ip in n for n in FAKEIP_NETS)
+
+
 class AdStats:
     """订阅 mihomo info 日志，统计命中广告规则 (REJECT) 的连接；另按小时统计全部连接请求数、拦截数和 DNS 解析耗时（概览「域名过滤」）"""
     RX = re.compile(r"--> (\S+?):\d+ match .*?RuleSet[,(](ad-[0-9a-z]+)\).* using REJECT")
@@ -370,7 +379,8 @@ class AdStats:
             self._merge_req_locked()
             b = self.data["days"].setdefault(time.strftime("%Y-%m-%d"), {"count": 0, "top": {}, "lists": {}})
             b["count"] += 1
-            b["top"][host] = b["top"].get(host, 0) + 1
+            if host != "?" and not is_fake_ip(host):  # 反查不到域名的 Fake-IP / 未知连接只计总数，不进排行
+                b["top"][host] = b["top"].get(host, 0) + 1
             key = prov[3:]
             b["lists"][key] = b["lists"].get(key, 0) + 1
             self.hour()["blk"] += 1
@@ -400,6 +410,7 @@ class AdStats:
     SB_LINE = re.compile(r"^\[(\d+) \d+ms\] (.*)$")
     SB_TO = re.compile(r"inbound/(\w+)\[([^\]]+)\]: inbound (?:packet )?connection to (\S+?):\d+$")
     SB_SNIFF = re.compile(r"router: sniffed (?:packet )?protocol: \w+, domain: (\S+)")
+    SB_FAKE = re.compile(r"router: found fakeip domain: (\S+)")
     SB_REJ = re.compile(r"router: match\[\d+\] .*?\brule_set=(ad-[0-9a-z]+).*=> reject")
     SB_QN = re.compile(r"dns: exchange (\S+?)\.? IN ")
     SB_DREJ = re.compile(r"dns: match\[\d+\] .*?\brule_set=(ad-[0-9a-z]+).*=> (?:predefined|reject)")
@@ -407,7 +418,7 @@ class AdStats:
     def sink_sb(self, line):
         """sing-box debug 日志：按连接 ID 记住目标域名，命中 ad- 规则集的 reject / DNS 拦截记为一次拦截"""
         # 子串预过滤：各分支的 body 关键字，绝大多数 debug 行直接跳过 json 解析
-        if "inbound/" not in line and "sniffed" not in line and "reject" not in line and "dns: " not in line:
+        if "inbound/" not in line and "sniffed" not in line and "reject" not in line and "dns: " not in line and "fakeip" not in line:
             return
         try:
             msg = json.loads(line).get("payload", "")
@@ -431,6 +442,12 @@ class AdStats:
         elif "sniffed" in body:
             m = self.SB_SNIFF.search(body)
             if m:
+                hosts[cid] = m.group(1)
+        elif "found fakeip domain" in body:
+            # 透明代理进来的目标是 198.18.x.x，sing-box 按 Fake-IP 映射还原出域名再匹配规则；
+            # 以前只记了入站的 IP，嗅探不到域名（QUIC、非 TLS 等）时排行里就出现 198.18.0.11 这样的地址
+            m = self.SB_FAKE.search(body)
+            if m and (cid not in hosts or is_fake_ip(hosts[cid])):
                 hosts[cid] = m.group(1)
         elif "=> reject" in body:
             m = self.SB_REJ.search(body)
@@ -479,7 +496,8 @@ class AdStats:
             k = time.strftime("%Y-%m-%d %H", time.localtime(now - i * 3600))
             e = hours.get(k) or {"req": 0, "blk": 0, "dns": [0, 0]}
             h24.append({"h": k[-2:], "req": e["req"], "blk": e["blk"], "dns": round(e["dns"][0] / e["dns"][1], 1) if e["dns"][1] else None})
-        return {"today": b["count"], "top": sorted(b["top"].items(), key=lambda x: -x[1])[:20], "lists": b["lists"],
+        top = [(k, v) for k, v in b["top"].items() if k != "?" and not is_fake_ip(k)]  # 旧版本记下的 Fake-IP 也不显示
+        return {"today": b["count"], "top": sorted(top, key=lambda x: -x[1])[:20], "lists": b["lists"],
                 "days": [{"date": k, "count": days[k]["count"]} for k in sorted(days)], "hours": h24,
                 "dns": self.dns_report(d5, recent)}
 
