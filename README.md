@@ -75,8 +75,8 @@ tar xzf shunt-offline-aarch64-alpine3.24.tar.gz && sh shunt-offline/install.sh
 ## 常用命令
 
 ```sh
-rc-service mihomo restart          # 重启核心
-rc-service mihomo-panel restart    # 重启面板
+rc-service shunt-core restart      # 重启核心
+rc-service shunt restart           # 重启面板
 /opt/mihomo-panel/tproxy.sh stop   # 临时关闭透明代理（apply 恢复）
 ```
 
