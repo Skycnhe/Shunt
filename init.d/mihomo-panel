@@ -1,4 +1,5 @@
 #!/sbin/openrc-run
+# 旧服务名，v7.7.6 起改为 shunt。只为兼容很老的面板在线更新而保留，新安装与已迁移设备不再使用
 # SPDX-License-Identifier: GPL-3.0-or-later
 name="mihomo-panel"
 description="Shunt - mihomo side-router panel"
