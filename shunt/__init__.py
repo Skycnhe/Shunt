@@ -48,6 +48,7 @@ MODULES = [
     "https",
     "access",
     "update_guard",
+    "svcmigrate",
     "static",
     "webapi",
     "cli",
