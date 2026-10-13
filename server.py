@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.7.5"
+PANEL_VERSION = "7.7.6"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -58,6 +58,7 @@ MODULES = [
     "https",
     "access",
     "update_guard",
+    "svcmigrate",
     "static",
     "webapi",
     "cli",
@@ -164,7 +165,11 @@ MIXED = 7890
 WD_INTERVAL = int(os.environ.get("PANEL_WD_INTERVAL", "30"))  # 看门狗检查间隔（秒）
 LOCK = threading.RLock()  # 可重入：load() 内迁移写盘时可能已在 update() 的锁内
 
-SVC = os.environ.get("PANEL_SVC", "rc-service mihomo")  # 核心服务控制命令（测试环境可覆盖）
+# v7.7.6 起服务名为 shunt（面板）/ shunt-core（核心）；还没迁移的旧设备仍是 mihomo-panel / mihomo（svcmigrate.py 负责迁移）
+SVC_NEW = os.path.isfile("/etc/init.d/shunt-core")
+CORE_SVC = "shunt-core" if SVC_NEW else "mihomo"
+PANEL_SVC = "shunt" if os.path.isfile("/etc/init.d/shunt") else "mihomo-panel"
+SVC = os.environ.get("PANEL_SVC", "rc-service " + CORE_SVC)  # 核心服务控制命令（测试环境可覆盖）
 LOG_FILES = [x for x in os.environ.get("PANEL_LOGS", "/var/log/mihomo.log,/var/log/mihomo-panel.log").split(",") if x]
 MIHOMO_LOG = LOG_FILES[0] if LOG_FILES else "/var/log/mihomo.log"
 AB_DIR = os.path.join(CONF_DIR, "adblock")
@@ -243,7 +248,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.7.5"
+PANEL_VERSION = "7.7.6"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -1847,8 +1852,8 @@ SB_DIR = os.environ.get("SB_DIR", "/etc/sing-box")
 SB_CONF = os.path.join(SB_DIR, "config.json")
 SB_RULE_DIR = os.environ.get("SB_RULES", os.path.join(SB_DIR, "rules"))
 SB_SUB_DIR = os.path.join(PANEL_DIR, "sb_subs")
-CORE_FILE = os.path.join(PANEL_DIR, "core")  # init.d/mihomo 读取它决定启动哪个内核
-CORE_PID = os.environ.get("PANEL_CORE_PID", "/run/mihomo.pid")
+CORE_FILE = os.path.join(PANEL_DIR, "core")  # init.d/shunt-core 读取它决定启动哪个内核
+CORE_PID = os.environ.get("PANEL_CORE_PID", "/run/shunt-core.pid" if os.path.isfile("/etc/init.d/shunt-core") else "/run/mihomo.pid")
 CORES = {"mihomo": "mihomo", "smart": "mihomo Smart", "singbox": "sing-box"}
 SB_GEO = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo"
 SB_REPO = os.environ.get("SB_REPO", "https://github.com/SagerNet/sing-box/releases")
@@ -3556,7 +3561,7 @@ from .sysopt import proxy_opener, sh
 from .https import restart_self
 from .update_guard import start_update_guard
 PANEL_RAW = os.environ.get("PANEL_RAW", "https://raw.githubusercontent.com/Skycnhe/Shunt/Hk001")
-UPD_FILES = ["server.py", "index.html", "tproxy.sh", "selftest.sh", "init.d/mihomo", "init.d/mihomo-panel"]
+UPD_FILES = ["server.py", "index.html", "tproxy.sh", "selftest.sh", "init.d/shunt", "init.d/shunt-core"]
 UPD_LIST = "update-files.txt"  # 仓库里的部署文件清单：以后增减文件只改清单，不用再改更新程序
 
 
@@ -6463,7 +6468,7 @@ def diagnose():
     alive = code == 200
     sb = active_core(d) == "singbox"
     item(f"{CORES[active_core(d)]} 核心", alive, json.loads(ver).get("version", "") if alive else "核心未运行或控制器无响应",
-         "在顶部点「启动」，或执行 rc-service mihomo restart 并查看 /var/log/mihomo.log")
+         "在顶部点「启动」，或执行 rc-service shunt-core restart 并查看 /var/log/mihomo.log")
     if sb:
         if os.path.isfile(SB_BIN) and os.path.isfile(SB_CONF):
             ok, err = check_sb_config(SB_CONF)
@@ -6985,7 +6990,7 @@ _SRC['shunt.https'] = '''"""HTTPS"""
 import os, shlex, socket, ssl, sys
 from http.server import ThreadingHTTPServer
 
-from .base import CERT, KEY, PANEL_DIR
+from .base import CERT, KEY, PANEL_DIR, PANEL_SVC
 from .sysopt import sh
 
 
@@ -7031,7 +7036,7 @@ class Server(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
-_DEFAULT_RESTART = "rc-service mihomo-panel restart"  # 可信默认值（含参数，直接拼）
+_DEFAULT_RESTART = "rc-service " + PANEL_SVC + " restart"  # 可信默认值（含参数，直接拼）
 
 
 def restart_self():
@@ -7106,7 +7111,7 @@ def update_guard_script(files):
     """更新后由独立的 shell 脚本检查新面板：90 秒内一直打不开就把 .backup 里的旧版本放回去并重启"""
     bak = os.path.join(BASE, ".backup")
     cps = "\\n".join(f"  [ -f '{bak}/{f}' ] && cp '{bak}/{f}' '{local_file(f)}'" for f in files)
-    restart = os.environ.get("PANEL_RESTART", "rc-service mihomo-panel restart")
+    restart = os.environ.get("PANEL_RESTART", "rc-service shunt restart 2>/dev/null || rc-service mihomo-panel restart")  # 回滚时服务可能已改名
     return f"""#!/bin/sh
 # 由 Shunt 面板生成：在线更新后自动检查，新版启动失败时回滚
 sleep 30
@@ -7177,6 +7182,75 @@ def group_meta(d, cfg):
 def rename_policy(d, old, new):
     """策略组改名 / 删除（new 为节点选择）时同步更新自定义规则、规则集、其他自定义组、DNS 的引用；返回受影响条目数"""
     return map_refs(d, {old: new}, drop={old} if new == G_SEL else ())
+'''
+_SRC['shunt.svcmigrate'] = '''"""v7.7.6 服务改名：mihomo-panel → shunt（面板），mihomo → shunt-core（核心）。
+旧设备在线更新后由新面板在后台执行一次：装好新 init 脚本、换开机启动项、停旧服务起新服务，成功后删掉旧脚本；
+新服务起不来就恢复旧服务。核心原本是手动停止的，迁移后保持停止。"""
+import os, threading, time
+
+from .base import BASE, wd_hold
+from .errlog import log_err
+from .sysopt import sh
+
+MIGRATE_SH = os.path.join(BASE, ".svc-migrate.sh")
+SCRIPT = """#!/bin/sh
+# 由 Shunt 面板生成：服务改名迁移（mihomo-panel → shunt，mihomo → shunt-core），执行一次后自删
+exec >>/var/log/mihomo-panel.log 2>&1
+echo "[svc-migrate] $(date '+%F %T') 服务改名：mihomo-panel → shunt，mihomo → shunt-core"
+B={base}
+for s in shunt shunt-core; do cp "$B/init.d/$s" "/etc/init.d/$s" && chmod +x "/etc/init.d/$s" || {{ echo "[svc-migrate] 复制 $s 失败"; rm -f "$0"; exit 1; }}; done
+core_on=0; rc-service mihomo status >/dev/null 2>&1 && core_on=1
+rc-update del mihomo default >/dev/null 2>&1; rc-update del mihomo-panel default >/dev/null 2>&1
+rc-update add shunt-core default >/dev/null 2>&1; rc-update add shunt default >/dev/null 2>&1
+if [ $core_on = 1 ]; then
+  rc-service mihomo stop
+  if ! rc-service shunt-core start; then
+    echo "[svc-migrate] shunt-core 启动失败，恢复旧服务"
+    rc-service shunt-core zap >/dev/null 2>&1
+    rc-update del shunt-core default; rc-update del shunt default; rc-update add mihomo default; rc-update add mihomo-panel default
+    rm -f /etc/init.d/shunt /etc/init.d/shunt-core
+    rc-service mihomo start; rm -f "$0"; exit 1
+  fi
+fi
+rc-service mihomo-panel stop   # 结束当前（旧服务名下的）面板进程
+sleep 1
+if rc-service shunt start; then
+  rc-service mihomo zap >/dev/null 2>&1; rc-service mihomo-panel zap >/dev/null 2>&1
+  rm -f /etc/init.d/mihomo /etc/init.d/mihomo-panel
+  echo "[svc-migrate] 完成：rc-service shunt / shunt-core"
+else
+  echo "[svc-migrate] shunt 启动失败，恢复旧面板服务"
+  rc-update del shunt default; rc-update add mihomo-panel default
+  rc-service mihomo-panel start
+fi
+rm -f "$0"
+"""
+
+
+def need_migrate():
+    return (BASE == "/opt/mihomo-panel" and os.path.isfile("/etc/init.d/mihomo-panel")
+            and not os.path.isfile("/etc/init.d/shunt")
+            and os.path.isfile(os.path.join(BASE, "init.d", "shunt")) and os.path.isfile(os.path.join(BASE, "init.d", "shunt-core"))
+            and hasattr(os, "geteuid") and os.geteuid() == 0)
+
+
+def svc_migrate(delay=20):
+    """面板启动 delay 秒后（让在线更新的回滚守护先确认新版能打开）在后台跑迁移脚本"""
+    if not need_migrate():
+        return False
+
+    def run():
+        time.sleep(delay)
+        try:
+            with open(MIGRATE_SH, "w") as f:
+                f.write(SCRIPT.format(base=BASE))
+            os.chmod(MIGRATE_SH, 0o755)
+            wd_hold(180, "服务改名迁移")
+            sh(f"(command -v setsid >/dev/null && setsid sh '{MIGRATE_SH}' || sh '{MIGRATE_SH}') >/dev/null 2>&1 &")
+        except OSError as e:
+            log_err("服务改名迁移", e)
+    threading.Thread(target=run, daemon=True).start()
+    return True
 '''
 _SRC['shunt.static'] = '''"""静态资源：gzip + ETag"""
 import base64, gzip, hashlib, os, re
@@ -8503,6 +8577,7 @@ class H(BaseHTTPRequestHandler):
 _SRC['shunt.cli'] = '''""""""
 import ipaddress, os, re, signal, ssl, sys, threading
 
+from .svcmigrate import svc_migrate
 from .errlog import log_err
 from . import adblock, stats
 from .base import CERT, KEY, PANEL_DIR, PORT
@@ -8555,7 +8630,7 @@ def main():
     if "--tpenv" in sys.argv:
         print(tp_env())
         sys.exit(0)
-    if "--gen" in sys.argv:  # init.d/mihomo 启动前调用：按当前内核生成配置
+    if "--gen" in sys.argv:  # init.d/shunt-core 启动前调用：按当前内核生成配置
         try:
             opt_fix_ulimit()
         except Exception as e:
@@ -8604,6 +8679,7 @@ def main():
         opt_fix_ulimit()
     except Exception as e:
         log_err("文件句柄修正", e)
+    svc_migrate()  # v7.7.6 服务改名：旧设备在线更新后自动迁移到 shunt / shunt-core
     if os.path.isfile(ROLLBACK_NOTE):
         log_err("面板在线更新", rfile(ROLLBACK_NOTE))
         os.remove(ROLLBACK_NOTE)
