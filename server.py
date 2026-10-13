@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.7.4"
+PANEL_VERSION = "7.7.5"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -104,6 +104,17 @@ CONF_DIR = os.environ.get("MIHOMO_DIR", "/etc/mihomo")
 DATA_FILE = os.environ.get("PANEL_DATA", "/etc/mihomo-panel/data.json")
 LGBM_URL = os.environ.get("SMART_REPO", "https://github.com/vernesong/mihomo/releases") + "/download/LightGBM-Model/Model.bin"
 UPD_STATE = {"busy": False}  # 面板在线更新忙标志：panel_update 与 core_update 共用，避免循环导入
+WD_HOLD = {"until": 0.0, "why": ""}  # 面板自己在重启 / 重载核心：这段时间内看门狗不判定故障（sysopt.svc_restart、sb_hot_reload 置位）
+
+
+def wd_hold(sec, why="", reset=False):
+    """reset=True：直接改成「从现在起 sec 秒」，用于重启命令返回后缩短暂停期"""
+    import time as _t
+    t = _t.time() + sec
+    WD_HOLD["until"] = t if reset else max(WD_HOLD["until"], t)
+    WD_HOLD["why"] = why
+
+
 CORE_UPD = {"busy": False, "stage": "", "pct": 0, "ok": None, "message": "", "log": deque(maxlen=30), "t": 0}  # 内核更新状态：core_update 与 notify 共用
 MASS_TEST = {"n": 0}  # 进行中的全节点测速（/group/*/delay）计数：corehttp 置位，notify 看门狗据此暂停故障判定，避免高负载误判
 
@@ -232,7 +243,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.7.4"
+PANEL_VERSION = "7.7.5"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -1634,14 +1645,14 @@ def check_config(path, kind=None):
 _SRC['shunt.core'] = '''"""核心交互"""
 import os, threading, time
 
-from .base import CONF_DIR, LOCK, SVC
+from .base import CONF_DIR, LOCK, wd_hold
 from .corehttp import core, core_json
 from .data import load, read_json, save
 from .groups import provider_nodes
 from .mihomo import build_config, check_config, write_config
 from .sb_common import SB_CONF, active_core
 from .sb_config import build_singbox, check_sb_config, sb_hot_reload, sb_log_error, sb_rule_need, sb_sync_assets, write_sb_config
-from .sysopt import sh
+from .sysopt import svc_restart
 from .notify import WD, core_alive
 
 
@@ -1701,12 +1712,13 @@ def reload_core(prev=None):
             with LOCK:
                 save(prev)
                 write_sb_config(load(), SB_CONF)
-            sh(SVC + " restart", timeout=90)
+            svc_restart(timeout=90)
             return False, "sing-box 启动失败，已撤销本次修改" + ("：" + tail if tail else "")
         return ok, msg
+    wd_hold(45, "mihomo 重载配置")
     code, body = core("PUT", "/configs?force=true", {"path": final}, timeout=30)
     if code == 502:  # 核心没在跑，尝试启动
-        sh(SVC + " restart")
+        svc_restart()
         return True, "已写入配置并重启 mihomo"
     return code < 300, body.decode(errors="ignore") or "配置已重载"
 
@@ -2063,6 +2075,7 @@ def yaml_lite(text):
 _SRC['shunt.sb_subs'] = '''"""订阅：sing-box 不能自己拉取订阅，由面板下载、解析成节点后写进配置"""
 import json, os, re, threading, time, urllib.request, urllib.error
 
+from .errlog import log_err
 from .base import CONF_DIR, DEFAULT_EXCLUDE, PANEL_DIR, dl_check
 from .data import load, safe, write_json
 from .links import b64d, parse_link
@@ -2126,8 +2139,8 @@ def _yaml_items(sec):
             v = (v or {}).get("x")
             if isinstance(v, list) and v and isinstance(v[0], dict):
                 out.append(v[0])
-        except Exception:
-            pass
+        except Exception as e:
+            log_err("订阅节点解析（跳过一条）", e)
     return out
 
 
@@ -2781,9 +2794,7 @@ _SRC['shunt.sb_config'] = '''"""生成 sing-box 配置"""
 import ipaddress, json, os, re, signal, threading, time, urllib.request, urllib.error
 
 from .base import (
-    AB_DIR, BUILTIN_POLICIES, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, SVC, UA,
-    dl_check,
-)
+    AB_DIR, BUILTIN_POLICIES, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, UA, dl_check, wd_hold)
 from .data import auto_name, lb_dropped_names, lb_names, lb_old_name, load, safe, write_json
 from .groups import PROV, gcfg, rx
 from .mihomo import BUILTIN_GEO, build_config, build_rule_providers, dns_cfg, policy_parts, tun_params, write_config
@@ -2795,7 +2806,7 @@ from .sb_nodes import sb_outbound
 from .sb_rules import SBRules, geo_srs_entry
 from .ruleutil import _mh_domain
 from .sb_dns import sb_dns
-from .sysopt import nft_ok, proxy_opener, sh
+from .sysopt import nft_ok, proxy_opener, sh, svc_restart
 from .notify import core_alive
 def build_singbox(d):
     """把 build_config 生成的 mihomo 结构翻译成 sing-box 配置；返回 (配置, 警告列表, 需要的规则集文件)"""
@@ -3257,6 +3268,7 @@ def sb_hot_reload():
     pid = core_pid()
     if pid:
         try:
+            wd_hold(45, "sing-box 重载配置")  # 重载期间控制端口短暂不可用，看门狗不要当成故障
             os.kill(pid, signal.SIGHUP)
             for _ in range(20):
                 time.sleep(0.5)
@@ -3265,7 +3277,7 @@ def sb_hot_reload():
             return False, "sing-box 重载后未响应，请查看日志"
         except OSError:
             pass
-    sh(SVC + " restart", timeout=90)
+    svc_restart(timeout=90)
     return True, "已写入配置并重启 sing-box"
 
 
@@ -3314,7 +3326,7 @@ def sb_fake_rule_providers(d):
 _SRC['shunt.sb_switch'] = '''"""内核切换"""
 import hashlib, io, json, os, re, shutil, threading, time
 
-from .base import CONF_DIR, CORE_UPD, MIHOMO_LOG, SMART_BIN, SVC
+from .base import CONF_DIR, CORE_UPD, MIHOMO_LOG, SMART_BIN
 from .data import load, update
 from .groups import PROV, gcfg
 from .mihomo import check_config, mh_bin, write_config
@@ -3322,7 +3334,7 @@ from .sb_common import CORES, SB_API, SB_BIN, SB_CONF, SB_REPO, SB_STATE, active
 from .sb_subs import sb_update_subs
 from .sb_config import check_sb_config, sb_sync_assets, sb_version, write_sb_config
 from .core_update import LGBM_FILE, _cu, bin_version, lgbm_fetch, mh_fetch, open_url, release_digest
-from .sysopt import sh
+from .sysopt import sh, svc_restart
 from .notify import WD, core_alive, notify
 from .migrate import restore_selections, snapshot_selections
 def sb_arch():
@@ -3477,7 +3489,7 @@ def core_switch_job(kind, gh):
         PROV.update(t=0, data=None)
         _cu("重启核心", 88, f"正在以 {label} 重启核心（局域网会断网几秒）")
         WD["manual_stop"] = False
-        sh(SVC + " restart", timeout=90)
+        svc_restart(timeout=90)
         for _ in range(30):
             time.sleep(1)
             if core_alive():
@@ -3486,7 +3498,7 @@ def core_switch_job(kind, gh):
             tail = [l for l in sh(f"tail -n 30 '{MIHOMO_LOG}'")[1].splitlines() if re.search(r"FATAL|ERROR|level=(?:error|fatal)", l)]
             update(lambda x: x.update(core=prev))
             write_core_file(prev)
-            sh(SVC + " restart", timeout=90)
+            svc_restart(timeout=90)
             log = re.sub(r"\\x1b\\[[0-9;]*m", "", "\\n".join(tail[-3:]))[-400:]
             raise ValueError(f"{label} 30 秒内未响应，已切回 {CORES[prev]}。" + ("日志：" + log if log else "请查看核心日志"))
         threading.Thread(target=restore_selections, daemon=True).start()
@@ -3515,14 +3527,14 @@ def sb_update_job(channel, gh, force=False):
                 shutil.copy2(SB_BIN + ".bak", SB_BIN)
                 raise ValueError("新版 sing-box 不兼容当前配置，已恢复原版本：" + err)
             _cu("重启核心", 85, "正在重启核心")
-            sh(SVC + " restart", timeout=90)
+            svc_restart(timeout=90)
             for _ in range(30):
                 time.sleep(1)
                 if core_alive():
                     break
             else:
                 shutil.copy2(SB_BIN + ".bak", SB_BIN)
-                sh(SVC + " restart", timeout=90)
+                svc_restart(timeout=90)
                 raise ValueError("新版 sing-box 30 秒内未响应，已恢复原版本")
         CORE_UPD.update(ok=True, message=f"sing-box 已从 {cur or '未安装'} 更新到 {nv}" + ("，旧版本已备份" if cur else ""))
     except Exception as e:
@@ -3704,12 +3716,12 @@ from collections import deque
 from urllib.parse import quote
 
 from .errlog import log_err
-from .base import CONF_DIR, CORE_UPD, LGBM_URL, MIHOMO_LOG, SVC, UA, UPD_STATE, dl_check
+from .base import CONF_DIR, CORE_UPD, LGBM_URL, MIHOMO_LOG, UA, UPD_STATE, dl_check
 from .data import load
 from .mihomo import mh_bin, write_config
 from .core import reload_core
 from .sb_common import CORES, active_core
-from .sysopt import proxy_opener, sh
+from .sysopt import proxy_opener, sh, svc_restart
 from .notify import core_alive, notify
 CORE_REPO = os.environ.get("CORE_REPO", "https://github.com/MetaCubeX/mihomo/releases")
 CORE_CHANNELS = {"stable": "latest/download", "alpha": "download/Prerelease-Alpha"}
@@ -3841,7 +3853,7 @@ def _core_swap_and_restart(src, label, kind="mihomo"):
         _cu("完成", 95, f"已替换为 {label}（当前内核是 {CORES[active_core()]}，切到 {CORES[kind]} 时生效）")
         return True, ""
     _cu("重启核心", 90, f"已替换为 {label}，正在重启核心")
-    sh(SVC + " restart", timeout=90)
+    svc_restart(timeout=90)
     for _ in range(30):
         time.sleep(1)
         if core_alive():
@@ -3849,7 +3861,7 @@ def _core_swap_and_restart(src, label, kind="mihomo"):
     if had_old and src != bak:  # 新核心起不来 → 自动恢复
         _cu("自动回滚", 95, "新核心 30 秒内未响应，正在恢复原核心")
         shutil.copy2(bak, B)
-        sh(SVC + " restart", timeout=90)
+        svc_restart(timeout=90)
         return False, "新核心启动失败，已自动恢复为原核心。日志：" + sh(f"tail -n 5 '{MIHOMO_LOG}'")[1][-300:]
     return False, "核心重启后 30 秒内未响应，请查看日志"
 
@@ -4015,7 +4027,7 @@ import http.client, json, os, re, ssl, subprocess, threading, time, urllib.reque
 from collections import deque
 from urllib.parse import urlsplit
 
-from .base import MIXED, PANEL_DIR, TESTS, UA, SafeRedirectHandler, dl_check
+from .base import MIXED, PANEL_DIR, SVC, TESTS, UA, SafeRedirectHandler, dl_check, wd_hold
 from .data import load, update
 PROC_SYS = os.environ.get("PANEL_PROC_SYS", "/proc/sys")
 SYS_ROOT = os.environ.get("PANEL_SYS_ROOT", "/sys")
@@ -4431,6 +4443,16 @@ def sh(cmd, timeout=60):
         return 1, str(e)
 
 
+def svc_restart(timeout=90, why="面板重启核心"):
+    """重启核心服务。重启及启动后的加载期（大规则集、Fake-IP 缓存）内看门狗暂停判定，
+    否则启动慢一点就会被看门狗当成「无响应」再重启一次，形成连环重启"""
+    wd_hold(timeout + 60, why)
+    try:
+        return sh(SVC + " restart", timeout=timeout)
+    finally:
+        wd_hold(60, why, reset=True)  # 命令返回后只再给 60 秒加载时间
+
+
 def proxy_opener(proxy=True):
     hs = [urllib.request.ProxyHandler({"http": f"http://127.0.0.1:{MIXED}", "https": f"http://127.0.0.1:{MIXED}"} if proxy else {})]
     # SafeRedirectHandler 替换默认的重定向处理器：跟随 302 前校验目标为公网地址（SSRF 防护）；
@@ -4611,15 +4633,15 @@ def favicon(url):
     return None, None
 '''
 _SRC['shunt.notify'] = '''"""Telegram 通知"""
-import json, socket, threading, time, urllib.request, urllib.error
+import json, os, socket, threading, time, urllib.request, urllib.error
 from collections import deque
 from urllib.parse import quote
 
-from .base import CORE_UPD, G_MANUAL, HC, MASS_TEST, NOTIFY_FILE, SVC, TPROXY_SH
+from .base import CORE_UPD, G_MANUAL, HC, MASS_TEST, MIHOMO_LOG, NOTIFY_FILE, TPROXY_SH, WD_HOLD
 from .data import load, read_json, write_json
 from .corehttp import core, core_json
-from .sb_common import CORES, active_core
-from .sysopt import proxy_opener, sh
+from .sb_common import CORE_PID, CORES, active_core
+from .sysopt import proxy_opener, sh, svc_restart
 def tg_send(text, d=None):
     d = d or load()
     if not d.get("tg_token") or not d.get("tg_chat"):
@@ -4677,8 +4699,35 @@ def core_alive_confirmed(retries=2, gap=3):
     return False
 
 
+def core_proc_alive():
+    """核心进程是否还在（pid 文件 + kill 0）。用来区分「进程退出」和「进程在但控制接口卡住」"""
+    try:
+        os.kill(int(open(CORE_PID).read().strip()), 0)
+        return True
+    except Exception:
+        return False
+
+
+def core_last_error():
+    """核心日志末尾 16KB 里最后一条 FATAL / ERROR / panic，写进看门狗事件，便于事后查原因"""
+    try:
+        with open(MIHOMO_LOG, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 16 * 1024))
+            lines = f.read().decode("utf-8", "ignore").splitlines()
+    except OSError:
+        return ""
+    for line in reversed(lines):
+        if ("FATAL" in line or " ERROR " in line or "panic:" in line or "level=error" in line or "level=fatal" in line) \\
+                and "missing fakeip record" not in line:
+            return line.strip()[-160:]
+    return ""
+
+
 def watchdog_tick():
     if CORE_UPD["busy"]:  # 内核更新过程中核心会重启，不算故障
+        return
+    if time.time() < WD_HOLD["until"]:  # 面板自己正在重启 / 重载核心（含启动后的加载期）
         return
     d = load()
     WD["last_check"] = int(time.time())
@@ -4705,8 +4754,11 @@ def watchdog_tick():
     WD["fails"] += 1
     if WD["fails"] <= 2:
         WD["status"] = "restarting"
-        wd_event(f"{cname} 核心无响应，第 {WD['fails']} 次自动重启", push=WD["fails"] == 1)
-        sh(SVC + " restart", timeout=60)
+        why = "控制接口无响应（进程仍在）" if core_proc_alive() else "进程已退出"
+        err = core_last_error()
+        wd_event(f"{cname} 核心{why}，第 {WD['fails']} 次自动重启" + (f"；日志最后一条错误：{err}" if err else ""),
+                 push=WD["fails"] == 1)
+        svc_restart(timeout=60, why="看门狗重启核心")
         return
     if WD["status"] != "direct":
         WD["status"] = "direct"
@@ -4715,7 +4767,7 @@ def watchdog_tick():
             WD["tp_off"] = True
         wd_event(f"{cname} 核心重启 2 次仍无响应，已关闭透明代理，局域网暂时直连上网")
     elif WD["fails"] % 10 == 0:  # 直连状态下每 5 分钟再尝试拉起一次
-        sh(SVC + " restart", timeout=60)
+        svc_restart(timeout=60)
         if redirecting and core_alive():
             sh(TPROXY_SH + " stop")  # rc 的 start_post 会重新挂上规则，等下一轮确认恢复后再开
             # TUN 模式下核心一启动就接管路由，无法“暂不接管”，下一轮检查会正常恢复
@@ -6131,7 +6183,7 @@ from collections import deque
 from urllib.parse import quote
 
 from .errlog import log_err
-from .base import G_MANUAL, HC, SVC
+from .base import G_MANUAL, HC
 from .data import load
 from .core import refresh_regions, reload_core
 from .corehttp import core, core_json
@@ -6139,7 +6191,7 @@ from .sb_common import active_core
 from .groups import sb_sub_cache
 from .sb_subs import sb_update_subs
 from .sb_config import sb_sync_assets
-from .sysopt import sh
+from .sysopt import svc_restart
 from .notify import WD
 from .latency import bg_fetch, bg_meta, bg_meta_save
 from .adblock import AB_STATE, ab_meta, adblock_update
@@ -6177,7 +6229,7 @@ def run_task(name):
         return not bad, "订阅已更新" if not bad else "以下订阅更新失败：" + "、".join(bad)
     if name == "core_restart":
         WD["manual_stop"] = False
-        code, out = sh(SVC + " restart", timeout=90)
+        code, out = svc_restart(timeout=90)
         return code == 0, "核心已重启" if code == 0 else out[-200:]
     if name == "geo_update":
         code, raw = core("POST", "/configs/geo", {}, timeout=180)
@@ -6484,7 +6536,7 @@ def diagnose():
                           ("cn", "经代理访问国内", "核心或 7890 端口异常，查看日志"),
                           ("proxy", "经代理访问国外", "当前节点不可用：去「节点」测速并切换，或更新订阅")):
         ok, v = res.get(k, (False, "超时"))
-        item(label, ok, f"{v} ms" if ok else v, fix)
+        item(label, ok, f"{v} ms（完整请求：DNS + TCP + TLS + 首包，比概览的复用连接延迟高）" if ok else v, fix)
     try:
         du = shutil.disk_usage(CONF_DIR)
         free = du.free / 2**20
@@ -6739,6 +6791,7 @@ import shlex
 import subprocess
 import time
 
+from .errlog import log_err
 from .sysopt import proxy_opener, sh
 
 IP_ECHO = "https://api.ipify.org"  # 返回纯文本公网 IP
@@ -6793,8 +6846,8 @@ def _fetch_cn_ip():
         m = re.search(r"当前 IP：([0-9.]+)\\s*来自于：(.+)", txt)
         if m:
             return m.group(1).strip(), m.group(2).strip()
-    except Exception:
-        pass
+    except Exception as e:
+        log_err("出口 IP 查询 (myip.ipip.net)", e)
     return "", ""
 
 
@@ -6842,8 +6895,8 @@ def _geo(ip):
         j = json.loads(_fetch(GEO_URL % ip, False, timeout=10))
         if j.get("status") == "success":
             return " ".join(p for p in (j.get("country"), j.get("regionName"), j.get("city")) if p)
-    except Exception:
-        pass
+    except Exception as e:
+        log_err("IP 归属地查询", e)
     return ""
 
 
@@ -7173,7 +7226,7 @@ from . import adblock, stats
 from .base import (
     AB_DIR, AB_PRESETS, BUILTIN_POLICIES, CERT, DEFAULT_EXCLUDE, DNS_DEFAULT, DNS_LISTS, GROUP_TYPES, G_MANUAL, G_SEL, HC, KEY,
     LB_STRATEGIES, LOCK, MAX_BODY, MIHOMO_BIN, MIHOMO_LOG, PANEL_VERSION, PRIMARY_REGIONS, PROXY_MODES, REGIONS, SMART_BIN, SVC, TPROXY_SH,
-    TUN_STACKS
+    TUN_STACKS, wd_hold
 )
 from .data import HISTORY_FILE, HISTORY_SKIP, auto_name, config_version, lb_names, load, migrate_names, read_json, region_lb_set, save, update
 from .links import add_links, q1, reserved_names
@@ -7190,7 +7243,7 @@ from .core_update import (
     CORE_CHANNELS, CORE_UPD, LGBM_FILE, bin_version, core_check, core_job_start, core_rollback_job, core_upd_status, core_update_job,
     lgbm_fetch, lgbm_fetch_reload
 )
-from .sysopt import delay_test, favicon, nft_ok, opt_apply, opt_status, sh, speed_test
+from .sysopt import delay_test, favicon, nft_ok, opt_apply, opt_status, sh, speed_test, svc_restart
 from .notify import WD, tg_send
 from .latency import BG_FILE, RETEST, bg_fetch, bg_meta, bg_meta_save, bg_save, bg_type, fix_global, proxies_merged, retest_soon
 from .stats import arp_table
@@ -7832,7 +7885,7 @@ class H(BaseHTTPRequestHandler):
                 os.replace(SB_BIN + ".bak", SB_BIN)
                 os.replace(tmp, SB_BIN + ".bak")
                 if active_core() == "singbox":
-                    sh(SVC + " restart", timeout=90)
+                    svc_restart(timeout=90)
                 return self.reply(True, f"已回滚到 sing-box {sb_version()}")
             ch = b.get("channel") or "stable"
             ok, msg = core_job_start(sb_update_job, ch, load().get("gh_proxy") or "", bool(b.get("force")))
@@ -8354,7 +8407,12 @@ class H(BaseHTTPRequestHandler):
             return self.reply(*reload_core())
         if act in ("restart", "stop", "start"):
             WD["manual_stop"] = act == "stop"
-            code, out = sh(SVC + " " + act, timeout=90)
+            if act == "stop":
+                code, out = sh(SVC + " stop", timeout=90)
+            else:  # 启动 / 重启：同样让看门狗等内核加载完
+                wd_hold(150, "手动" + act)
+                code, out = sh(SVC + " " + act, timeout=90)
+                wd_hold(60, "手动" + act, reset=True)
             if act != "stop":
                 retest_soon()
             return self.reply(code == 0, out)
