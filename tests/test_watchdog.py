@@ -65,7 +65,7 @@ class Watchdog(unittest.TestCase):
 class InitScript(unittest.TestCase):
     def test_graceful_stop(self):
         import os
-        txt = open(os.path.join(os.path.dirname(os.path.dirname(__file__)), "init.d", "mihomo")).read()
+        txt = open(os.path.join(os.path.dirname(os.path.dirname(__file__)), "init.d", "shunt-core")).read()
         self.assertIn('retry="TERM/15/KILL/5"', txt)
 
 
