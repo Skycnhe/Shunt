@@ -1,5 +1,11 @@
 # 更新记录与详细说明
 
+## v7.7.6 服务改名为 shunt
+- 面板服务 mihomo-panel → **shunt**，内核服务 mihomo → **shunt-core**：`rc-service shunt restart` 重启面板，`rc-service shunt-core restart` 重启内核
+- 在线更新到这一版后自动迁移：面板启动约 20 秒后换好开机启动项、停旧服务起新服务（内核会断开几秒），成功后删掉旧的 /etc/init.d/mihomo、mihomo-panel；新服务起不来就恢复旧服务。内核原本是手动停止的，迁移后保持停止
+- 重新运行 install.sh 覆盖安装时，也会先停掉并删除旧服务
+- 目录和日志路径不变（/opt/mihomo-panel、/etc/mihomo-panel、/var/log/mihomo*.log）
+
 ## v7.7.5 看门狗不再误伤正在重启的内核
 - 面板自己重启或重载内核时（保存设置、切换或更新内核、定时重启，以及看门狗自己的重启），看门狗会暂停判定，等启动加载完再查。以前 sing-box 启动慢一点就会被当成「无响应」再重启一次，连续重启好几次，Fake-IP 映射也跟着丢
 - 看门狗记录重启原因：区分「进程已退出」和「控制接口无响应（进程仍在）」，并附上内核日志里最后一条错误
