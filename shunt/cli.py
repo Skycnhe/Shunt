@@ -1,5 +1,5 @@
 """"""
-import ipaddress, os, re, signal, ssl, sys, threading
+import ipaddress, os, re, signal, ssl, sys, threading, time
 
 from .svcmigrate import svc_migrate
 from .errlog import log_err
@@ -45,8 +45,19 @@ def tp_env():
             f"MODE={d['proxy_mode']}\nDNS_ALL={1 if dns_cfg(d)['block_bypass'] else 0}")
 
 
+def default_tz():
+    """设备没设时区（无 /etc/localtime 也无 TZ，Alpine 默认即 UTC）时按北京时间算「今天」：
+    广告拦截 / 流量的今日统计在本地 0 点清零，定时任务的时刻也按北京时间。设备自己设了时区则以设备为准"""
+    if os.environ.get("TZ") or os.path.exists("/etc/localtime"):
+        return False
+    os.environ["TZ"] = "CST-8"
+    time.tzset()
+    return True
+
+
 def main():
     """命令行入口：带参数时执行一次性命令，否则启动面板"""
+    default_tz()
     if "--bypass" in sys.argv:  # 兼容旧版 tproxy.sh
         env = dict(l.split("=", 1) for l in tp_env().splitlines())
         print(env["B_IP"].strip("'") + "|" + env["B_MAC"].strip("'"))
