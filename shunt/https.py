@@ -2,7 +2,7 @@
 import os, shlex, socket, ssl, sys
 from http.server import ThreadingHTTPServer
 
-from .base import CERT, KEY, PANEL_DIR
+from .base import CERT, KEY, PANEL_DIR, PANEL_SVC
 from .sysopt import sh
 
 
@@ -48,7 +48,7 @@ class Server(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
-_DEFAULT_RESTART = "rc-service mihomo-panel restart"  # 可信默认值（含参数，直接拼）
+_DEFAULT_RESTART = "rc-service " + PANEL_SVC + " restart"  # 可信默认值（含参数，直接拼）
 
 
 def restart_self():
