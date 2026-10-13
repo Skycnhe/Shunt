@@ -9,7 +9,7 @@ from . import adblock, stats
 from .base import (
     AB_DIR, AB_PRESETS, BUILTIN_POLICIES, CERT, DEFAULT_EXCLUDE, DNS_DEFAULT, DNS_LISTS, GROUP_TYPES, G_MANUAL, G_SEL, HC, KEY,
     LB_STRATEGIES, LOCK, MAX_BODY, MIHOMO_BIN, MIHOMO_LOG, PANEL_VERSION, PRIMARY_REGIONS, PROXY_MODES, REGIONS, SMART_BIN, SVC, TPROXY_SH,
-    TUN_STACKS
+    TUN_STACKS, wd_hold
 )
 from .data import HISTORY_FILE, HISTORY_SKIP, auto_name, config_version, lb_names, load, migrate_names, read_json, region_lb_set, save, update
 from .links import add_links, q1, reserved_names
@@ -26,7 +26,7 @@ from .core_update import (
     CORE_CHANNELS, CORE_UPD, LGBM_FILE, bin_version, core_check, core_job_start, core_rollback_job, core_upd_status, core_update_job,
     lgbm_fetch, lgbm_fetch_reload
 )
-from .sysopt import delay_test, favicon, nft_ok, opt_apply, opt_status, sh, speed_test
+from .sysopt import delay_test, favicon, nft_ok, opt_apply, opt_status, sh, speed_test, svc_restart
 from .notify import WD, tg_send
 from .latency import BG_FILE, RETEST, bg_fetch, bg_meta, bg_meta_save, bg_save, bg_type, fix_global, proxies_merged, retest_soon
 from .stats import arp_table
@@ -668,7 +668,7 @@ class H(BaseHTTPRequestHandler):
                 os.replace(SB_BIN + ".bak", SB_BIN)
                 os.replace(tmp, SB_BIN + ".bak")
                 if active_core() == "singbox":
-                    sh(SVC + " restart", timeout=90)
+                    svc_restart(timeout=90)
                 return self.reply(True, f"已回滚到 sing-box {sb_version()}")
             ch = b.get("channel") or "stable"
             ok, msg = core_job_start(sb_update_job, ch, load().get("gh_proxy") or "", bool(b.get("force")))
@@ -1190,7 +1190,12 @@ class H(BaseHTTPRequestHandler):
             return self.reply(*reload_core())
         if act in ("restart", "stop", "start"):
             WD["manual_stop"] = act == "stop"
-            code, out = sh(SVC + " " + act, timeout=90)
+            if act == "stop":
+                code, out = sh(SVC + " stop", timeout=90)
+            else:  # 启动 / 重启：同样让看门狗等内核加载完
+                wd_hold(150, "手动" + act)
+                code, out = sh(SVC + " " + act, timeout=90)
+                wd_hold(60, "手动" + act, reset=True)
             if act != "stop":
                 retest_soon()
             return self.reply(code == 0, out)
