@@ -1,7 +1,7 @@
 """内核切换"""
 import hashlib, io, json, os, re, shutil, threading, time
 
-from .base import CONF_DIR, CORE_UPD, MIHOMO_LOG, SMART_BIN, SVC
+from .base import CONF_DIR, CORE_UPD, MIHOMO_LOG, SMART_BIN
 from .data import load, update
 from .groups import PROV, gcfg
 from .mihomo import check_config, mh_bin, write_config
@@ -9,7 +9,7 @@ from .sb_common import CORES, SB_API, SB_BIN, SB_CONF, SB_REPO, SB_STATE, active
 from .sb_subs import sb_update_subs
 from .sb_config import check_sb_config, sb_sync_assets, sb_version, write_sb_config
 from .core_update import LGBM_FILE, _cu, bin_version, lgbm_fetch, mh_fetch, open_url, release_digest
-from .sysopt import sh
+from .sysopt import sh, svc_restart
 from .notify import WD, core_alive, notify
 from .migrate import restore_selections, snapshot_selections
 def sb_arch():
@@ -164,7 +164,7 @@ def core_switch_job(kind, gh):
         PROV.update(t=0, data=None)
         _cu("重启核心", 88, f"正在以 {label} 重启核心（局域网会断网几秒）")
         WD["manual_stop"] = False
-        sh(SVC + " restart", timeout=90)
+        svc_restart(timeout=90)
         for _ in range(30):
             time.sleep(1)
             if core_alive():
@@ -173,7 +173,7 @@ def core_switch_job(kind, gh):
             tail = [l for l in sh(f"tail -n 30 '{MIHOMO_LOG}'")[1].splitlines() if re.search(r"FATAL|ERROR|level=(?:error|fatal)", l)]
             update(lambda x: x.update(core=prev))
             write_core_file(prev)
-            sh(SVC + " restart", timeout=90)
+            svc_restart(timeout=90)
             log = re.sub(r"\x1b\[[0-9;]*m", "", "\n".join(tail[-3:]))[-400:]
             raise ValueError(f"{label} 30 秒内未响应，已切回 {CORES[prev]}。" + ("日志：" + log if log else "请查看核心日志"))
         threading.Thread(target=restore_selections, daemon=True).start()
@@ -202,14 +202,14 @@ def sb_update_job(channel, gh, force=False):
                 shutil.copy2(SB_BIN + ".bak", SB_BIN)
                 raise ValueError("新版 sing-box 不兼容当前配置，已恢复原版本：" + err)
             _cu("重启核心", 85, "正在重启核心")
-            sh(SVC + " restart", timeout=90)
+            svc_restart(timeout=90)
             for _ in range(30):
                 time.sleep(1)
                 if core_alive():
                     break
             else:
                 shutil.copy2(SB_BIN + ".bak", SB_BIN)
-                sh(SVC + " restart", timeout=90)
+                svc_restart(timeout=90)
                 raise ValueError("新版 sing-box 30 秒内未响应，已恢复原版本")
         CORE_UPD.update(ok=True, message=f"sing-box 已从 {cur or '未安装'} 更新到 {nv}" + ("，旧版本已备份" if cur else ""))
     except Exception as e:
