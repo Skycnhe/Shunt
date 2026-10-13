@@ -52,7 +52,7 @@ def diagnose():
     alive = code == 200
     sb = active_core(d) == "singbox"
     item(f"{CORES[active_core(d)]} 核心", alive, json.loads(ver).get("version", "") if alive else "核心未运行或控制器无响应",
-         "在顶部点「启动」，或执行 rc-service mihomo restart 并查看 /var/log/mihomo.log")
+         "在顶部点「启动」，或执行 rc-service shunt-core restart 并查看 /var/log/mihomo.log")
     if sb:
         if os.path.isfile(SB_BIN) and os.path.isfile(SB_CONF):
             ok, err = check_sb_config(SB_CONF)
