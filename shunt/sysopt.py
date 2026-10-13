@@ -3,7 +3,7 @@ import http.client, json, os, re, ssl, subprocess, threading, time, urllib.reque
 from collections import deque
 from urllib.parse import urlsplit
 
-from .base import MIXED, PANEL_DIR, TESTS, UA, SafeRedirectHandler, dl_check
+from .base import MIXED, PANEL_DIR, SVC, TESTS, UA, SafeRedirectHandler, dl_check, wd_hold
 from .data import load, update
 PROC_SYS = os.environ.get("PANEL_PROC_SYS", "/proc/sys")
 SYS_ROOT = os.environ.get("PANEL_SYS_ROOT", "/sys")
@@ -417,6 +417,16 @@ def sh(cmd, timeout=60):
         return p.returncode, (p.stdout + p.stderr).strip()
     except Exception as e:
         return 1, str(e)
+
+
+def svc_restart(timeout=90, why="面板重启核心"):
+    """重启核心服务。重启及启动后的加载期（大规则集、Fake-IP 缓存）内看门狗暂停判定，
+    否则启动慢一点就会被看门狗当成「无响应」再重启一次，形成连环重启"""
+    wd_hold(timeout + 60, why)
+    try:
+        return sh(SVC + " restart", timeout=timeout)
+    finally:
+        wd_hold(60, why, reset=True)  # 命令返回后只再给 60 秒加载时间
 
 
 def proxy_opener(proxy=True):
