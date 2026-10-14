@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.7.9"
+PANEL_VERSION = "7.8.0"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -248,7 +248,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.7.9"
+PANEL_VERSION = "7.8.0"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -6952,15 +6952,38 @@ def loc_dedup(loc):
     return " ".join(out)
 
 
+GEO_URL2 = "https://ipwho.is/%s?lang=zh-CN"  # 备用归属地服务（HTTPS）
+
+
+def _geo_parse(txt):
+    try:
+        j = json.loads(txt or "{}")
+    except ValueError:
+        return ""
+    if j.get("status") == "success":  # ip-api.com
+        return " ".join(p for p in (j.get("country"), j.get("regionName"), j.get("city")) if p)
+    if j.get("success") is True:  # ipwho.is
+        return " ".join(p for p in (j.get("country"), j.get("region"), j.get("city")) if p)
+    return ""
+
+
 def _geo(ip):
+    """归属地：ip-api.com 直连 → 经内核 mixed 端口 → 备用 ipwho.is。
+    以前只直连 ip-api.com 一次：路由器本机 DNS 指向内核时，ip-api.com 可能被解析成 Fake-IP 而直连不通，
+    或撞上 ip-api 免费版每分钟 45 次的限额，代理出口就只有 IP 没有归属地"""
     if not ip:
         return ""
-    try:
-        j = json.loads(_fetch(GEO_URL % ip, False, timeout=10))
-        if j.get("status") == "success":
-            return " ".join(p for p in (j.get("country"), j.get("regionName"), j.get("city")) if p)
-    except Exception as e:
-        log_err("IP 归属地查询", e)
+    ready = None
+    for url, via_proxy in ((GEO_URL, False), (GEO_URL, True), (GEO_URL2, True), (GEO_URL2, False)):
+        if via_proxy:
+            if ready is None:
+                ready = core_ready()
+            if not ready:
+                continue
+        loc = _geo_parse(_fetch(url % ip, via_proxy, timeout=8))
+        if loc:
+            return loc
+    log_err("IP 归属地查询", RuntimeError(f"{ip} 所有归属地服务都没有结果"))
     return ""
 
 
@@ -7001,7 +7024,8 @@ def get_ipinfo(query=None):
         v = query()
         now = time.time()
         if v["direct"]["ip"] and v["proxy"]["ip"]:
-            _CACHE.update(t=now, v=v, fail=0, next=0)
+            # 归属地缺一边时只缓存 2 分钟（_TTL - 120 秒前视为过期），下次再补查
+            _CACHE.update(t=now if v["direct"]["loc"] and v["proxy"]["loc"] else now - _TTL + 120, v=v, fail=0, next=0)
             return v
         _CACHE["fail"] += 1
         wait = _backoff(_CACHE["fail"])
