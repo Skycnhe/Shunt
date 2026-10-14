@@ -67,5 +67,24 @@ class IpInfoRetry(unittest.TestCase):
         self.assertFalse([c for c in f.call_args_list if c.args[1:2] == (True,)])  # 核心没起来不经代理白等
 
 
+    def test_missing_loc_short_cache(self):
+        noloc = {"direct": {"ip": "1.2.3.4", "loc": "中国"}, "proxy": {"ip": "5.6.7.8", "loc": ""}}
+        self._get(lambda: noloc, 1000)
+        r = self._get(lambda: ok, 1100)  # 2 分钟内用缓存
+        self.assertEqual(r["proxy"]["loc"], "")
+        r = self._get(lambda: ok, 1130)  # 过了 2 分钟补查归属地
+        self.assertEqual(r["proxy"]["loc"], "日本")
+
+    def test_geo_fallbacks(self):
+        def fake_fetch(url, via_proxy, timeout=10):
+            if "ip-api" in url:
+                return ""  # ip-api 直连、经代理都失败
+            return '{"success": true, "country": "日本", "region": "東京都", "city": "東京都"}' if via_proxy else ""
+        with mock.patch.object(self.mod, "_fetch", side_effect=fake_fetch), mock.patch.object(self.mod, "core_ready", return_value=True):
+            self.assertEqual(self.mod.loc_dedup(self.mod._geo("142.91.109.208")), "日本 東京都")
+        with mock.patch.object(self.mod, "_fetch", return_value='{"status":"success","country":"日本","regionName":"东京都","city":"Minato"}'):
+            self.assertEqual(self.mod._geo("142.91.109.208"), "日本 东京都 Minato")
+
+
 if __name__ == "__main__":
     unittest.main()
