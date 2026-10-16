@@ -1,5 +1,8 @@
 # 更新记录与详细说明
 
+## v7.11.0 当贝域名直连
+- 当贝（dangbei.com）加入直连规则：`DOMAIN-SUFFIX,dangbei.com,DIRECT`（mihomo）/ `domain_suffix`（sing-box），覆盖所有子域名
+
 ## v7.10.0 版本备份/恢复
 - **新增**：设置 → 备份与更新 →「版本备份」卡片。备份打包 `server.py`、`index.html`、`data.json`、`CHANGELOG.md` 为 `shunt-backup-v{版本}-{时间}.tar.gz`，存于数据目录 `backups/`
 - **更新自动备份**：面板在线更新前自动备份当前版本（带版本号），失败不阻断更新
