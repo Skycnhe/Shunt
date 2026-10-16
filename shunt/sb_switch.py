@@ -1,10 +1,10 @@
 """内核切换"""
 import hashlib, io, json, os, re, shutil, shlex, threading, time
 
-from .base import CONF_DIR, CORE_UPD, MIHOMO_LOG, SMART_BIN
+from .base import CONF_DIR, CORE_UPD, MIHOMO_LOG, SMART_BIN, TPROXY_SH
 from .data import load, update
 from .groups import PROV, gcfg
-from .mihomo import check_config, mh_bin, write_config
+from .mihomo import check_config, dns_cfg, mh_bin, write_config
 from .sb_common import CORES, SB_API, SB_BIN, SB_CONF, SB_REPO, SB_STATE, active_core, write_core_file
 from .sb_subs import sb_update_subs
 from .sb_config import check_sb_config, sb_sync_assets, sb_version, write_sb_config
@@ -112,6 +112,7 @@ def sb_install(channel, gh, force=False):
 def core_switch_job(kind, gh):
     """切换内核：准备程序与数据 → 生成并校验配置 → 写入启动选择 → 重启；失败自动换回原内核"""
     prev = active_core()
+    dns_auto_fix = False  # 切到 sing-box 时是否自动开启了「阻止客户端绕过 DNS」
     try:
         label = CORES[kind]
         if kind == "singbox":
@@ -120,6 +121,11 @@ def core_switch_job(kind, gh):
                 nv, _ = sb_install("stable", gh)
                 _cu("安装 sing-box", 62, f"已安装 sing-box {nv}")
             d = load()
+            if not dns_cfg(d)["block_bypass"]:
+                # sing-box 1.13+ 移除了 sniff_override_destination，设备 DNS 绕过面板时拿到污染 IP 必死；
+                # mihomo 的 sniffer 默认改写目标地址所以不受影响。切到 sing-box 时自动开启防绕过。
+                d.setdefault("dns", {})["block_bypass"] = True
+                dns_auto_fix = True
             if d["subs"]:
                 _cu("下载订阅", 65, "sing-box 不能自己拉取订阅，由面板下载并解析节点")
                 ok, bad = sb_update_subs(d=d)
@@ -159,7 +165,13 @@ def core_switch_job(kind, gh):
                 raise ValueError(f"{label} 配置校验失败，未切换：" + err)
             os.replace(tmp, os.path.join(CONF_DIR, "config.yaml"))
         snapshot_selections(force=True)
-        update(lambda x: x.update(core=kind))
+
+        def _apply_switch(x):
+            x["core"] = kind
+            if dns_auto_fix:
+                x.setdefault("dns", {})["block_bypass"] = True
+
+        update(_apply_switch)
         write_core_file(kind)
         PROV.update(t=0, data=None)
         _cu("重启核心", 88, f"正在以 {label} 重启核心（局域网会断网几秒）")
@@ -177,7 +189,14 @@ def core_switch_job(kind, gh):
             log = re.sub(r"\x1b\[[0-9;]*m", "", "\n".join(tail[-3:]))[-400:]
             raise ValueError(f"{label} 30 秒内未响应，已切回 {CORES[prev]}。" + ("日志：" + log if log else "请查看核心日志"))
         threading.Thread(target=restore_selections, daemon=True).start()
-        CORE_UPD.update(ok=True, message=f"已切换到 {label}" + (f"（{len(SB_STATE['warn'])} 条兼容提示见设置 → 核心）" if kind == "singbox" and SB_STATE["warn"] else ""))
+        if dns_auto_fix and d.get("proxy_mode") != "off":
+            sh(TPROXY_SH + " apply", timeout=15)  # block_bypass 变化：重载 nftables 劫持任意目标的 53 端口
+        msg = f"已切换到 {label}"
+        if kind == "singbox" and SB_STATE["warn"]:
+            msg += f"（{len(SB_STATE['warn'])} 条兼容提示见设置 → 核心）"
+        if dns_auto_fix:
+            msg += "；已自动开启「阻止客户端绕过 DNS」（sing-box 要求设备 DNS 经过面板，如不需要可在 设置→DNS 关闭）"
+        CORE_UPD.update(ok=True, message=msg)
         notify(f"🔀 内核已切换：{CORES[prev]} → {label}")
     except Exception as e:
         CORE_UPD.update(ok=False, message=str(e))

@@ -1,11 +1,12 @@
 """网络诊断"""
+import ipaddress
 import json, os, re, secrets, shutil, socket, threading, time, urllib.request, urllib.error
 
 from .errlog import ERRS
-from .base import CONF_DIR, TPROXY_SH
+from .base import CONF_DIR, FAKEIP_NETS, TPROXY_SH
 from .data import load
-from .mihomo import check_config, mh_bin, safe_dev
-from .corehttp import core
+from .mihomo import check_config, dns_cfg, mh_bin, safe_dev
+from .core import conns_snapshot, core
 from .sb_common import CORES, SB_BIN, SB_CONF, SB_STATE, active_core
 from .sb_config import check_sb_config
 from .sysopt import proxy_opener, sh
@@ -32,6 +33,41 @@ def _scrub(s):
     s = re.sub(r'"/[^"]*"', '"<路径>"', s)
     s = re.sub(r"(https?://[^/\s:]+:)[^@/\s]+@", r"\1***@", s)
     return s
+
+
+def dns_bypass_devices(conns=None):
+    """检测 DNS 绕过面板的设备。
+
+    原理：Fake-IP 模式下，设备 DNS 经过面板时拿到的目标是 198.18.x.x；
+    若某连接嗅探到了域名（sniffHost），但目标 IP 是公网真实 IP，
+    说明该设备自己解析了域名（DNS 没经过面板，如用了主路由 DNS / 私人 DNS）。
+    sing-box 1.13+ 移除了 sniff_override_destination，这种情况拿污染 IP 必死；
+    mihomo 的 sniffer 会改写目标地址所以不受影响。
+
+    返回 {设备IP: {域名, ...}}；conns 为空时返回 {}。"""
+    if conns is None:
+        conns = conns_snapshot(timeout=5)
+    if not conns:
+        return {}
+    devs = {}
+    for x in conns.get("connections") or []:
+        md = x.get("metadata") or {}
+        sniff = (md.get("sniffHost") or "").strip().lower()
+        dip = (md.get("destinationIP") or "").strip()
+        sip = (md.get("sourceIP") or "").strip()
+        if not sniff or not dip or not sip:
+            continue
+        try:
+            ip = ipaddress.ip_address(dip)
+        except ValueError:
+            continue
+        if ip.is_private or ip.is_loopback or ip.is_link_local:
+            continue
+        if any(ip in n for n in FAKEIP_NETS):
+            continue
+        # 公网 IP + 嗅探到域名 = 设备 DNS 未经过面板
+        devs.setdefault(sip, set()).add(sniff)
+    return devs
 
 
 def diagnose():
@@ -103,6 +139,15 @@ def diagnose():
                      "检查直连 / 代理 DNS 设置" + ("；代理 DNS 依赖节点可用" if "google" in host else ""))
             except Exception:
                 item(label, False, "查询失败", "检查 DNS 设置")
+        if sb and dns_cfg(d)["mode"] == "fake-ip":
+            # sing-box 1.13+ 无 sniff_override_destination：设备 DNS 绕过面板时，
+            # 规则按嗅探域名命中了代理组，但实际连的是污染 IP，必定失败（mihomo 不受影响）
+            bypass = dns_bypass_devices()
+            if bypass:
+                detail = "；".join(f"{sip}（{len(v)} 个域名，如 {sorted(v)[0]}）"
+                                   for sip, v in list(bypass.items())[:5])
+                item("DNS 绕过检测", "warn", f"以下设备 DNS 未经过面板：{detail}",
+                     "将该设备的 DNS 指向旁路由（或主路由 DHCP 下发旁路由 DNS），或在 设置→DNS 开启「阻止客户端绕过 DNS」")
 
     def reach(url, use_proxy):
         st = time.time()

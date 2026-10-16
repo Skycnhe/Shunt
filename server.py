@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "8.1"
+PANEL_VERSION = "8.2"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -250,7 +250,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "8.1"
+PANEL_VERSION = "8.2"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -3334,10 +3334,10 @@ def sb_fake_rule_providers(d):
 _SRC['shunt.sb_switch'] = '''"""内核切换"""
 import hashlib, io, json, os, re, shutil, shlex, threading, time
 
-from .base import CONF_DIR, CORE_UPD, MIHOMO_LOG, SMART_BIN
+from .base import CONF_DIR, CORE_UPD, MIHOMO_LOG, SMART_BIN, TPROXY_SH
 from .data import load, update
 from .groups import PROV, gcfg
-from .mihomo import check_config, mh_bin, write_config
+from .mihomo import check_config, dns_cfg, mh_bin, write_config
 from .sb_common import CORES, SB_API, SB_BIN, SB_CONF, SB_REPO, SB_STATE, active_core, write_core_file
 from .sb_subs import sb_update_subs
 from .sb_config import check_sb_config, sb_sync_assets, sb_version, write_sb_config
@@ -3445,6 +3445,7 @@ def sb_install(channel, gh, force=False):
 def core_switch_job(kind, gh):
     """切换内核：准备程序与数据 → 生成并校验配置 → 写入启动选择 → 重启；失败自动换回原内核"""
     prev = active_core()
+    dns_auto_fix = False  # 切到 sing-box 时是否自动开启了「阻止客户端绕过 DNS」
     try:
         label = CORES[kind]
         if kind == "singbox":
@@ -3453,6 +3454,11 @@ def core_switch_job(kind, gh):
                 nv, _ = sb_install("stable", gh)
                 _cu("安装 sing-box", 62, f"已安装 sing-box {nv}")
             d = load()
+            if not dns_cfg(d)["block_bypass"]:
+                # sing-box 1.13+ 移除了 sniff_override_destination，设备 DNS 绕过面板时拿到污染 IP 必死；
+                # mihomo 的 sniffer 默认改写目标地址所以不受影响。切到 sing-box 时自动开启防绕过。
+                d.setdefault("dns", {})["block_bypass"] = True
+                dns_auto_fix = True
             if d["subs"]:
                 _cu("下载订阅", 65, "sing-box 不能自己拉取订阅，由面板下载并解析节点")
                 ok, bad = sb_update_subs(d=d)
@@ -3492,7 +3498,13 @@ def core_switch_job(kind, gh):
                 raise ValueError(f"{label} 配置校验失败，未切换：" + err)
             os.replace(tmp, os.path.join(CONF_DIR, "config.yaml"))
         snapshot_selections(force=True)
-        update(lambda x: x.update(core=kind))
+
+        def _apply_switch(x):
+            x["core"] = kind
+            if dns_auto_fix:
+                x.setdefault("dns", {})["block_bypass"] = True
+
+        update(_apply_switch)
         write_core_file(kind)
         PROV.update(t=0, data=None)
         _cu("重启核心", 88, f"正在以 {label} 重启核心（局域网会断网几秒）")
@@ -3510,7 +3522,14 @@ def core_switch_job(kind, gh):
             log = re.sub(r"\\x1b\\[[0-9;]*m", "", "\\n".join(tail[-3:]))[-400:]
             raise ValueError(f"{label} 30 秒内未响应，已切回 {CORES[prev]}。" + ("日志：" + log if log else "请查看核心日志"))
         threading.Thread(target=restore_selections, daemon=True).start()
-        CORE_UPD.update(ok=True, message=f"已切换到 {label}" + (f"（{len(SB_STATE['warn'])} 条兼容提示见设置 → 核心）" if kind == "singbox" and SB_STATE["warn"] else ""))
+        if dns_auto_fix and d.get("proxy_mode") != "off":
+            sh(TPROXY_SH + " apply", timeout=15)  # block_bypass 变化：重载 nftables 劫持任意目标的 53 端口
+        msg = f"已切换到 {label}"
+        if kind == "singbox" and SB_STATE["warn"]:
+            msg += f"（{len(SB_STATE['warn'])} 条兼容提示见设置 → 核心）"
+        if dns_auto_fix:
+            msg += "；已自动开启「阻止客户端绕过 DNS」（sing-box 要求设备 DNS 经过面板，如不需要可在 设置→DNS 关闭）"
+        CORE_UPD.update(ok=True, message=msg)
         notify(f"🔀 内核已切换：{CORES[prev]} → {label}")
     except Exception as e:
         CORE_UPD.update(ok=False, message=str(e))
@@ -6783,13 +6802,14 @@ def tun_runtime_error(dev, wait=4):
     return f"未检测到网卡 {dev}"
 '''
 _SRC['shunt.diag'] = '''"""网络诊断"""
+import ipaddress
 import json, os, re, secrets, shutil, socket, threading, time, urllib.request, urllib.error
 
 from .errlog import ERRS
-from .base import CONF_DIR, TPROXY_SH
+from .base import CONF_DIR, FAKEIP_NETS, TPROXY_SH
 from .data import load
-from .mihomo import check_config, mh_bin, safe_dev
-from .corehttp import core
+from .mihomo import check_config, dns_cfg, mh_bin, safe_dev
+from .core import conns_snapshot, core
 from .sb_common import CORES, SB_BIN, SB_CONF, SB_STATE, active_core
 from .sb_config import check_sb_config
 from .sysopt import proxy_opener, sh
@@ -6816,6 +6836,41 @@ def _scrub(s):
     s = re.sub(r'"/[^"]*"', '"<路径>"', s)
     s = re.sub(r"(https?://[^/\\s:]+:)[^@/\\s]+@", r"\\1***@", s)
     return s
+
+
+def dns_bypass_devices(conns=None):
+    """检测 DNS 绕过面板的设备。
+
+    原理：Fake-IP 模式下，设备 DNS 经过面板时拿到的目标是 198.18.x.x；
+    若某连接嗅探到了域名（sniffHost），但目标 IP 是公网真实 IP，
+    说明该设备自己解析了域名（DNS 没经过面板，如用了主路由 DNS / 私人 DNS）。
+    sing-box 1.13+ 移除了 sniff_override_destination，这种情况拿污染 IP 必死；
+    mihomo 的 sniffer 会改写目标地址所以不受影响。
+
+    返回 {设备IP: {域名, ...}}；conns 为空时返回 {}。"""
+    if conns is None:
+        conns = conns_snapshot(timeout=5)
+    if not conns:
+        return {}
+    devs = {}
+    for x in conns.get("connections") or []:
+        md = x.get("metadata") or {}
+        sniff = (md.get("sniffHost") or "").strip().lower()
+        dip = (md.get("destinationIP") or "").strip()
+        sip = (md.get("sourceIP") or "").strip()
+        if not sniff or not dip or not sip:
+            continue
+        try:
+            ip = ipaddress.ip_address(dip)
+        except ValueError:
+            continue
+        if ip.is_private or ip.is_loopback or ip.is_link_local:
+            continue
+        if any(ip in n for n in FAKEIP_NETS):
+            continue
+        # 公网 IP + 嗅探到域名 = 设备 DNS 未经过面板
+        devs.setdefault(sip, set()).add(sniff)
+    return devs
 
 
 def diagnose():
@@ -6887,6 +6942,15 @@ def diagnose():
                      "检查直连 / 代理 DNS 设置" + ("；代理 DNS 依赖节点可用" if "google" in host else ""))
             except Exception:
                 item(label, False, "查询失败", "检查 DNS 设置")
+        if sb and dns_cfg(d)["mode"] == "fake-ip":
+            # sing-box 1.13+ 无 sniff_override_destination：设备 DNS 绕过面板时，
+            # 规则按嗅探域名命中了代理组，但实际连的是污染 IP，必定失败（mihomo 不受影响）
+            bypass = dns_bypass_devices()
+            if bypass:
+                detail = "；".join(f"{sip}（{len(v)} 个域名，如 {sorted(v)[0]}）"
+                                   for sip, v in list(bypass.items())[:5])
+                item("DNS 绕过检测", "warn", f"以下设备 DNS 未经过面板：{detail}",
+                     "将该设备的 DNS 指向旁路由（或主路由 DHCP 下发旁路由 DNS），或在 设置→DNS 开启「阻止客户端绕过 DNS」")
 
     def reach(url, use_proxy):
         st = time.time()
