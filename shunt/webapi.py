@@ -1279,6 +1279,30 @@ class H(BaseHTTPRequestHandler):
         d = load()
         return self.send(200, {k: v for k, v in d.items() if k != "secret"})
 
+    @api_route("/api/backup/list", "GET")
+    def api_backup_list(self, m, p, b, q):
+        from . import backup as backup_mod
+        return self.send(200, {"backups": backup_mod.list()})
+
+    @api_route("/api/backup/create", "POST")
+    def api_backup_create(self, m, p, b, q):
+        from . import backup as backup_mod
+        ok, name = backup_mod.create()
+        return self.send(200 if ok else 500, {"ok": ok, "name": name if ok else "",
+                                              "message": name if ok else "备份失败：%s" % name})
+
+    @api_route("/api/backup/restore", "POST")
+    def api_backup_restore(self, m, p, b, q):
+        from . import backup as backup_mod
+        ok, msg = backup_mod.restore((b.get("name") or "").strip())
+        return self.reply(ok, msg)
+
+    @api_route("/api/backup/delete", "POST")
+    def api_backup_delete(self, m, p, b, q):
+        from . import backup as backup_mod
+        ok, msg = backup_mod.delete((b.get("name") or "").strip())
+        return self.reply(ok, msg)
+
     @api_route("/api/restore", "POST")
     def api_restore_post(self, m, p, b, q):
         keys = ("mode", "tproxy", "subs", "rules", "rulesets", "bypass", "tests", "sub_interval", "region_groups",

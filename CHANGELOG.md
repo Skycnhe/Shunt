@@ -1,5 +1,11 @@
 # 更新记录与详细说明
 
+## v7.10.0 版本备份/恢复
+- **新增**：设置 → 备份与更新 →「版本备份」卡片。备份打包 `server.py`、`index.html`、`data.json`、`CHANGELOG.md` 为 `shunt-backup-v{版本}-{时间}.tar.gz`，存于数据目录 `backups/`
+- **更新自动备份**：面板在线更新前自动备份当前版本（带版本号），失败不阻断更新
+- **一键回滚**：备份列表按时间倒序，点「恢复」先自动备份当前版本再覆盖，恢复后重启面板生效；只保留最近 10 个，自动清理最旧
+- **手动备份**：「立即备份」按钮随时打一个版本备份
+
 ## v7.9.9 移除 WARP 功能
 - **移除**：应用户要求彻底移除 Cloudflare WARP 功能——删除 `shunt/warp.py`、`web/js/27-warp.js`、WARP 标签页（含导航入口）、全部 `/api/warp/*` 接口（status/setup/connect/disconnect/mutex/config/preferred/apply_ip/custom_ips）、WARP↔内核互斥逻辑；其他功能不变
 

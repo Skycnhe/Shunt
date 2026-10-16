@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.9.9"
+PANEL_VERSION = "7.10.0"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -38,6 +38,7 @@ MODULES = [
     "sb_config",
     "sb_switch",
     "panel_update",
+    "backup",
     "core_update",
     "sysopt",
     "notify",
@@ -248,7 +249,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.9.9"
+PANEL_VERSION = "7.10.0"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -3697,6 +3698,14 @@ def self_update(apply=False, gh=""):
             if os.path.isfile(local_file(f)):
                 os.makedirs(os.path.dirname(os.path.join(bak, f)), exist_ok=True)
                 shutil.copy2(local_file(f), os.path.join(bak, f))
+        # 版本备份：更新前自动打一个带版本号的 tar.gz（失败不阻断更新）
+        try:
+            from . import backup as backup_mod
+            ok, name = backup_mod.create()
+            if not ok:
+                log_err("更新前自动备份失败：%s" % name)
+        except Exception as e:
+            log_err("更新前自动备份异常：%s" % e)
         for f in changed:
             dst = local_file(f)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
@@ -3714,6 +3723,174 @@ def self_update(apply=False, gh=""):
     finally:
         UPD_STATE["busy"] = False
 
+'''
+_SRC['shunt.backup'] = '''# SPDX-License-Identifier: GPL-3.0-or-later
+"""版本备份/恢复：把面板文件打包成带版本号的 tar.gz，支持一键回滚。"""
+import os
+import re
+import tarfile
+import time
+
+from .base import BASE, DATA_FILE, PANEL_VERSION
+
+# 备份目录：跟 data.json 同级
+BACKUP_DIR = os.path.join(os.path.dirname(os.path.abspath(DATA_FILE)), "backups")
+# 保留最近多少个备份
+KEEP_N = 10
+
+# 打包进备份的文件（相对于 BASE / DATA_FILE 所在目录）
+_FILES = [
+    ("base", "server.py"),
+    ("base", "index.html"),
+    ("base", "CHANGELOG.md"),
+]
+
+
+def _ensure_dir():
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+
+
+def _backup_name(version, ts=None):
+    ts = ts or time.strftime("%Y%m%d-%H%M%S")
+    # 版本号里的非法字符替换掉，保证文件名安全
+    safe_ver = re.sub(r"[^0-9A-Za-z.\\-]", "_", version or "unknown")
+    return "shunt-backup-v%s-%s.tar.gz" % (safe_ver, ts)
+
+
+def _parse_name(name):
+    """从文件名解析出 version。返回 version 或 None。"""
+    m = re.match(r"^shunt-backup-v(.+)-(\\d{8}-\\d{6})(-\\d+)?\\.tar\\.gz$", name)
+    return m.group(1) if m else None
+
+
+def create(version=None, auto=False):
+    """创建备份。返回 (ok, name_or_message)。
+
+    version: 打上的版本号，默认当前 PANEL_VERSION。
+    auto: 是否自动备份（更新前调用），失败不抛异常。
+    """
+    version = version or PANEL_VERSION
+    try:
+        _ensure_dir()
+        name = _backup_name(version)
+        path = os.path.join(BACKUP_DIR, name)
+        # 同名极小概率冲突（同一秒两次），加后缀
+        i = 1
+        while os.path.exists(path):
+            name = _backup_name(version)[:-7] + "-%d.tar.gz" % i
+            path = os.path.join(BACKUP_DIR, name)
+            i += 1
+        with tarfile.open(path, "w:gz") as tf:
+            for kind, rel in _FILES:
+                src = os.path.join(BASE, rel) if kind == "base" else rel
+                if os.path.isfile(src):
+                    tf.add(src, arcname=rel)
+            if os.path.isfile(DATA_FILE):
+                tf.add(DATA_FILE, arcname="data.json")
+        cleanup()
+        return True, name
+    except Exception as e:
+        # 自动备份失败不阻断调用方
+        return False, str(e)
+
+
+def list():
+    """返回备份列表 [{name, version, size, mtime}]，按时间倒序。"""
+    _ensure_dir()
+    out = []
+    try:
+        for fn in os.listdir(BACKUP_DIR):
+            if not fn.endswith(".tar.gz"):
+                continue
+            ver = _parse_name(fn)
+            if not ver:
+                continue
+            fp = os.path.join(BACKUP_DIR, fn)
+            try:
+                st = os.stat(fp)
+            except OSError:
+                continue
+            out.append({"name": fn, "version": ver, "size": st.st_size,
+                        "mtime": int(st.st_mtime)})
+    except OSError:
+        pass
+    out.sort(key=lambda x: x["mtime"], reverse=True)
+    return out
+
+
+def delete(name):
+    """删除指定备份。返回 (ok, message)。"""
+    if not name or "/" in name or "\\\\" in name or ".." in name:
+        return False, "非法文件名"
+    if not _parse_name(name):
+        return False, "不是有效的备份文件"
+    fp = os.path.join(BACKUP_DIR, name)
+    if not os.path.isfile(fp):
+        return False, "备份不存在"
+    try:
+        os.unlink(fp)
+        return True, "已删除"
+    except OSError as e:
+        return False, str(e)
+
+
+def cleanup(keep=KEEP_N):
+    """只保留最近 keep 个，删除最旧的。"""
+    items = list()
+    for it in items[keep:]:
+        try:
+            os.unlink(os.path.join(BACKUP_DIR, it["name"]))
+        except OSError:
+            pass
+
+
+def restore(name):
+    """恢复指定备份。返回 (ok, message)。
+
+    流程：先自动备份当前版本（防呆）→ 解压覆盖 server.py/index.html/data.json。
+    恢复 server.py 后需重启面板进程才生效。
+    """
+    if not name or "/" in name or "\\\\" in name or ".." in name:
+        return False, "非法文件名"
+    if not _parse_name(name):
+        return False, "不是有效的备份文件"
+    fp = os.path.join(BACKUP_DIR, name)
+    if not os.path.isfile(fp):
+        return False, "备份不存在"
+    # 防呆：先备份当前
+    ok, cur = create()
+    if not ok:
+        return False, "备份当前版本失败，中止恢复：%s" % cur
+    try:
+        with tarfile.open(fp, "r:gz") as tf:
+            members = tf.getnames()
+            # 安全检查：不允许绝对路径和 .. 
+            for m in members:
+                if m.startswith("/") or ".." in m:
+                    return False, "备份文件内容非法"
+            # 解压到临时目录再搬，避免半截覆盖
+            tmpd = os.path.join(BACKUP_DIR, ".restore_tmp")
+            import shutil
+            shutil.rmtree(tmpd, ignore_errors=True)
+            os.makedirs(tmpd)
+            tf.extractall(tmpd)
+            # 搬文件
+            for rel in ("server.py", "index.html", "CHANGELOG.md"):
+                src = os.path.join(tmpd, rel)
+                if os.path.isfile(src):
+                    dst = os.path.join(BASE, rel)
+                    shutil.copyfile(src, dst + ".new")
+                    os.chmod(dst + ".new", 0o644)
+                    os.replace(dst + ".new", dst)
+            src_data = os.path.join(tmpd, "data.json")
+            if os.path.isfile(src_data):
+                shutil.copyfile(src_data, DATA_FILE + ".new")
+                os.chmod(DATA_FILE + ".new", 0o600)
+                os.replace(DATA_FILE + ".new", DATA_FILE)
+            shutil.rmtree(tmpd, ignore_errors=True)
+        return True, "已恢复到 %s（已自动备份当前版本 %s）。恢复 server.py 后需重启面板生效。" % (name, cur)
+    except Exception as e:
+        return False, "恢复失败：%s" % e
 '''
 _SRC['shunt.core_update'] = '''"""内核（mihomo）更新"""
 import hashlib, json, os, re, shutil, sys, threading, time, urllib.request, urllib.error
@@ -8680,6 +8857,30 @@ class H(BaseHTTPRequestHandler):
     def api_backup_get(self, m, p, b, q):
         d = load()
         return self.send(200, {k: v for k, v in d.items() if k != "secret"})
+
+    @api_route("/api/backup/list", "GET")
+    def api_backup_list(self, m, p, b, q):
+        from . import backup as backup_mod
+        return self.send(200, {"backups": backup_mod.list()})
+
+    @api_route("/api/backup/create", "POST")
+    def api_backup_create(self, m, p, b, q):
+        from . import backup as backup_mod
+        ok, name = backup_mod.create()
+        return self.send(200 if ok else 500, {"ok": ok, "name": name if ok else "",
+                                              "message": name if ok else "备份失败：%s" % name})
+
+    @api_route("/api/backup/restore", "POST")
+    def api_backup_restore(self, m, p, b, q):
+        from . import backup as backup_mod
+        ok, msg = backup_mod.restore((b.get("name") or "").strip())
+        return self.reply(ok, msg)
+
+    @api_route("/api/backup/delete", "POST")
+    def api_backup_delete(self, m, p, b, q):
+        from . import backup as backup_mod
+        ok, msg = backup_mod.delete((b.get("name") or "").strip())
+        return self.reply(ok, msg)
 
     @api_route("/api/restore", "POST")
     def api_restore_post(self, m, p, b, q):

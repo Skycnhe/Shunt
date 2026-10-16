@@ -144,6 +144,14 @@ def self_update(apply=False, gh=""):
             if os.path.isfile(local_file(f)):
                 os.makedirs(os.path.dirname(os.path.join(bak, f)), exist_ok=True)
                 shutil.copy2(local_file(f), os.path.join(bak, f))
+        # 版本备份：更新前自动打一个带版本号的 tar.gz（失败不阻断更新）
+        try:
+            from . import backup as backup_mod
+            ok, name = backup_mod.create()
+            if not ok:
+                log_err("更新前自动备份失败：%s" % name)
+        except Exception as e:
+            log_err("更新前自动备份异常：%s" % e)
         for f in changed:
             dst = local_file(f)
             os.makedirs(os.path.dirname(dst), exist_ok=True)

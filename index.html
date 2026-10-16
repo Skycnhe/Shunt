@@ -736,6 +736,9 @@ nav button{font-size:15.5px;font-weight:600;opacity:.85}nav button.on{font-weigh
     <div data-sg="bak" class="card"><h3>备份 / 恢复</h3><div class="row"><button class="btn g" onclick="backup()">下载备份</button>
       <label class="btn g filebtn">从文件恢复…<input type="file" id="restore-file" accept=".json,application/json" onchange="restore()"></label></div>
       <div class="mut small" style="margin-top:6px">备份含订阅链接、手动节点、广告拦截与 DNS 设置和 Telegram Token，请妥善保管</div></div>
+    <div data-sg="bak" class="card"><div class="row"><h3 class="sp" style="margin:0">版本备份</h3><button class="btn g sm" onclick="createBackup(this)">立即备份</button></div>
+      <div class="mut small" style="margin:4px 0 6px">更新面板时会自动备份当前版本（带版本号）。想回到某个版本，点「恢复」后重启面板生效；只保留最近 10 个</div>
+      <div id="verbak-list" class="small"><span class="mut">加载中…</span></div></div>
     </div>
   </section>
 </main>
@@ -1330,7 +1333,7 @@ async function renderSettings(){renderSG();renderLook();await loadState().catch(
   sw('#wd',STATE.watchdog,v=>saveSettings({watchdog:v},'看门狗已'+(v?'开启':'关闭')));
   sw('#https',STATE.https,async v=>{if(!confirm(`面板将以 ${v?'HTTPS':'HTTP'} 重启，确定？`))throw 0;
     try{const j=await api('/api/https','PUT',{enable:v});toast(j.message+'，3 秒后跳转');setTimeout(()=>location.href=`${j.scheme}://${location.host}/`,3000)}catch(e){toast(e.message);throw e}});
-  fillSchedule();loadLogInfo();loadHistory();
+  fillSchedule();loadLogInfo();loadHistory();loadBackups();
   sw('#sniff',STATE.sniffer!==false,v=>saveSettings({sniffer:v},'域名嗅探已'+(v?'开启':'关闭')));
   loadSysopt();$('#pv').textContent='当前 v'+(STATE.panel_version||'-');$('#cv').textContent='当前 '+(STATE.version||'-');
   if(!CORE_POLL)api('/api/coreupdate/status').then(j=>{if(j.busy)corePoll()}).catch(()=>{});if(document.activeElement!==$('#gh-proxy'))$('#gh-proxy').value=STATE.gh_proxy||'';
@@ -1591,6 +1594,53 @@ async function start(){
 document.addEventListener('visibilitychange',()=>{if(document.hidden||$('#app').classList.contains('hide'))return;_skip=0;tick();loadState().catch(()=>{});if(TAB==='节点')loadProxies()});
 placeNav();
 start();  // 不再需要登录
+// 版本备份/恢复（设置 → 备份与更新）
+function fmtSize(b){if(b<1024)return b+" B";if(b<1048576)return (b/1024).toFixed(1)+" KB";return (b/1048576).toFixed(1)+" MB"}
+function fmtTime(ts){var d=new Date(ts*1000);return d.getFullYear()+"/"+String(d.getMonth()+1).padStart(2,"0")+"/"+String(d.getDate()).padStart(2,"0")+" "+String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0")}
+
+async function loadBackups(){
+  var el=$("#verbak-list");if(!el)return;
+  el.innerHTML='<span class="mut">加载中…</span>';
+  try{
+    var j=await api("/api/backup/list");
+    var arr=j.backups||[];
+    if(!arr.length){el.innerHTML='<span class="mut">暂无备份（更新面板时会自动备份当前版本）</span>';return}
+    el.innerHTML=arr.map(function(b){
+      return '<div class="row" style="padding:6px 0;border-bottom:1px solid var(--line)">'+
+        '<span class="sp"><b>v'+esc(b.version)+'</b> <span class="mut small">'+esc(b.name)+'</span><br>'+
+        '<span class="mut small">'+fmtTime(b.mtime)+' · '+fmtSize(b.size)+'</span></span>'+
+        '<button class="btn g sm" onclick="restoreBackup(\''+b.name+'\')">恢复</button>'+
+        '<button class="btn r sm" onclick="delBackup(\''+b.name+'\')">删除</button></div>';
+    }).join("");
+  }catch(e){el.innerHTML='<span class="mut">加载失败</span>'}
+}
+
+async function createBackup(btn){
+  if(btn)btn.disabled=true;
+  try{
+    var j=await api("/api/backup/create","POST");
+    toast(j.message||(j.ok?"已备份："+j.name:"备份失败"));
+    loadBackups();
+  }catch(e){toast("备份失败")}finally{if(btn)btn.disabled=false}
+}
+
+async function restoreBackup(name){
+  if(!confirm("恢复到 "+name+"？\n\n会先自动备份当前版本，恢复后需重启面板生效。"))return;
+  try{
+    var j=await api("/api/backup/restore","POST",{name:name});
+    toast(j.message||"");
+    if(j.ok&&confirm("已恢复。是否现在重启面板？"))location.reload();
+  }catch(e){toast("恢复失败")}
+}
+
+async function delBackup(name){
+  if(!confirm("删除备份 "+name+"？"))return;
+  try{
+    var j=await api("/api/backup/delete","POST",{name:name});
+    toast(j.message||"");
+    loadBackups();
+  }catch(e){toast("删除失败")}
+}
 </script>
 </body>
 </html>
