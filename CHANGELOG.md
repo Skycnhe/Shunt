@@ -1,5 +1,10 @@
 # 更新记录与详细说明
 
+## v7.9.1 修复 WARP 连接失败（resolvconf）
+- 原因：wgcf 生成的配置里带 `DNS = 1.1.1.1`，`wg-quick up` 会调用 resolvconf 改系统 DNS，在 Alpine 上报 `signature mismatch` 导致连接回滚；而且 WARP 的 DNS 会跟面板自己的 DNS（1053 端口）冲突，本来就不该让它碰
+- 现在 `connect()` 在执行 `wg-quick up` 之前先消毒配置文件：去掉 `DNS = ...` 行，用临时文件启动；原文件不动
+- 断开时顺手删除临时文件
+
 ## v7.9.0 Cloudflare WARP 代理
 - 新增「WARP」标签页：一键连接/断开 Cloudflare 免费 VPN（WireGuard 协议），替代之前的 OpenVPN 方案
 - 依赖：`apk add wireguard-tools` + wgcf（https://github.com/ViRb3/wgcf/releases）；面板提供"初始化 WARP"按钮自动注册并生成配置

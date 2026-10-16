@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.9.0"
+PANEL_VERSION = "7.9.1"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -249,7 +249,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.9.0"
+PANEL_VERSION = "7.9.1"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -7408,6 +7408,7 @@ _SRC['shunt.warp'] = '''"""Cloudflare WARP 代理（WireGuard 协议）。
 """
 import json
 import os
+import re
 import urllib.request
 
 from .base import CORE_SVC
@@ -7415,7 +7416,9 @@ from .sysopt import sh
 
 WARP_DIR = "/etc/mihomo-panel/warp"
 WARP_CONF = os.path.join(WARP_DIR, "wgcf-profile.conf")
+WARP_CONF_BAK = os.path.join(WARP_DIR, "wgcf-profile.conf.bak")
 MUTEX_FILE = os.path.join(WARP_DIR, "mutex.json")
+SANITIZED_CONF = "/tmp/warp-sanitized.conf"
 IFACE = "wgcf"
 
 
@@ -7500,6 +7503,47 @@ def status():
     }
 
 
+def get_config():
+    """读取 WireGuard 配置文件。返回 dict(ok, content/message)。"""
+    try:
+        with open(WARP_CONF) as f:
+            return {"ok": True, "content": f.read()}
+    except FileNotFoundError:
+        return {"ok": False, "message": "配置文件不存在，请先点「初始化 WARP」"}
+    except Exception as e:
+        return {"ok": False, "message": "读取配置失败：%s" % e}
+
+
+def save_config(content):
+    """保存用户编辑的 WireGuard 配置。返回 dict(ok, message)。
+
+    保存的是原始内容（含 DNS 行也保留，connect 时的消毒逻辑会自动处理）。
+    """
+    content = (content or "").strip()
+    if not content:
+        return {"ok": False, "message": "配置内容为空，未保存"}
+    if "[Interface]" not in content or "[Peer]" not in content:
+        return {"ok": False, "message": "配置无效：缺少 [Interface] 或 [Peer] 段，未保存"}
+    _ensure_dir()
+    # 备份原文件（只留一份）
+    try:
+        if os.path.isfile(WARP_CONF):
+            with open(WARP_CONF) as f:
+                old = f.read()
+            with open(WARP_CONF_BAK, "w") as f:
+                f.write(old)
+            os.chmod(WARP_CONF_BAK, 0o600)
+    except Exception as e:
+        return {"ok": False, "message": "备份原配置失败：%s" % e}
+    try:
+        with open(WARP_CONF, "w") as f:
+            f.write(content + "\\n")
+        os.chmod(WARP_CONF, 0o600)
+    except Exception as e:
+        return {"ok": False, "message": "保存配置失败：%s" % e}
+    return {"ok": True, "message": "配置已保存（原配置已备份为 wgcf-profile.conf.bak）"}
+
+
 def setup():
     """wgcf 注册并生成 WireGuard 配置。返回 (ok, message)。"""
     if not _which("wgcf"):
@@ -7518,6 +7562,28 @@ def setup():
     return True, "WARP 配置已生成"
 
 
+def _sanitized_conf():
+    """去掉配置里的 DNS 行（wg-quick 会用 resolvconf 改系统 DNS，Alpine 上失败且与面板 DNS 冲突）。
+
+    返回消毒后的配置文件路径：有 DNS 行则写临时文件，无则直接返回原路径。
+    """
+    try:
+        with open(WARP_CONF) as f:
+            content = f.read()
+    except Exception:
+        return WARP_CONF
+    new_content, n = re.subn(r"(?m)^\\s*DNS\\s*=.*$", "", content)
+    if n == 0:
+        return WARP_CONF
+    try:
+        with open(SANITIZED_CONF, "w") as f:
+            f.write(new_content)
+        os.chmod(SANITIZED_CONF, 0o600)
+        return SANITIZED_CONF
+    except Exception:
+        return WARP_CONF
+
+
 def connect():
     """连接 WARP。返回 (ok, message, st)。"""
     if not (_which("wg") and _which("wg-quick")):
@@ -7531,7 +7597,7 @@ def connect():
     if is_connected():
         st = status()
         return True, "WARP 已在连接中", st
-    code, out = sh("wg-quick up %s" % WARP_CONF, timeout=30)
+    code, out = sh("wg-quick up %s" % _sanitized_conf(), timeout=30)
     if code != 0:
         return False, "WARP 连接失败：%s" % (out[-500:] if out else "未知错误"), status()
     msg = "WARP 已连接"
@@ -7556,6 +7622,11 @@ def disconnect():
     st = status()
     if st["connected"]:
         return False, "WARP 断开失败：%s" % (out[-300:] if out else "未知错误"), st
+    try:
+        if os.path.isfile(SANITIZED_CONF):
+            os.unlink(SANITIZED_CONF)
+    except Exception:
+        pass
     return True, "WARP 已断开（内核未动，需手动启动）", st
 '''
 _SRC['shunt.webapi'] = '''"""HTTP"""
@@ -8784,6 +8855,16 @@ class H(BaseHTTPRequestHandler):
         on = v is True or v == 1 or str(v).lower() in ("true", "1", "on")
         ok = warp_mod.set_mutex(on)
         return self.send(200 if ok else 500, {"ok": ok, "mutex": warp_mod.get_mutex()})
+
+    @api_route("/api/warp/config", "GET")
+    def api_warp_config_get(self, m, p, b, q):
+        r = warp_mod.get_config()
+        return self.send(200, r)
+
+    @api_route("/api/warp/config", "POST")
+    def api_warp_config_post(self, m, p, b, q):
+        r = warp_mod.save_config(b.get("content", ""))
+        return self.send(200 if r["ok"] else 400, r)
 
     @api_route("/api/service", "POST")
     def api_service_post(self, m, p, b, q):

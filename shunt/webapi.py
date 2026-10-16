@@ -1225,6 +1225,16 @@ class H(BaseHTTPRequestHandler):
         ok = warp_mod.set_mutex(on)
         return self.send(200 if ok else 500, {"ok": ok, "mutex": warp_mod.get_mutex()})
 
+    @api_route("/api/warp/config", "GET")
+    def api_warp_config_get(self, m, p, b, q):
+        r = warp_mod.get_config()
+        return self.send(200, r)
+
+    @api_route("/api/warp/config", "POST")
+    def api_warp_config_post(self, m, p, b, q):
+        r = warp_mod.save_config(b.get("content", ""))
+        return self.send(200 if r["ok"] else 400, r)
+
     @api_route("/api/service", "POST")
     def api_service_post(self, m, p, b, q):
         act = b.get("action")

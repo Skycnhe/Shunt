@@ -237,6 +237,12 @@
       <div class="opt mt"><div class="sp"><div class="t">WARP 与内核双向互斥</div><div class="dsc">WARP 连接时自动停止内核；内核启动时自动断开 WARP</div></div><label class="sw sm"><input type="checkbox" id="warp-mutex" onchange="warpSetMutex(this.checked)"><span></span></label></div>
       <div class="mut small" style="margin-top:6px">WARP 是 Cloudflare 提供的免费 VPN（WireGuard 协议）。连接后流量走 WARP 隧道，与 mihomo/sing-box 内核二选一。</div>
       <div id="warp-r" class="small mt"></div></div>
+    <div class="card"><div class="row" style="margin-bottom:10px"><h3 class="sp" style="margin:0">WireGuard 配置</h3>
+      <button class="btn sm" onclick="warpLoadConfig()">加载配置</button>
+      <button class="btn g sm" onclick="warpSaveConfig()">保存配置</button></div>
+      <textarea id="warp-conf" rows="15" spellcheck="false" style="width:100%;font-family:monospace;font-size:12px;background:#14161c;color:#e0e3e8;border:1px solid #333a45;border-radius:8px;padding:10px" placeholder="点「加载配置」读取当前配置"></textarea>
+      <div id="warp-conf-r" class="mt"></div>
+      <div class="mut small" style="margin-top:6px">直接编辑 wgcf-profile.conf；保存前原配置自动备份为 wgcf-profile.conf.bak。DNS 行保留也无妨，连接时会自动忽略。</div></div>
   </section>
   <!-- DNS -->
   <section data-tab="DNS">
