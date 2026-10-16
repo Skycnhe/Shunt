@@ -1,5 +1,12 @@
 # 更新记录与详细说明
 
+## v7.11.1 代码审计修复
+- `/api/backup/list` 纳入敏感 GET 保护（要求 `X-Shunt` 请求头）
+- 备份恢复：解压前拒绝 tar 内 symlink/hardlink，`extractall` 加 `filter="data"`
+- 备份恢复：临时目录改用 `tempfile.mkdtemp()` 唯一目录，避免并发冲突
+- `import shutil` 移到 `backup.py` 顶部；备份文件名正则改为非贪婪匹配
+- 内核版本检测的 shell 路径改用 `shlex.quote()` 包裹（`core_update.py`/`sb_config.py`/`sb_switch.py`）
+
 ## v7.11.0 当贝域名直连
 - 当贝（dangbei.com）加入直连规则：`DOMAIN-SUFFIX,dangbei.com,DIRECT`（mihomo）/ `domain_suffix`（sing-box），覆盖所有子域名
 

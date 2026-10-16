@@ -47,7 +47,7 @@ from .static import MANIFEST, STATIC_TYPES, static_file
 ROUTES = {}  # (方法, 路径) → H 的处理函数；api() 先处理前缀 / 条件路由，再查这张表
 
 # GET 也要求 X-Shunt 头的机密接口：返回内容含订阅 URL / 节点密码 / TG token 等机密，局域网零凭证可拖库
-SENSITIVE_GET = ("/api/backup", "/api/config", "/api/history")
+SENSITIVE_GET = ("/api/backup", "/api/backup/list", "/api/config", "/api/history")
 
 _SVC_CACHE = {}  # {"v": (t, st, code, version)}：rc-service 状态 + 核心 /version 缓存 10 秒
 _GRP_CACHE = {}  # {"v": (cfgver, groups, gmeta)}：策略组名单按配置版本缓存，避免每次完整 build_config
@@ -277,7 +277,7 @@ class H(BaseHTTPRequestHandler):
             if "X-Shunt" not in self.headers and "X-Token" not in self.headers:  # X-Token：兼容旧版脚本
                 return "缺少 X-Shunt 请求头，跨站请求已拒绝（脚本调用接口请加上 -H 'X-Shunt: 1'）"
         if m in ("GET", "HEAD") and p in SENSITIVE_GET:
-            # 机密类 GET：/api/backup、/api/config（含 ?download）、/api/history 返回订阅/节点密码等机密，同样要求请求头
+            # 机密类 GET：/api/backup、/api/backup/list、/api/config（含 ?download）、/api/history 返回订阅/节点密码等机密，同样要求请求头
             if "X-Shunt" not in self.headers and "X-Token" not in self.headers:
                 return "缺少 X-Shunt 请求头，机密接口拒绝访问（脚本调用请加上 -H 'X-Shunt: 1'）"
         return ""

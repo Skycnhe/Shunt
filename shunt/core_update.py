@@ -1,5 +1,5 @@
 """内核（mihomo）更新"""
-import hashlib, json, os, re, shutil, sys, threading, time, urllib.request, urllib.error
+import hashlib, json, os, re, shutil, shlex, sys, threading, time, urllib.request, urllib.error
 from collections import deque
 from urllib.parse import quote
 
@@ -35,7 +35,7 @@ def bin_version(path):
     """执行 mihomo -v，返回版本号（如 v1.19.32 / alpha-9f053c4）；不能运行时返回空串"""
     if not os.path.isfile(path):
         return ""
-    code, out = sh(f"'{path}' -v", timeout=15)
+    code, out = sh(f"{shlex.quote(path)} -v", timeout=15)
     m = re.search(r"Mihomo\s+Meta\s+(\S+)", out) if code == 0 else None
     return m.group(1) if m else ""
 

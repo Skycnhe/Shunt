@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.11.0"
+PANEL_VERSION = "7.11.1"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -249,7 +249,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.11.0"
+PANEL_VERSION = "7.11.1"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -2798,7 +2798,7 @@ def sb_dns(d, cfg, policies, rs, alias, v6):
 
 '''
 _SRC['shunt.sb_config'] = '''"""生成 sing-box 配置"""
-import ipaddress, json, os, re, signal, threading, time, urllib.request, urllib.error
+import ipaddress, json, os, re, shlex, signal, threading, time, urllib.request, urllib.error
 
 from .base import (
     AB_DIR, BUILTIN_POLICIES, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, UA, dl_check, wd_hold)
@@ -3292,7 +3292,7 @@ def sb_version(path=None):
     path = path or SB_BIN
     if not os.path.isfile(path):
         return ""
-    code, out = sh(f"'{path}' version", timeout=15)
+    code, out = sh(f"{shlex.quote(path)} version", timeout=15)
     m = re.search(r"sing-box version (\\S+)", out) if code == 0 else None
     return m.group(1) if m else ""
 
@@ -3331,7 +3331,7 @@ def sb_fake_rule_providers(d):
 
 '''
 _SRC['shunt.sb_switch'] = '''"""内核切换"""
-import hashlib, io, json, os, re, shutil, threading, time
+import hashlib, io, json, os, re, shutil, shlex, threading, time
 
 from .base import CONF_DIR, CORE_UPD, MIHOMO_LOG, SMART_BIN
 from .data import load, update
@@ -3430,7 +3430,7 @@ def sb_install(channel, gh, force=False):
         nv = sb_version(tmp)
         if nv:
             break
-        _, out = sh(f"'{tmp}' version", timeout=15)
+        _, out = sh(f"{shlex.quote(tmp)} version", timeout=15)
         errs.append(f"{name}: 无法运行 {out.strip()[:100]}")
         os.remove(tmp)
     if not nv:
@@ -3729,7 +3729,9 @@ _SRC['shunt.backup'] = '''# SPDX-License-Identifier: GPL-3.0-or-later
 """版本备份/恢复：把面板文件打包成带版本号的 tar.gz，支持一键回滚。"""
 import os
 import re
+import shutil
 import tarfile
+import tempfile
 import time
 
 from .base import BASE, DATA_FILE, PANEL_VERSION
@@ -3760,7 +3762,7 @@ def _backup_name(version, ts=None):
 
 def _parse_name(name):
     """从文件名解析出 version。返回 version 或 None。"""
-    m = re.match(r"^shunt-backup-v(.+)-(\\d{8}-\\d{6})(-\\d+)?\\.tar\\.gz$", name)
+    m = re.match(r"^shunt-backup-v(.+?)-(\\d{8}-\\d{6})(-\\d+)?\\.tar\\.gz$", name)
     return m.group(1) if m else None
 
 
@@ -3864,37 +3866,38 @@ def restore(name):
         return False, "备份当前版本失败，中止恢复：%s" % cur
     try:
         with tarfile.open(fp, "r:gz") as tf:
-            members = tf.getnames()
-            # 安全检查：不允许绝对路径和 .. 
+            members = tf.getmembers()
+            # 安全检查：不允许绝对路径、..、symlink/hardlink
             for m in members:
-                if m.startswith("/") or ".." in m:
+                if m.name.startswith("/") or ".." in m.name:
                     return False, "备份文件内容非法"
-            # 解压到临时目录再搬，避免半截覆盖
-            tmpd = os.path.join(BACKUP_DIR, ".restore_tmp")
-            import shutil
-            shutil.rmtree(tmpd, ignore_errors=True)
-            os.makedirs(tmpd)
-            tf.extractall(tmpd)
-            # 搬文件
-            for rel in ("server.py", "index.html", "CHANGELOG.md"):
-                src = os.path.join(tmpd, rel)
-                if os.path.isfile(src):
-                    dst = os.path.join(BASE, rel)
-                    shutil.copyfile(src, dst + ".new")
-                    os.chmod(dst + ".new", 0o644)
-                    os.replace(dst + ".new", dst)
-            src_data = os.path.join(tmpd, "data.json")
-            if os.path.isfile(src_data):
-                shutil.copyfile(src_data, DATA_FILE + ".new")
-                os.chmod(DATA_FILE + ".new", 0o600)
-                os.replace(DATA_FILE + ".new", DATA_FILE)
-            shutil.rmtree(tmpd, ignore_errors=True)
+                if m.issym() or m.islnk():
+                    return False, "备份文件含非法链接"
+            # 解压到唯一临时目录再搬，避免半截覆盖和并发冲突
+            tmpd = tempfile.mkdtemp(prefix="restore_", dir=BACKUP_DIR)
+            try:
+                tf.extractall(tmpd, filter="data")
+                # 搬文件
+                for rel in ("server.py", "index.html", "CHANGELOG.md"):
+                    src = os.path.join(tmpd, rel)
+                    if os.path.isfile(src):
+                        dst = os.path.join(BASE, rel)
+                        shutil.copyfile(src, dst + ".new")
+                        os.chmod(dst + ".new", 0o644)
+                        os.replace(dst + ".new", dst)
+                src_data = os.path.join(tmpd, "data.json")
+                if os.path.isfile(src_data):
+                    shutil.copyfile(src_data, DATA_FILE + ".new")
+                    os.chmod(DATA_FILE + ".new", 0o600)
+                    os.replace(DATA_FILE + ".new", DATA_FILE)
+            finally:
+                shutil.rmtree(tmpd, ignore_errors=True)
         return True, "已恢复到 %s（已自动备份当前版本 %s）。恢复 server.py 后需重启面板生效。" % (name, cur)
     except Exception as e:
         return False, "恢复失败：%s" % e
 '''
 _SRC['shunt.core_update'] = '''"""内核（mihomo）更新"""
-import hashlib, json, os, re, shutil, sys, threading, time, urllib.request, urllib.error
+import hashlib, json, os, re, shutil, shlex, sys, threading, time, urllib.request, urllib.error
 from collections import deque
 from urllib.parse import quote
 
@@ -3930,7 +3933,7 @@ def bin_version(path):
     """执行 mihomo -v，返回版本号（如 v1.19.32 / alpha-9f053c4）；不能运行时返回空串"""
     if not os.path.isfile(path):
         return ""
-    code, out = sh(f"'{path}' -v", timeout=15)
+    code, out = sh(f"{shlex.quote(path)} -v", timeout=15)
     m = re.search(r"Mihomo\\s+Meta\\s+(\\S+)", out) if code == 0 else None
     return m.group(1) if m else ""
 
@@ -7627,7 +7630,7 @@ from .static import MANIFEST, STATIC_TYPES, static_file
 ROUTES = {}  # (方法, 路径) → H 的处理函数；api() 先处理前缀 / 条件路由，再查这张表
 
 # GET 也要求 X-Shunt 头的机密接口：返回内容含订阅 URL / 节点密码 / TG token 等机密，局域网零凭证可拖库
-SENSITIVE_GET = ("/api/backup", "/api/config", "/api/history")
+SENSITIVE_GET = ("/api/backup", "/api/backup/list", "/api/config", "/api/history")
 
 _SVC_CACHE = {}  # {"v": (t, st, code, version)}：rc-service 状态 + 核心 /version 缓存 10 秒
 _GRP_CACHE = {}  # {"v": (cfgver, groups, gmeta)}：策略组名单按配置版本缓存，避免每次完整 build_config
@@ -7857,7 +7860,7 @@ class H(BaseHTTPRequestHandler):
             if "X-Shunt" not in self.headers and "X-Token" not in self.headers:  # X-Token：兼容旧版脚本
                 return "缺少 X-Shunt 请求头，跨站请求已拒绝（脚本调用接口请加上 -H 'X-Shunt: 1'）"
         if m in ("GET", "HEAD") and p in SENSITIVE_GET:
-            # 机密类 GET：/api/backup、/api/config（含 ?download）、/api/history 返回订阅/节点密码等机密，同样要求请求头
+            # 机密类 GET：/api/backup、/api/backup/list、/api/config（含 ?download）、/api/history 返回订阅/节点密码等机密，同样要求请求头
             if "X-Shunt" not in self.headers and "X-Token" not in self.headers:
                 return "缺少 X-Shunt 请求头，机密接口拒绝访问（脚本调用请加上 -H 'X-Shunt: 1'）"
         return ""

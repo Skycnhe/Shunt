@@ -1,5 +1,5 @@
 """内核切换"""
-import hashlib, io, json, os, re, shutil, threading, time
+import hashlib, io, json, os, re, shutil, shlex, threading, time
 
 from .base import CONF_DIR, CORE_UPD, MIHOMO_LOG, SMART_BIN
 from .data import load, update
@@ -98,7 +98,7 @@ def sb_install(channel, gh, force=False):
         nv = sb_version(tmp)
         if nv:
             break
-        _, out = sh(f"'{tmp}' version", timeout=15)
+        _, out = sh(f"{shlex.quote(tmp)} version", timeout=15)
         errs.append(f"{name}: 无法运行 {out.strip()[:100]}")
         os.remove(tmp)
     if not nv:

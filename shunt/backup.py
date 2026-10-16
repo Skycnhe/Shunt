@@ -2,7 +2,9 @@
 """版本备份/恢复：把面板文件打包成带版本号的 tar.gz，支持一键回滚。"""
 import os
 import re
+import shutil
 import tarfile
+import tempfile
 import time
 
 from .base import BASE, DATA_FILE, PANEL_VERSION
@@ -33,7 +35,7 @@ def _backup_name(version, ts=None):
 
 def _parse_name(name):
     """从文件名解析出 version。返回 version 或 None。"""
-    m = re.match(r"^shunt-backup-v(.+)-(\d{8}-\d{6})(-\d+)?\.tar\.gz$", name)
+    m = re.match(r"^shunt-backup-v(.+?)-(\d{8}-\d{6})(-\d+)?\.tar\.gz$", name)
     return m.group(1) if m else None
 
 
@@ -137,31 +139,32 @@ def restore(name):
         return False, "备份当前版本失败，中止恢复：%s" % cur
     try:
         with tarfile.open(fp, "r:gz") as tf:
-            members = tf.getnames()
-            # 安全检查：不允许绝对路径和 .. 
+            members = tf.getmembers()
+            # 安全检查：不允许绝对路径、..、symlink/hardlink
             for m in members:
-                if m.startswith("/") or ".." in m:
+                if m.name.startswith("/") or ".." in m.name:
                     return False, "备份文件内容非法"
-            # 解压到临时目录再搬，避免半截覆盖
-            tmpd = os.path.join(BACKUP_DIR, ".restore_tmp")
-            import shutil
-            shutil.rmtree(tmpd, ignore_errors=True)
-            os.makedirs(tmpd)
-            tf.extractall(tmpd)
-            # 搬文件
-            for rel in ("server.py", "index.html", "CHANGELOG.md"):
-                src = os.path.join(tmpd, rel)
-                if os.path.isfile(src):
-                    dst = os.path.join(BASE, rel)
-                    shutil.copyfile(src, dst + ".new")
-                    os.chmod(dst + ".new", 0o644)
-                    os.replace(dst + ".new", dst)
-            src_data = os.path.join(tmpd, "data.json")
-            if os.path.isfile(src_data):
-                shutil.copyfile(src_data, DATA_FILE + ".new")
-                os.chmod(DATA_FILE + ".new", 0o600)
-                os.replace(DATA_FILE + ".new", DATA_FILE)
-            shutil.rmtree(tmpd, ignore_errors=True)
+                if m.issym() or m.islnk():
+                    return False, "备份文件含非法链接"
+            # 解压到唯一临时目录再搬，避免半截覆盖和并发冲突
+            tmpd = tempfile.mkdtemp(prefix="restore_", dir=BACKUP_DIR)
+            try:
+                tf.extractall(tmpd, filter="data")
+                # 搬文件
+                for rel in ("server.py", "index.html", "CHANGELOG.md"):
+                    src = os.path.join(tmpd, rel)
+                    if os.path.isfile(src):
+                        dst = os.path.join(BASE, rel)
+                        shutil.copyfile(src, dst + ".new")
+                        os.chmod(dst + ".new", 0o644)
+                        os.replace(dst + ".new", dst)
+                src_data = os.path.join(tmpd, "data.json")
+                if os.path.isfile(src_data):
+                    shutil.copyfile(src_data, DATA_FILE + ".new")
+                    os.chmod(DATA_FILE + ".new", 0o600)
+                    os.replace(DATA_FILE + ".new", DATA_FILE)
+            finally:
+                shutil.rmtree(tmpd, ignore_errors=True)
         return True, "已恢复到 %s（已自动备份当前版本 %s）。恢复 server.py 后需重启面板生效。" % (name, cur)
     except Exception as e:
         return False, "恢复失败：%s" % e

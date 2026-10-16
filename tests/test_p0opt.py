@@ -47,6 +47,15 @@ class WebapiAuthSmokeTest(unittest.TestCase):
         h, _ = _handler("/api/backup", {"X-Shunt": "1"})
         self.assertEqual(h.guard("GET", "/api/backup"), "")
 
+    def test_backup_list_without_header_denied(self):
+        h, _ = _handler("/api/backup/list")
+        why = h.guard("GET", "/api/backup/list")
+        self.assertTrue(why and "X-Shunt" in why, why)
+
+    def test_backup_list_with_header_passes_guard(self):
+        h, _ = _handler("/api/backup/list", {"X-Shunt": "1"})
+        self.assertEqual(h.guard("GET", "/api/backup/list"), "")
+
     def test_config_download_without_header_denied(self):
         h, _ = _handler("/api/config?download=1")
         self.assertTrue(h.guard("GET", "/api/config"))

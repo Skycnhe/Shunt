@@ -1,5 +1,5 @@
 """生成 sing-box 配置"""
-import ipaddress, json, os, re, signal, threading, time, urllib.request, urllib.error
+import ipaddress, json, os, re, shlex, signal, threading, time, urllib.request, urllib.error
 
 from .base import (
     AB_DIR, BUILTIN_POLICIES, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, UA, dl_check, wd_hold)
@@ -493,7 +493,7 @@ def sb_version(path=None):
     path = path or SB_BIN
     if not os.path.isfile(path):
         return ""
-    code, out = sh(f"'{path}' version", timeout=15)
+    code, out = sh(f"{shlex.quote(path)} version", timeout=15)
     m = re.search(r"sing-box version (\S+)", out) if code == 0 else None
     return m.group(1) if m else ""
 
