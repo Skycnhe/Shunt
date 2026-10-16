@@ -25,10 +25,10 @@
 
 ```sh
 # 国内网络
-wget -qO- https://ghfast.top/https://raw.githubusercontent.com/Skycnhe/Shunt/Hk001/install.sh | sh -s -- --cn
+wget -qO- https://ghfast.top/https://raw.githubusercontent.com/Skycnhe/Shunt/Hk002/install.sh | PANEL_BRANCH=Hk002 sh -s -- --cn
 
 # 国外网络
-wget -qO- https://raw.githubusercontent.com/Skycnhe/Shunt/Hk001/install.sh | sh
+wget -qO- https://raw.githubusercontent.com/Skycnhe/Shunt/Hk002/install.sh | PANEL_BRANCH=Hk002 sh
 ```
 
 装完会显示面板地址（默认 `http://旁路由IP:8080`）。面板不需要密码，默认只允许局域网访问；要用域名（DDNS / 反向代理）访问，先在路由器上执行 `python3 /opt/mihomo-panel/server.py --allow-host 你的域名`，确需外网直连时执行 `--allow-public on`。脚本调用改动类接口需加请求头 `X-Shunt: 1`。
