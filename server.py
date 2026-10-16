@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.9.1"
+PANEL_VERSION = "7.9.2"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -249,7 +249,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.9.1"
+PANEL_VERSION = "7.9.2"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -7406,10 +7406,14 @@ _SRC['shunt.warp'] = '''"""Cloudflare WARP 代理（WireGuard 协议）。
 与 mihomo/sing-box 内核二选一：WARP 连接时可自动停止内核，
 内核启动时可自动断开 WARP（互斥开关控制，默认开）。
 """
+import ipaddress
 import json
 import os
 import re
+import socket
+import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 from .base import CORE_SVC
 from .sysopt import sh
@@ -7420,6 +7424,26 @@ WARP_CONF_BAK = os.path.join(WARP_DIR, "wgcf-profile.conf.bak")
 MUTEX_FILE = os.path.join(WARP_DIR, "mutex.json")
 SANITIZED_CONF = "/tmp/warp-sanitized.conf"
 IFACE = "wgcf"
+
+# Cloudflare WARP 入口 IP 候选池（均为 anycast，同 IP 自动路由到最近 PoP，
+# 实际以测速结果为准；用户可在页面添加自定义 IP 加入候选池）
+# 范围来源：162.159.192/193/195/204.0/24，188.114.96-99.0/24
+WARP_IPS = [
+    "162.159.192.1", "162.159.192.10", "162.159.192.100",
+    "162.159.193.1", "162.159.193.10", "162.159.193.100",
+    "162.159.195.1", "162.159.195.10", "162.159.195.100",
+    "162.159.204.1", "162.159.204.10", "162.159.204.50",
+    "162.159.204.100", "162.159.204.200",
+    "188.114.96.1", "188.114.96.10", "188.114.96.100",
+    "188.114.97.1", "188.114.97.10", "188.114.97.100",
+    "188.114.98.1", "188.114.98.10", "188.114.99.1",
+    "188.114.99.10",
+]
+WARP_PORT = 2408
+WARP_PORTS = [2408, 500, 1701, 4500]
+CUSTOM_IPS_FILE = os.path.join(WARP_DIR, "custom_ips.json")
+SPEED_URL = "https://speed.cloudflare.com/__down?bytes=5000000"
+SPEED_TIMEOUT = 12
 
 
 def _ensure_dir():
@@ -7542,6 +7566,149 @@ def save_config(content):
     except Exception as e:
         return {"ok": False, "message": "保存配置失败：%s" % e}
     return {"ok": True, "message": "配置已保存（原配置已备份为 wgcf-profile.conf.bak）"}
+
+
+def get_custom_ips():
+    """用户自定义 IP 候选池。返回 dict(ok, ips)。"""
+    try:
+        with open(CUSTOM_IPS_FILE) as f:
+            ips = json.load(f).get("ips", [])
+        return {"ok": True, "ips": [i for i in ips if isinstance(i, str)]}
+    except FileNotFoundError:
+        return {"ok": True, "ips": []}
+    except Exception as e:
+        return {"ok": False, "message": "读取自定义 IP 失败：%s" % e}
+
+
+def save_custom_ips(ips_text):
+    """保存用户自定义 IP（每行一个）。无效行跳过并告知。返回 dict(ok, message)。"""
+    valid, skipped = [], 0
+    for line in (ips_text or "").splitlines():
+        ip = line.strip()
+        if not ip:
+            continue
+        try:
+            ipaddress.ip_address(ip)
+            valid.append(ip)
+        except ValueError:
+            skipped += 1
+    # 去重（保持顺序）
+    seen, dedup = set(), []
+    for ip in valid:
+        if ip not in seen:
+            seen.add(ip)
+            dedup.append(ip)
+    _ensure_dir()
+    try:
+        with open(CUSTOM_IPS_FILE, "w") as f:
+            json.dump({"ips": dedup}, f)
+        os.chmod(CUSTOM_IPS_FILE, 0o600)
+    except Exception as e:
+        return {"ok": False, "message": "保存自定义 IP 失败：%s" % e}
+    msg = "已保存 %d 个自定义 IP" % len(dedup)
+    if skipped:
+        msg += "（跳过 %d 个无效 IP）" % skipped
+    return {"ok": True, "message": msg, "ips": dedup}
+
+
+def _candidate_ips():
+    """内置候选池 + 自定义 IP，合并去重（保持顺序）。"""
+    custom = get_custom_ips().get("ips", []) or []
+    seen, out = set(), []
+    for ip in WARP_IPS + custom:
+        if ip not in seen:
+            seen.add(ip)
+            out.append(ip)
+    return out
+
+
+def _probe_ip(ip, port=WARP_PORT, tries=3, timeout=2):
+    """对单个 IP 做 TCP connect 延迟测试，返回 (ok, avg_ms, min_ms)。"""
+    """对单个 IP 做 TCP connect 延迟测试，返回 (ok, avg_ms, min_ms)。"""
+    results = []
+    for _ in range(tries):
+        try:
+            t0 = time.monotonic()
+            s = socket.create_connection((ip, port), timeout=timeout)
+            s.close()
+            results.append((time.monotonic() - t0) * 1000)
+        except Exception:
+            pass
+    if not results:
+        return False, 0, 0
+    return True, sum(results) / len(results), min(results)
+
+
+def _ref_download_speed():
+    """当前网络到 Cloudflare 的参考下载速度（curl 官方测速端点，供参考）。
+
+    注意：这是整条路径的参考值，不是每个候选 IP 的独立速度
+    （HTTPS 下载的 IP 不可控，无法按候选 IP 单独测速）。返回如 "12.5 MB/s"，失败返回 ""。
+    """
+    try:
+        code, out = sh('curl -o /dev/null -s -w "%%{speed_download}" --max-time %d "%s"'
+                       % (SPEED_TIMEOUT, SPEED_URL), timeout=SPEED_TIMEOUT + 3)
+        if code != 0:
+            return ""
+        spd = float((out or "").strip())
+        if spd <= 0:
+            return ""
+        if spd >= 1048576:
+            return "%.1f MB/s" % (spd / 1048576)
+        if spd >= 1024:
+            return "%.0f KB/s" % (spd / 1024)
+        return "%.0f B/s" % spd
+    except Exception:
+        return ""
+
+
+def preferred_ips(ports=None):
+    """对候选池（内置 + 自定义）× 端口组合做延迟测试，按平均延迟排序。
+
+    ports: None 或空表示测全部 WARP_PORTS。返回 {"servers": [{ip, port, avg_ms, min_ms, ok}], "ref_speed": "..."}。
+    """
+    targets = _candidate_ips()
+    sel = [p for p in (ports or []) if isinstance(p, int) and p in WARP_PORTS] or list(WARP_PORTS)
+    combos = [(ip, pt) for ip in targets for pt in sel]
+
+    def one(c):
+        ip, pt = c
+        ok, avg, mn = _probe_ip(ip, port=pt)
+        return {"ip": ip, "port": pt, "avg_ms": round(avg, 1),
+                "min_ms": round(mn, 1), "ok": ok}
+
+    with ThreadPoolExecutor(max_workers=20) as ex:
+        fut_speed = ex.submit(_ref_download_speed)
+        results = list(ex.map(one, combos))
+        ref_speed = fut_speed.result()
+    # 成功的按延迟排前面，失败的排最后
+    results.sort(key=lambda r: (0 if r["ok"] else 1, r["avg_ms"] if r["ok"] else 1e9))
+    return {"servers": results, "ref_speed": ref_speed}
+
+
+def apply_ip(ip, port=None):
+    """把指定 IP+端口填入 WireGuard 配置的 Endpoint，保存。返回 dict(ok, message)。"""
+    ip = (ip or "").strip()
+    if ip not in _candidate_ips():
+        return {"ok": False, "message": "未知 IP：%s" % ip}
+    try:
+        port = int(port) if port is not None else WARP_PORT
+    except (TypeError, ValueError):
+        port = WARP_PORT
+    if port not in WARP_PORTS:
+        port = WARP_PORT
+    r = get_config()
+    if not r["ok"]:
+        return r
+    content = r["content"]
+    new_content, n = re.subn(
+        r"(?m)^\\s*Endpoint\\s*=.*$",
+        "Endpoint = %s:%d" % (ip, port),
+        content,
+    )
+    if n == 0:
+        return {"ok": False, "message": "配置中未找到 Endpoint 行，未修改"}
+    return save_config(new_content)
 
 
 def setup():
@@ -8864,6 +9031,33 @@ class H(BaseHTTPRequestHandler):
     @api_route("/api/warp/config", "POST")
     def api_warp_config_post(self, m, p, b, q):
         r = warp_mod.save_config(b.get("content", ""))
+        return self.send(200 if r["ok"] else 400, r)
+
+    @api_route("/api/warp/preferred", "POST")
+    def api_warp_preferred_post(self, m, p, b, q):
+        try:
+            ports = b.get("ports") or []
+            r = warp_mod.preferred_ips(ports)
+            return self.send(200, {"ok": True,
+                                   "servers": r["servers"],
+                                   "ref_speed": r["ref_speed"],
+                                   "ports": warp_mod.WARP_PORTS})
+        except Exception as e:
+            return self.send(200, {"ok": False, "message": str(e), "servers": []})
+
+    @api_route("/api/warp/apply_ip", "POST")
+    def api_warp_apply_ip_post(self, m, p, b, q):
+        r = warp_mod.apply_ip(b.get("ip", ""), b.get("port"))
+        return self.send(200 if r["ok"] else 400, r)
+
+    @api_route("/api/warp/custom_ips", "GET")
+    def api_warp_custom_ips_get(self, m, p, b, q):
+        r = warp_mod.get_custom_ips()
+        return self.send(200 if r["ok"] else 500, r)
+
+    @api_route("/api/warp/custom_ips", "POST")
+    def api_warp_custom_ips_post(self, m, p, b, q):
+        r = warp_mod.save_custom_ips(b.get("ips", ""))
         return self.send(200 if r["ok"] else 400, r)
 
     @api_route("/api/service", "POST")

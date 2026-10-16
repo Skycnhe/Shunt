@@ -1235,6 +1235,33 @@ class H(BaseHTTPRequestHandler):
         r = warp_mod.save_config(b.get("content", ""))
         return self.send(200 if r["ok"] else 400, r)
 
+    @api_route("/api/warp/preferred", "POST")
+    def api_warp_preferred_post(self, m, p, b, q):
+        try:
+            ports = b.get("ports") or []
+            r = warp_mod.preferred_ips(ports)
+            return self.send(200, {"ok": True,
+                                   "servers": r["servers"],
+                                   "ref_speed": r["ref_speed"],
+                                   "ports": warp_mod.WARP_PORTS})
+        except Exception as e:
+            return self.send(200, {"ok": False, "message": str(e), "servers": []})
+
+    @api_route("/api/warp/apply_ip", "POST")
+    def api_warp_apply_ip_post(self, m, p, b, q):
+        r = warp_mod.apply_ip(b.get("ip", ""), b.get("port"))
+        return self.send(200 if r["ok"] else 400, r)
+
+    @api_route("/api/warp/custom_ips", "GET")
+    def api_warp_custom_ips_get(self, m, p, b, q):
+        r = warp_mod.get_custom_ips()
+        return self.send(200 if r["ok"] else 500, r)
+
+    @api_route("/api/warp/custom_ips", "POST")
+    def api_warp_custom_ips_post(self, m, p, b, q):
+        r = warp_mod.save_custom_ips(b.get("ips", ""))
+        return self.send(200 if r["ok"] else 400, r)
+
     @api_route("/api/service", "POST")
     def api_service_post(self, m, p, b, q):
         act = b.get("action")

@@ -243,6 +243,21 @@
       <textarea id="warp-conf" rows="15" spellcheck="false" style="width:100%;font-family:monospace;font-size:12px;background:#14161c;color:#e0e3e8;border:1px solid #333a45;border-radius:8px;padding:10px" placeholder="点「加载配置」读取当前配置"></textarea>
       <div id="warp-conf-r" class="mt"></div>
       <div class="mut small" style="margin-top:6px">直接编辑 wgcf-profile.conf；保存前原配置自动备份为 wgcf-profile.conf.bak。DNS 行保留也无妨，连接时会自动忽略。</div></div>
+    <div class="card"><div class="row" style="margin-bottom:10px"><h3 class="sp" style="margin:0">CF 优选 IP</h3>
+      <span class="mut small">端口：</span><span id="warp-pref-ports">
+        <label class="small"><input type="checkbox" value="2408" checked> 2408</label>
+        <label class="small"><input type="checkbox" value="500" checked> 500</label>
+        <label class="small"><input type="checkbox" value="1701" checked> 1701</label>
+        <label class="small"><input type="checkbox" value="4500" checked> 4500</label></span>
+      <button class="btn g sm" onclick="warpPreferred()">开始测速</button></div>
+      <div class="mut small" style="margin-bottom:8px">对候选池 IP × 选中端口测 TCP 延迟（每个组合 3 次），选最快的点「使用」自动填入配置 Endpoint。候选池 = 内置 Cloudflare 入口 IP + 下方自定义 IP。</div>
+      <div id="warp-pref-list"></div>
+      <div id="warp-pref-r" class="small mt"></div></div>
+    <div class="card"><div class="row" style="margin-bottom:10px"><h3 class="sp" style="margin:0">自定义 IP</h3>
+      <button class="btn g sm" onclick="warpSaveCustomIps()">保存</button></div>
+      <textarea id="warp-custom-ips" rows="5" spellcheck="false" style="width:100%;font-family:monospace;font-size:12px;background:#14161c;color:#e0e3e8;border:1px solid #333a45;border-radius:8px;padding:10px" placeholder="每行一个 IP，例如：&#10;1.2.3.4&#10;5.6.7.8"></textarea>
+      <div id="warp-custom-r" class="mt"></div>
+      <div class="mut small" style="margin-top:6px">自己找的优选 IP 写在这里，保存后会加入优选测速的候选池。</div></div>
   </section>
   <!-- DNS -->
   <section data-tab="DNS">

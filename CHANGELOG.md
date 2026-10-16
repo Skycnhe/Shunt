@@ -1,5 +1,12 @@
 # 更新记录与详细说明
 
+## v7.9.2 WARP 页面增加 CF 优选 IP
+- 新增「CF 优选 IP」卡片：对候选池 IP × 端口（2408/500/1701/4500，可多选）测 TCP 延迟（每个组合 3 次取平均），按延迟排序展示
+- 候选池 = 内置 24 个 Cloudflare WARP 入口 IP（162.159.192/193/195/204.0/24、188.114.96-99.0/24）+ 用户自定义 IP；WARP 入口 IP 均为 anycast，不再按地区分组
+- 新增「自定义 IP」卡片：每行一个 IP，无效行自动跳过并提示，保存后加入优选候选池
+- 测速时附带一条当前网络到 Cloudflare 的参考下载速度（官方 speed.cloudflare.com 测速端点，供参考，非 per-IP 速度）
+- 每行结果有点「使用」按钮，自动把该 IP+端口填入 WireGuard 配置的 Endpoint，原配置自动备份；连接中应用需断开重连生效
+
 ## v7.9.1 修复 WARP 连接失败（resolvconf）
 - 原因：wgcf 生成的配置里带 `DNS = 1.1.1.1`，`wg-quick up` 会调用 resolvconf 改系统 DNS，在 Alpine 上报 `signature mismatch` 导致连接回滚；而且 WARP 的 DNS 会跟面板自己的 DNS（1053 端口）冲突，本来就不该让它碰
 - 现在 `connect()` 在执行 `wg-quick up` 之前先消毒配置文件：去掉 `DNS = ...` 行，用临时文件启动；原文件不动
