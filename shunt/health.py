@@ -73,7 +73,6 @@ def apply_results(results, d=None):
     d = d or load()
     cfg = health_cfg(d)
     health = d.get("health") or {}
-    today = _today()
     for name, latency in results.items():
         rec = health.get(name) or {"fail_days": 0, "fail_dates": [], "hidden": False}
         record_one(rec, latency > 0, latency)

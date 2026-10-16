@@ -1,5 +1,7 @@
 # 更新记录与详细说明
 
+## v8.2.1
+- 修复 pyflakes F841：`shunt/health.py` 未使用的 `today` 变量（CI check 失败）
 ## v8.2 sing-box DNS 防绕过增强
 - **新增**：切换到 sing-box 内核时自动开启「阻止客户端绕过 DNS」（劫持 53 端口、拒绝 853/DoH），并在切换消息中提示；mihomo 切回不受影响
   - 背景：sing-box 1.13+ 移除了 `sniff_override_destination`，设备 DNS 绕过面板时拿到污染 IP 必死；mihomo 的 sniffer 默认改写目标地址所以不受影响
