@@ -414,6 +414,7 @@ nav button{font-size:15.5px;font-weight:600;opacity:.85}nav button.on{font-weigh
   <section data-tab="节点">
     <div class="row ntool" style="margin-bottom:12px"><input class="sp nsearch" id="nf-q" placeholder="搜索节点 / 分组" oninput="NF.q=this.value.trim().toLowerCase();renderGroups()">
       <div class="seg" id="nsort"><button data-v="default">默认顺序</button><button data-v="delay">按延迟</button></div>
+      <div class="seg" id="hf"><button data-v="all">全部</button><button data-v="normal">只看正常</button><button data-v="bad">只看失效</button><button data-v="hidden">含已隐藏</button></div>
       <button class="btn g" id="hidedead" onclick="toggleDead()" title="隐藏测速超时的节点（未测速的节点和当前选中的节点照常显示）">隐藏超时</button>
       <button class="btn g" onclick="setAllOpen(true)">全部展开</button><button class="btn g" onclick="setAllOpen(false)">全部收起</button>
       <button class="btn g" id="test-all" onclick="testAll(this)">全部测速</button><button class="btn g" onclick="loadProxies()">刷新</button></div>
@@ -697,6 +698,12 @@ nav button{font-size:15.5px;font-weight:600;opacity:.85}nav button.on{font-weigh
       <div class="opt"><div class="sp"><div class="t">每天更新 GEO 数据库</div></div><input type="time" id="sc-geo"><button class="btn g sm" onclick="runTask('geo_update')">立即执行</button></div>
       <div class="opt"><div class="sp"><div class="t">节点自动测速</div><div class="dsc">定时测试全部节点，节点页可按延迟排序</div></div>
         <select id="sc-lat"><option value="0">关闭</option><option value="10">每 10 分钟</option><option value="30">每 30 分钟</option><option value="60">每小时</option><option value="180">每 3 小时</option></select><button class="btn g sm" onclick="runTask('latency')">立即执行</button></div>
+      <div class="opt"><div class="sp"><div class="t">节点健康检查</div><div class="dsc">每天定时测全部节点，连续失败标红/自动隐藏</div></div>
+        <label class="sw"><input type="checkbox" id="hc-enabled" onchange="saveHealthCfg()"><span></span></label></div>
+      <div class="opt"><div class="sp"><div class="t">检查时间</div></div><input type="time" id="hc-time" value="03:00" onchange="saveHealthCfg()"></div>
+      <div class="opt"><div class="sp"><div class="t">标红天数 / 隐藏天数</div><div class="dsc">连续失败 N 天标红，M 天自动隐藏</div></div>
+        <input type="number" id="hc-warn" min="1" max="30" value="3" style="width:60px" onchange="saveHealthCfg()"> / <input type="number" id="hc-hide" min="1" max="30" value="7" style="width:60px" onchange="saveHealthCfg()"></div>
+      <div class="row mt"><span class="sp mut small" id="hc-status">健康检查：未启用</span><button class="btn g sm" onclick="runHealthCheck()">立即检查</button></div>
       <div class="row mt"><span class="sp mut small">按旁路由本机时区执行</span><button class="btn" onclick="saveSchedule()">保存</button></div>
       <div id="sc-events" class="mt"></div></div>
     <div data-sg="core" class="card"><h3>延迟检测站点</h3><div class="mut small" style="margin-bottom:6px">每行：名称|网址</div>
@@ -984,6 +991,7 @@ async function editDev(ip){const mac=DEVS[ip]?.mac;const cur=(STATE.devices||{})
 
 // 节点：可折叠的策略组卡片 + 策略选择
 let PROXIES={},NSORT=localStorage.getItem('mp_nsort')||'default',GL=[],GALL=[],HIDEDEAD=localStorage.getItem('mp_hidedead')==='1';
+let HEALTHR={},HEALTHC={},HF=localStorage.getItem('mp_hf')||'all';  // 健康数据、健康配置、健康筛选
 let DIRECT_D;  // 直连国内延迟：DIRECT 是国内直连，与概览百度卡片同口径
 const isDead=n=>!isGroup(n)&&(()=>{const d=lastDelay(n);return d!==undefined&&d<=0})();
 function toggleDead(){HIDEDEAD=!HIDEDEAD;localStorage.setItem('mp_hidedead',HIDEDEAD?'1':'0');renderGroups();if(TAB==='概览')loadQS()}
@@ -994,7 +1002,19 @@ const GTC={Selector:'k-sel',URLTest:'k-auto',Smart:'k-auto',Fallback:'k-fb',Load
 const LBS={'consistent-hashing':'一致性哈希','round-robin':'轮询','sticky-sessions':'粘性会话'};
 const isGroup=n=>!!(PROXIES[n]&&PROXIES[n].all);
 async function loadProxies(){document.querySelectorAll('#nsort button').forEach(b=>{b.classList.toggle('on',b.dataset.v===NSORT);b.onclick=()=>{NSORT=b.dataset.v;localStorage.setItem('mp_nsort',NSORT);renderGroups()}});
-  try{PROXIES=await loadPX();try{const j=await api('/api/direct_delay');if(j.ms>0)DIRECT_D=j.ms}catch(e){}renderGroups()}catch(e){$('#groups').innerHTML=`<div class="card bad">${esc(e.message)}</div>`;$('#policies').innerHTML=''}}
+  document.querySelectorAll('#hf button').forEach(b=>{b.classList.toggle('on',b.dataset.v===HF);b.onclick=()=>{HF=b.dataset.v;localStorage.setItem('mp_hf',HF);renderGroups()}});
+  try{PROXIES=await loadPX();try{const j=await api('/api/direct_delay');if(j.ms>0)DIRECT_D=j.ms}catch(e){}
+  try{const h=await api('/api/health/status');HEALTHR=h.records||{};HEALTHC=h.cfg||{}}catch(e){}
+  renderGroups()}catch(e){$('#groups').innerHTML=`<div class="card bad">${esc(e.message)}</div>`;$('#policies').innerHTML=''}}
+// 健康等级：ok/warn/bad/hidden；返回图标
+function hLevel(n){const r=HEALTHR[n];if(!r)return 'ok';if(r.hidden)return 'hidden';
+  const fd=r.fail_days||0,wc=HEALTHC.warn_days||3,hc=HEALTHC.hide_days||7;
+  if(fd>=hc)return 'hidden';if(fd>=wc)return 'bad';if(fd>0)return 'warn';return 'ok'}
+function hIcon(n){const l=hLevel(n);return l==='warn'?'🟡 ':l==='bad'?'🔴 ':l==='hidden'?'🚫 ':''}
+// 健康筛选：当前选中的节点始终显示，避免界面混乱
+function hfVisible(n,now){const l=hLevel(n);if(n===now)return true;
+  if(HF==='normal')return l==='ok';if(HF==='bad')return l==='warn'||l==='bad';if(HF==='hidden')return true;return l!=='hidden'}
+async function unhideNode(n){try{const j=await api('/api/health/unhide','POST',{node_id:n});toast(j.message);const h=await api('/api/health/status');HEALTHR=h.records||{};renderGroups()}catch(e){toast(e.message)}}
 function rawDelay(n){if(n==='DIRECT'&&DIRECT_D!==undefined)return DIRECT_D;const p=PROXIES[n];if(!p)return undefined;if(p._d!==undefined)return p._d;
   let best;[p.history||[],...Object.values(p.extra||{}).map(x=>x?.history||[])].forEach(h=>{const e=h[h.length-1];if(e&&(!best||String(e.time||'')>String(best.time||'')))best=e});
   return best?best.delay:undefined}
@@ -1036,22 +1056,24 @@ function renderGroups(){
     if(policyOnly(g))return '';
     const vis=filt?all0.filter(nfVisible):all0;if(filt&&!vis.length&&!(NF.q&&g.toLowerCase().includes(NF.q)))return '';
     const all=HIDEDEAD?vis.filter(n=>n===p.now||!isDead(n)):vis,hid=vis.length-all.length;
+    const allH=all.filter(n=>hfVisible(n,p.now)),hidH=all.length-allH.length;
     const ch=nowChain(g),dl=lastDelay(g),lb=p.type==='LoadBalance';
     const sub=lb?`策略：<b>${esc(LBS[m.strategy]||m.strategy||'-')}</b>`:p.type==='Smart'?(p.fixed?'已固定 → <b>'+esc(p.fixed)+'</b>':'智能竞技：按延迟 / 丢包 / 速度打分'+(p.uselightgbm||p.useLightGBM?' + LightGBM':'')):ch.length?'→ <b>'+ch.map(esc).join(' → ')+'</b>':'';
-    const nodesN=all.filter(n=>!isGroup(n)).length,groupsN=all.length-nodesN;
-    const cnt=[nodesN?nodesN+' 个节点':'',groupsN?groupsN+' 个分组':'',hid?`<span class="bad">已隐藏 ${hid} 个超时</span>`:''].filter(Boolean).join(' · ');
+    const nodesN=allH.filter(n=>!isGroup(n)).length,groupsN=allH.length-nodesN;
+    const cnt=[nodesN?nodesN+' 个节点':'',groupsN?groupsN+' 个分组':'',hid?`<span class="bad">已隐藏 ${hid} 个超时</span>`:'',hidH?`<span class="bad">健康隐藏 ${hidH} 个</span>`:''].filter(Boolean).join(' · ');
     const pin=p.fixed?`<span class="tag pin" title="点击取消固定，恢复自动选择" onclick="event.stopPropagation();unfix(${i})">📌 已固定 ✕</span>`:'';
     const ico=p.icon?`<img class="gico" src="${esc(p.icon)}" alt="" onerror="this.remove()">`:'';
-    const dots=all.slice(0,80).map(n=>`<i class="${dcls(lastDelay(n))==='mut'?'':dcls(lastDelay(n))}"></i>`).join('');
+    const dots=allH.slice(0,80).map(n=>`<i class="${dcls(lastDelay(n))==='mut'?'':dcls(lastDelay(n))}"></i>`).join('');
     return `<div class="card gcard ${gOpen(g)?'open':''}" id="gc${i}"><div class="ghead" onclick="toggleG(${i})">
       <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></span>${ico}
       <div class="gt"><div class="gname">${esc(g)} ${gTag(g)} ${pin}</div><div class="gsub">${sub}${sub&&cnt?' · ':''}${cnt}</div><div class="dots">${dots}</div></div>
       ${dl!==undefined?`<span class="gdl ${dcls(dl)}"${lb?' title="成员中最快的可用节点"':''}>${lb&&dl>0?'最快 ':''}${dtxt(dl)}</span>`:''}
       <button class="btn g sm" onclick="event.stopPropagation();testGroup(${i},this)">测速</button></div>
-      <div class="gbody"><div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(min(100%,178px),1fr));gap:10px">${all.map(n=>{const j=all0.indexOf(n),d=lastDelay(n),sg=isGroup(n);
+      <div class="gbody"><div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(min(100%,178px),1fr));gap:10px">${allH.map(n=>{const j=all0.indexOf(n),d=lastDelay(n),sg=isGroup(n);
         const s2=sg?`<div class="sub2">${esc(GT[PROXIES[n].type]||'')}${PROXIES[n].now?' → '+esc(PROXIES[n].now):''}</div>`:'';
+        const unh=hLevel(n)==='hidden'?`<button class="btn g sm" onclick="event.stopPropagation();unhideNode('${esc(n).replace(/'/g,"\\'")}')">取消隐藏</button>`:'';
         return `<div class="node ${n===p.now&&!lb?'sel':''} ${lb?'lbm':''}" onclick="pick(${i},${j})" title="${esc(n)}">
-        <div class="n">${sg?'📁 ':''}${esc(n)}</div>${s2}<div class="d"><span class="mut">${esc(sg?'分组':PROXIES[n]?.type||'')}</span> <span class="${dcls(d)}">${dtxt(d)}</span></div></div>`}).join('')}</div></div></div>`}).join('')||(filt?'<div class="card mut">没有匹配的节点</div>':'<div class="card mut">还没有节点，先去“订阅”添加订阅或导入节点</div>');
+        <div class="n">${hIcon(n)}${sg?'📁 ':''}${esc(n)}</div>${s2}<div class="d"><span class="mut">${esc(sg?'分组':PROXIES[n]?.type||'')}</span> <span class="${dcls(d)}">${dtxt(d)}</span></div>${unh}</div>`}).join('')}</div></div></div>`}).join('')||(filt?'<div class="card mut">没有匹配的节点</div>':'<div class="card mut">还没有节点，先去“订阅”添加订阅或导入节点</div>');
   $('#hidedead').classList.toggle('on',HIDEDEAD);$('#hidedead').textContent=HIDEDEAD?'显示超时':'隐藏超时';
   renderPolicies()}
 function renderPolicies(){const sel=GL.filter(g=>g!=='GLOBAL'&&PROXIES[g].type==='Selector'&&(PROXIES[g].all||[]).length>1);
@@ -1333,7 +1355,7 @@ async function renderSettings(){renderSG();renderLook();await loadState().catch(
   sw('#wd',STATE.watchdog,v=>saveSettings({watchdog:v},'看门狗已'+(v?'开启':'关闭')));
   sw('#https',STATE.https,async v=>{if(!confirm(`面板将以 ${v?'HTTPS':'HTTP'} 重启，确定？`))throw 0;
     try{const j=await api('/api/https','PUT',{enable:v});toast(j.message+'，3 秒后跳转');setTimeout(()=>location.href=`${j.scheme}://${location.host}/`,3000)}catch(e){toast(e.message);throw e}});
-  fillSchedule();loadLogInfo();loadHistory();loadBackups();
+  fillSchedule();loadLogInfo();loadHistory();loadBackups();fillHealthCfg();
   sw('#sniff',STATE.sniffer!==false,v=>saveSettings({sniffer:v},'域名嗅探已'+(v?'开启':'关闭')));
   loadSysopt();$('#pv').textContent='当前 v'+(STATE.panel_version||'-');$('#cv').textContent='当前 '+(STATE.version||'-');
   if(!CORE_POLL)api('/api/coreupdate/status').then(j=>{if(j.busy)corePoll()}).catch(()=>{});if(document.activeElement!==$('#gh-proxy'))$('#gh-proxy').value=STATE.gh_proxy||'';
@@ -1433,6 +1455,11 @@ function fillSchedule(){const s=STATE.schedule||{};$('#sc-sub').value=s.sub_upda
   $('#sc-events').innerHTML=(STATE.sched_events||[]).slice(0,6).map(e=>`<div class="ev"><span class="mut">${new Date(e.t*1000).toLocaleString('zh-CN',{hour12:false})}</span> ${esc(e.msg)}</div>`).join('')}
 async function saveSchedule(){try{const j=await api('/api/schedule','PUT',{sub_update:$('#sc-sub').value,core_restart:$('#sc-restart').value,geo_update:$('#sc-geo').value,latency:+$('#sc-lat').value});toast(j.message);await loadState();fillSchedule()}catch(e){toast(e.message)}}
 async function runTask(k){if(k==='core_restart'&&!confirm('立即重启核心？'))return;try{toast('执行中…');const j=await api('/api/schedule/run','POST',{task:k});toast(j.message)}catch(e){toast(e.message)}await loadState();fillSchedule()}
+async function fillHealthCfg(){try{const j=await api('/api/health/status');const c=j.cfg||{};$('#hc-enabled').checked=!!c.enabled;$('#hc-time').value=c.time||'03:00';$('#hc-warn').value=c.warn_days||3;$('#hc-hide').value=c.hide_days||7;
+  const st=j.running?'检查中…':(j.last_run?('上次：'+new Date(j.last_run*1000).toLocaleString('zh-CN',{hour12:false,month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})):'未运行过');
+  $('#hc-status').textContent='健康检查：'+(c.enabled?'已启用':'未启用')+'，'+st}catch(e){}}
+async function saveHealthCfg(){try{const j=await api('/api/health/cfg','PUT',{enabled:$('#hc-enabled').checked,time:$('#hc-time').value,warn_days:+$('#hc-warn').value,hide_days:+$('#hc-hide').value});if(!j.ok)toast(j.message||'保存失败');fillHealthCfg()}catch(e){toast(e.message)}}
+async function runHealthCheck(){try{toast('开始检查…');const j=await api('/api/health/check','POST');toast(j.message);const poll=setInterval(async()=>{try{const s=await api('/api/health/status');fillHealthCfg();if(!s.running){clearInterval(poll);if(TAB==='nodes')loadProxies()}}catch(e){clearInterval(poll)}},3000)}catch(e){toast(e.message)}}
 async function loadHistory(){try{const h=await api('/api/history');
   $('#hist').innerHTML=h.map(x=>`<div class="row ev" style="padding:6px 0"><span class="mut" style="min-width:118px">${new Date(x.t*1000).toLocaleString('zh-CN',{hour12:false,month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</span><span class="sp">修改前：${x.changed.map(esc).join('、')}</span><button class="btn g sm" onclick="restoreHist('${x.id}')">恢复</button></div>`).join('')||'<span class="mut">还没有快照</span>'}catch(e){}}
 async function restoreHist(id){if(!confirm('恢复到这份快照？当前设置会先保存为新快照。'))return;try{toast('正在校验并应用…');const j=await api('/api/history','POST',{id});toast(j.message);await loadState();renderSettings()}catch(e){toast(e.message)}}

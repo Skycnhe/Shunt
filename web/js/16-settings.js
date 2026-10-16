@@ -24,7 +24,7 @@ async function renderSettings(){renderSG();renderLook();await loadState().catch(
   sw('#wd',STATE.watchdog,v=>saveSettings({watchdog:v},'看门狗已'+(v?'开启':'关闭')));
   sw('#https',STATE.https,async v=>{if(!confirm(`面板将以 ${v?'HTTPS':'HTTP'} 重启，确定？`))throw 0;
     try{const j=await api('/api/https','PUT',{enable:v});toast(j.message+'，3 秒后跳转');setTimeout(()=>location.href=`${j.scheme}://${location.host}/`,3000)}catch(e){toast(e.message);throw e}});
-  fillSchedule();loadLogInfo();loadHistory();loadBackups();
+  fillSchedule();loadLogInfo();loadHistory();loadBackups();fillHealthCfg();
   sw('#sniff',STATE.sniffer!==false,v=>saveSettings({sniffer:v},'域名嗅探已'+(v?'开启':'关闭')));
   loadSysopt();$('#pv').textContent='当前 v'+(STATE.panel_version||'-');$('#cv').textContent='当前 '+(STATE.version||'-');
   if(!CORE_POLL)api('/api/coreupdate/status').then(j=>{if(j.busy)corePoll()}).catch(()=>{});if(document.activeElement!==$('#gh-proxy'))$('#gh-proxy').value=STATE.gh_proxy||'';

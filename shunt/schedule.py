@@ -16,6 +16,7 @@ from .sysopt import svc_restart
 from .notify import WD
 from .latency import bg_fetch, bg_meta, bg_meta_save
 from .adblock import AB_STATE, ab_meta, adblock_update
+from .health import health_cfg, run_check as health_run_check
 SCHED = {"events": deque(maxlen=30), "done": {}}
 
 
@@ -69,11 +70,13 @@ def run_task(name):
         return code == 200, f"节点测速完成，{n} 个节点可达"
     if name == "adblock":
         return adblock_update()
+    if name == "health":
+        return health_run_check()
     return False, "未知任务"
 
 
 TASK_NAMES = {"sub_update": "定时更新订阅", "core_restart": "定时重启核心", "geo_update": "定时更新 GEO",
-              "latency": "自动测速", "adblock": "更新广告规则"}
+              "latency": "自动测速", "adblock": "更新广告规则", "health": "节点健康检查"}
 
 
 def sched_loop():
@@ -88,6 +91,10 @@ def sched_loop():
             today = time.strftime("%Y-%m-%d")
             due = [k for k in ("sub_update", "core_restart", "geo_update")
                    if sc.get(k) and sc[k] == now and SCHED["done"].get(k) != today]
+            # 节点健康检查：每天到点且启用时执行
+            hcfg = health_cfg(d)
+            if hcfg.get("enabled") and hcfg.get("time") == now and SCHED["done"].get("health") != today:
+                due.append("health")
             mins = int(sc.get("latency") or 0)
             if mins and time.time() - SCHED["done"].get("latency", 0) >= mins * 60:
                 due.append("latency")

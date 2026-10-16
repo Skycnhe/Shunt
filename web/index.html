@@ -86,6 +86,7 @@
   <section data-tab="节点">
     <div class="row ntool" style="margin-bottom:12px"><input class="sp nsearch" id="nf-q" placeholder="搜索节点 / 分组" oninput="NF.q=this.value.trim().toLowerCase();renderGroups()">
       <div class="seg" id="nsort"><button data-v="default">默认顺序</button><button data-v="delay">按延迟</button></div>
+      <div class="seg" id="hf"><button data-v="all">全部</button><button data-v="normal">只看正常</button><button data-v="bad">只看失效</button><button data-v="hidden">含已隐藏</button></div>
       <button class="btn g" id="hidedead" onclick="toggleDead()" title="隐藏测速超时的节点（未测速的节点和当前选中的节点照常显示）">隐藏超时</button>
       <button class="btn g" onclick="setAllOpen(true)">全部展开</button><button class="btn g" onclick="setAllOpen(false)">全部收起</button>
       <button class="btn g" id="test-all" onclick="testAll(this)">全部测速</button><button class="btn g" onclick="loadProxies()">刷新</button></div>
@@ -369,6 +370,12 @@
       <div class="opt"><div class="sp"><div class="t">每天更新 GEO 数据库</div></div><input type="time" id="sc-geo"><button class="btn g sm" onclick="runTask('geo_update')">立即执行</button></div>
       <div class="opt"><div class="sp"><div class="t">节点自动测速</div><div class="dsc">定时测试全部节点，节点页可按延迟排序</div></div>
         <select id="sc-lat"><option value="0">关闭</option><option value="10">每 10 分钟</option><option value="30">每 30 分钟</option><option value="60">每小时</option><option value="180">每 3 小时</option></select><button class="btn g sm" onclick="runTask('latency')">立即执行</button></div>
+      <div class="opt"><div class="sp"><div class="t">节点健康检查</div><div class="dsc">每天定时测全部节点，连续失败标红/自动隐藏</div></div>
+        <label class="sw"><input type="checkbox" id="hc-enabled" onchange="saveHealthCfg()"><span></span></label></div>
+      <div class="opt"><div class="sp"><div class="t">检查时间</div></div><input type="time" id="hc-time" value="03:00" onchange="saveHealthCfg()"></div>
+      <div class="opt"><div class="sp"><div class="t">标红天数 / 隐藏天数</div><div class="dsc">连续失败 N 天标红，M 天自动隐藏</div></div>
+        <input type="number" id="hc-warn" min="1" max="30" value="3" style="width:60px" onchange="saveHealthCfg()"> / <input type="number" id="hc-hide" min="1" max="30" value="7" style="width:60px" onchange="saveHealthCfg()"></div>
+      <div class="row mt"><span class="sp mut small" id="hc-status">健康检查：未启用</span><button class="btn g sm" onclick="runHealthCheck()">立即检查</button></div>
       <div class="row mt"><span class="sp mut small">按旁路由本机时区执行</span><button class="btn" onclick="saveSchedule()">保存</button></div>
       <div id="sc-events" class="mt"></div></div>
     <div data-sg="core" class="card"><h3>延迟检测站点</h3><div class="mut small" style="margin-bottom:6px">每行：名称|网址</div>

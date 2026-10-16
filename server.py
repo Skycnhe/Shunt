@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.11.1"
+PANEL_VERSION = "8.1"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -39,6 +39,7 @@ MODULES = [
     "sb_switch",
     "panel_update",
     "backup",
+    "health",
     "core_update",
     "sysopt",
     "notify",
@@ -249,7 +250,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.11.1"
+PANEL_VERSION = "8.1"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -3896,6 +3897,158 @@ def restore(name):
     except Exception as e:
         return False, "恢复失败：%s" % e
 '''
+_SRC['shunt.health'] = '''"""节点健康检查：定时测速，连续失败的节点标红/自动隐藏。"""
+import json
+import threading
+import time
+from urllib.parse import quote
+
+from .base import G_MANUAL, HC
+from .corehttp import core, core_json
+from .data import load, save
+
+HEALTH_STATE = {"running": False, "last_run": 0, "total": 0, "checked": 0}
+
+DEFAULT_CFG = {"enabled": False, "time": "03:00", "warn_days": 3, "hide_days": 7}
+
+
+def health_cfg(d=None):
+    """读取健康检查配置（data.json 的 health_cfg 字段）"""
+    d = d or load()
+    cfg = dict(DEFAULT_CFG)
+    cfg.update(d.get("health_cfg") or {})
+    return cfg
+
+
+def save_health_cfg(cfg):
+    d = load()
+    d["health_cfg"] = cfg
+    save(d)
+
+
+def _today():
+    return time.strftime("%Y-%m-%d")
+
+
+def record_one(rec, ok, latency=0):
+    """更新单个节点的健康记录。成功：清零并取消隐藏；失败：按天去重计数。"""
+    today = _today()
+    if ok:
+        rec["fail_days"] = 0
+        rec["fail_dates"] = []
+        rec["hidden"] = False
+        rec["last_ok"] = int(time.time())
+        if latency:
+            rec["latency"] = latency
+    else:
+        dates = rec.get("fail_dates") or []
+        if today not in dates:
+            dates.append(today)
+            # 只保留最近 30 天的记录
+            dates = sorted(dates)[-30:]
+        rec["fail_dates"] = dates
+        rec["fail_days"] = len(dates)
+        rec["last_fail"] = int(time.time())
+    return rec
+
+
+def node_level(rec, cfg=None):
+    """节点健康等级：ok / warn / bad / hidden"""
+    cfg = cfg or DEFAULT_CFG
+    if rec.get("hidden"):
+        return "hidden"
+    fail_days = rec.get("fail_days", 0)
+    if fail_days >= cfg.get("hide_days", 7):
+        return "hidden"
+    if fail_days >= cfg.get("warn_days", 3):
+        return "bad"
+    if fail_days > 0:
+        return "warn"
+    return "ok"
+
+
+def apply_results(results, d=None):
+    """合并一次全量测速结果：{node_name: latency_ms(0=失败)}"""
+    d = d or load()
+    cfg = health_cfg(d)
+    health = d.get("health") or {}
+    today = _today()
+    for name, latency in results.items():
+        rec = health.get(name) or {"fail_days": 0, "fail_dates": [], "hidden": False}
+        record_one(rec, latency > 0, latency)
+        # 自动隐藏达到阈值的节点
+        if rec["fail_days"] >= cfg.get("hide_days", 7):
+            rec["hidden"] = True
+        health[name] = rec
+    # 清理已删除节点的记录
+    all_nodes = set(results.keys())
+    for name in list(health.keys()):
+        if name not in all_nodes:
+            del health[name]
+    d["health"] = health
+    save(d)
+    return health
+
+
+def unhide(name):
+    """手动取消隐藏节点，清零计数重新评估"""
+    d = load()
+    health = d.get("health") or {}
+    rec = health.get(name)
+    if rec:
+        rec["hidden"] = False
+        rec["fail_days"] = 0
+        rec["fail_dates"] = []
+        d["health"] = health
+        save(d)
+        return True
+    return False
+
+
+def get_records(d=None):
+    """返回所有节点的健康记录"""
+    d = d or load()
+    return d.get("health") or {}
+
+
+def run_check():
+    """执行一次全量健康检查：经核心 delay 接口批量测速"""
+    HEALTH_STATE["running"] = True
+    HEALTH_STATE["checked"] = 0
+    try:
+        # 用「🖐️ 手动选择」组测速（含全部节点），不影响 url-test 组的固定选择
+        if not core_json("/proxies/" + quote(G_MANUAL)):
+            return False, "手动选择组不存在"
+        code, raw = core("GET", f"/group/{quote(G_MANUAL)}/delay?url={quote(HC)}&timeout=5000", timeout=180)
+        if code != 200:
+            return False, f"测速接口返回 {code}"
+        try:
+            data = json.loads(raw)
+        except Exception:
+            return False, "测速结果解析失败"
+        results = {}
+        for name, v in data.items():
+            # 只统计实际节点，跳过策略组
+            if isinstance(v, int):
+                results[name] = v
+        HEALTH_STATE["total"] = len(results)
+        HEALTH_STATE["checked"] = len(results)
+        apply_results(results)
+        HEALTH_STATE["last_run"] = int(time.time())
+        ok_count = sum(1 for v in results.values() if v > 0)
+        return True, f"检查完成：{ok_count}/{len(results)} 个节点正常"
+    finally:
+        HEALTH_STATE["running"] = False
+
+
+def run_check_bg():
+    """后台线程执行检查，API 立即返回"""
+    if HEALTH_STATE["running"]:
+        return False
+    t = threading.Thread(target=run_check, daemon=True)
+    t.start()
+    return True
+'''
 _SRC['shunt.core_update'] = '''"""内核（mihomo）更新"""
 import hashlib, json, os, re, shutil, shlex, sys, threading, time, urllib.request, urllib.error
 from collections import deque
@@ -6408,6 +6561,7 @@ from .sysopt import svc_restart
 from .notify import WD
 from .latency import bg_fetch, bg_meta, bg_meta_save
 from .adblock import AB_STATE, ab_meta, adblock_update
+from .health import health_cfg, run_check as health_run_check
 SCHED = {"events": deque(maxlen=30), "done": {}}
 
 
@@ -6461,11 +6615,13 @@ def run_task(name):
         return code == 200, f"节点测速完成，{n} 个节点可达"
     if name == "adblock":
         return adblock_update()
+    if name == "health":
+        return health_run_check()
     return False, "未知任务"
 
 
 TASK_NAMES = {"sub_update": "定时更新订阅", "core_restart": "定时重启核心", "geo_update": "定时更新 GEO",
-              "latency": "自动测速", "adblock": "更新广告规则"}
+              "latency": "自动测速", "adblock": "更新广告规则", "health": "节点健康检查"}
 
 
 def sched_loop():
@@ -6480,6 +6636,10 @@ def sched_loop():
             today = time.strftime("%Y-%m-%d")
             due = [k for k in ("sub_update", "core_restart", "geo_update")
                    if sc.get(k) and sc[k] == now and SCHED["done"].get(k) != today]
+            # 节点健康检查：每天到点且启用时执行
+            hcfg = health_cfg(d)
+            if hcfg.get("enabled") and hcfg.get("time") == now and SCHED["done"].get("health") != today:
+                due.append("health")
             mins = int(sc.get("latency") or 0)
             if mins and time.time() - SCHED["done"].get("latency", 0) >= mins * 60:
                 due.append("latency")
@@ -8885,6 +9045,55 @@ class H(BaseHTTPRequestHandler):
         from . import backup as backup_mod
         ok, msg = backup_mod.delete((b.get("name") or "").strip())
         return self.reply(ok, msg)
+
+    @api_route("/api/health/status", "GET")
+    def api_health_status(self, m, p, b, q):
+        from . import health as health_mod
+        return self.send(200, {"running": health_mod.HEALTH_STATE["running"],
+                               "last_run": health_mod.HEALTH_STATE["last_run"],
+                               "total": health_mod.HEALTH_STATE["total"],
+                               "checked": health_mod.HEALTH_STATE["checked"],
+                               "cfg": health_mod.health_cfg(),
+                               "records": health_mod.get_records()})
+
+    @api_route("/api/health/check", "POST")
+    def api_health_check(self, m, p, b, q):
+        from . import health as health_mod
+        ok = health_mod.run_check_bg()
+        return self.send(200, {"ok": ok, "message": "已开始检查" if ok else "检查正在进行中"})
+
+    @api_route("/api/health/unhide", "POST")
+    def api_health_unhide(self, m, p, b, q):
+        from . import health as health_mod
+        name = (b.get("node_id") or "").strip()
+        ok = health_mod.unhide(name) if name else False
+        return self.reply(ok, "已取消隐藏" if ok else "节点不存在")
+
+    @api_route("/api/health/cfg", "PUT")
+    def api_health_cfg(self, m, p, b, q):
+        from . import health as health_mod
+        cfg = health_mod.health_cfg()
+        if "enabled" in b:
+            cfg["enabled"] = bool(b["enabled"])
+        if "time" in b:
+            t = str(b["time"]).strip()
+            import re
+            if not re.match(r"^\\d{2}:\\d{2}$", t):
+                return self.send(400, {"ok": False, "message": "时间格式应为 HH:MM"})
+            cfg["time"] = t
+        for k in ("warn_days", "hide_days"):
+            if k in b:
+                try:
+                    v = int(b[k])
+                    if v < 1 or v > 30:
+                        raise ValueError
+                    cfg[k] = v
+                except (ValueError, TypeError):
+                    return self.send(400, {"ok": False, "message": f"{k} 应为 1-30 的整数"})
+        if cfg["warn_days"] >= cfg["hide_days"]:
+            return self.send(400, {"ok": False, "message": "标红天数应小于隐藏天数"})
+        health_mod.save_health_cfg(cfg)
+        return self.send(200, {"ok": True, "cfg": cfg})
 
     @api_route("/api/restore", "POST")
     def api_restore_post(self, m, p, b, q):

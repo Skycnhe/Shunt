@@ -1303,6 +1303,55 @@ class H(BaseHTTPRequestHandler):
         ok, msg = backup_mod.delete((b.get("name") or "").strip())
         return self.reply(ok, msg)
 
+    @api_route("/api/health/status", "GET")
+    def api_health_status(self, m, p, b, q):
+        from . import health as health_mod
+        return self.send(200, {"running": health_mod.HEALTH_STATE["running"],
+                               "last_run": health_mod.HEALTH_STATE["last_run"],
+                               "total": health_mod.HEALTH_STATE["total"],
+                               "checked": health_mod.HEALTH_STATE["checked"],
+                               "cfg": health_mod.health_cfg(),
+                               "records": health_mod.get_records()})
+
+    @api_route("/api/health/check", "POST")
+    def api_health_check(self, m, p, b, q):
+        from . import health as health_mod
+        ok = health_mod.run_check_bg()
+        return self.send(200, {"ok": ok, "message": "已开始检查" if ok else "检查正在进行中"})
+
+    @api_route("/api/health/unhide", "POST")
+    def api_health_unhide(self, m, p, b, q):
+        from . import health as health_mod
+        name = (b.get("node_id") or "").strip()
+        ok = health_mod.unhide(name) if name else False
+        return self.reply(ok, "已取消隐藏" if ok else "节点不存在")
+
+    @api_route("/api/health/cfg", "PUT")
+    def api_health_cfg(self, m, p, b, q):
+        from . import health as health_mod
+        cfg = health_mod.health_cfg()
+        if "enabled" in b:
+            cfg["enabled"] = bool(b["enabled"])
+        if "time" in b:
+            t = str(b["time"]).strip()
+            import re
+            if not re.match(r"^\d{2}:\d{2}$", t):
+                return self.send(400, {"ok": False, "message": "时间格式应为 HH:MM"})
+            cfg["time"] = t
+        for k in ("warn_days", "hide_days"):
+            if k in b:
+                try:
+                    v = int(b[k])
+                    if v < 1 or v > 30:
+                        raise ValueError
+                    cfg[k] = v
+                except (ValueError, TypeError):
+                    return self.send(400, {"ok": False, "message": f"{k} 应为 1-30 的整数"})
+        if cfg["warn_days"] >= cfg["hide_days"]:
+            return self.send(400, {"ok": False, "message": "标红天数应小于隐藏天数"})
+        health_mod.save_health_cfg(cfg)
+        return self.send(200, {"ok": True, "cfg": cfg})
+
     @api_route("/api/restore", "POST")
     def api_restore_post(self, m, p, b, q):
         keys = ("mode", "tproxy", "subs", "rules", "rulesets", "bypass", "tests", "sub_interval", "region_groups",

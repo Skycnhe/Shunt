@@ -29,6 +29,7 @@ MODULES = [
     "sb_switch",
     "panel_update",
     "backup",
+    "health",
     "core_update",
     "sysopt",
     "notify",

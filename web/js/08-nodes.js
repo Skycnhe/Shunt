@@ -1,5 +1,6 @@
 // 节点：可折叠的策略组卡片 + 策略选择
 let PROXIES={},NSORT=localStorage.getItem('mp_nsort')||'default',GL=[],GALL=[],HIDEDEAD=localStorage.getItem('mp_hidedead')==='1';
+let HEALTHR={},HEALTHC={},HF=localStorage.getItem('mp_hf')||'all';  // 健康数据、健康配置、健康筛选
 let DIRECT_D;  // 直连国内延迟：DIRECT 是国内直连，与概览百度卡片同口径
 const isDead=n=>!isGroup(n)&&(()=>{const d=lastDelay(n);return d!==undefined&&d<=0})();
 function toggleDead(){HIDEDEAD=!HIDEDEAD;localStorage.setItem('mp_hidedead',HIDEDEAD?'1':'0');renderGroups();if(TAB==='概览')loadQS()}
@@ -10,7 +11,19 @@ const GTC={Selector:'k-sel',URLTest:'k-auto',Smart:'k-auto',Fallback:'k-fb',Load
 const LBS={'consistent-hashing':'一致性哈希','round-robin':'轮询','sticky-sessions':'粘性会话'};
 const isGroup=n=>!!(PROXIES[n]&&PROXIES[n].all);
 async function loadProxies(){document.querySelectorAll('#nsort button').forEach(b=>{b.classList.toggle('on',b.dataset.v===NSORT);b.onclick=()=>{NSORT=b.dataset.v;localStorage.setItem('mp_nsort',NSORT);renderGroups()}});
-  try{PROXIES=await loadPX();try{const j=await api('/api/direct_delay');if(j.ms>0)DIRECT_D=j.ms}catch(e){}renderGroups()}catch(e){$('#groups').innerHTML=`<div class="card bad">${esc(e.message)}</div>`;$('#policies').innerHTML=''}}
+  document.querySelectorAll('#hf button').forEach(b=>{b.classList.toggle('on',b.dataset.v===HF);b.onclick=()=>{HF=b.dataset.v;localStorage.setItem('mp_hf',HF);renderGroups()}});
+  try{PROXIES=await loadPX();try{const j=await api('/api/direct_delay');if(j.ms>0)DIRECT_D=j.ms}catch(e){}
+  try{const h=await api('/api/health/status');HEALTHR=h.records||{};HEALTHC=h.cfg||{}}catch(e){}
+  renderGroups()}catch(e){$('#groups').innerHTML=`<div class="card bad">${esc(e.message)}</div>`;$('#policies').innerHTML=''}}
+// 健康等级：ok/warn/bad/hidden；返回图标
+function hLevel(n){const r=HEALTHR[n];if(!r)return 'ok';if(r.hidden)return 'hidden';
+  const fd=r.fail_days||0,wc=HEALTHC.warn_days||3,hc=HEALTHC.hide_days||7;
+  if(fd>=hc)return 'hidden';if(fd>=wc)return 'bad';if(fd>0)return 'warn';return 'ok'}
+function hIcon(n){const l=hLevel(n);return l==='warn'?'🟡 ':l==='bad'?'🔴 ':l==='hidden'?'🚫 ':''}
+// 健康筛选：当前选中的节点始终显示，避免界面混乱
+function hfVisible(n,now){const l=hLevel(n);if(n===now)return true;
+  if(HF==='normal')return l==='ok';if(HF==='bad')return l==='warn'||l==='bad';if(HF==='hidden')return true;return l!=='hidden'}
+async function unhideNode(n){try{const j=await api('/api/health/unhide','POST',{node_id:n});toast(j.message);const h=await api('/api/health/status');HEALTHR=h.records||{};renderGroups()}catch(e){toast(e.message)}}
 function rawDelay(n){if(n==='DIRECT'&&DIRECT_D!==undefined)return DIRECT_D;const p=PROXIES[n];if(!p)return undefined;if(p._d!==undefined)return p._d;
   let best;[p.history||[],...Object.values(p.extra||{}).map(x=>x?.history||[])].forEach(h=>{const e=h[h.length-1];if(e&&(!best||String(e.time||'')>String(best.time||'')))best=e});
   return best?best.delay:undefined}
@@ -52,22 +65,24 @@ function renderGroups(){
     if(policyOnly(g))return '';
     const vis=filt?all0.filter(nfVisible):all0;if(filt&&!vis.length&&!(NF.q&&g.toLowerCase().includes(NF.q)))return '';
     const all=HIDEDEAD?vis.filter(n=>n===p.now||!isDead(n)):vis,hid=vis.length-all.length;
+    const allH=all.filter(n=>hfVisible(n,p.now)),hidH=all.length-allH.length;
     const ch=nowChain(g),dl=lastDelay(g),lb=p.type==='LoadBalance';
     const sub=lb?`策略：<b>${esc(LBS[m.strategy]||m.strategy||'-')}</b>`:p.type==='Smart'?(p.fixed?'已固定 → <b>'+esc(p.fixed)+'</b>':'智能竞技：按延迟 / 丢包 / 速度打分'+(p.uselightgbm||p.useLightGBM?' + LightGBM':'')):ch.length?'→ <b>'+ch.map(esc).join(' → ')+'</b>':'';
-    const nodesN=all.filter(n=>!isGroup(n)).length,groupsN=all.length-nodesN;
-    const cnt=[nodesN?nodesN+' 个节点':'',groupsN?groupsN+' 个分组':'',hid?`<span class="bad">已隐藏 ${hid} 个超时</span>`:''].filter(Boolean).join(' · ');
+    const nodesN=allH.filter(n=>!isGroup(n)).length,groupsN=allH.length-nodesN;
+    const cnt=[nodesN?nodesN+' 个节点':'',groupsN?groupsN+' 个分组':'',hid?`<span class="bad">已隐藏 ${hid} 个超时</span>`:'',hidH?`<span class="bad">健康隐藏 ${hidH} 个</span>`:''].filter(Boolean).join(' · ');
     const pin=p.fixed?`<span class="tag pin" title="点击取消固定，恢复自动选择" onclick="event.stopPropagation();unfix(${i})">📌 已固定 ✕</span>`:'';
     const ico=p.icon?`<img class="gico" src="${esc(p.icon)}" alt="" onerror="this.remove()">`:'';
-    const dots=all.slice(0,80).map(n=>`<i class="${dcls(lastDelay(n))==='mut'?'':dcls(lastDelay(n))}"></i>`).join('');
+    const dots=allH.slice(0,80).map(n=>`<i class="${dcls(lastDelay(n))==='mut'?'':dcls(lastDelay(n))}"></i>`).join('');
     return `<div class="card gcard ${gOpen(g)?'open':''}" id="gc${i}"><div class="ghead" onclick="toggleG(${i})">
       <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></span>${ico}
       <div class="gt"><div class="gname">${esc(g)} ${gTag(g)} ${pin}</div><div class="gsub">${sub}${sub&&cnt?' · ':''}${cnt}</div><div class="dots">${dots}</div></div>
       ${dl!==undefined?`<span class="gdl ${dcls(dl)}"${lb?' title="成员中最快的可用节点"':''}>${lb&&dl>0?'最快 ':''}${dtxt(dl)}</span>`:''}
       <button class="btn g sm" onclick="event.stopPropagation();testGroup(${i},this)">测速</button></div>
-      <div class="gbody"><div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(min(100%,178px),1fr));gap:10px">${all.map(n=>{const j=all0.indexOf(n),d=lastDelay(n),sg=isGroup(n);
+      <div class="gbody"><div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(min(100%,178px),1fr));gap:10px">${allH.map(n=>{const j=all0.indexOf(n),d=lastDelay(n),sg=isGroup(n);
         const s2=sg?`<div class="sub2">${esc(GT[PROXIES[n].type]||'')}${PROXIES[n].now?' → '+esc(PROXIES[n].now):''}</div>`:'';
+        const unh=hLevel(n)==='hidden'?`<button class="btn g sm" onclick="event.stopPropagation();unhideNode('${esc(n).replace(/'/g,"\\'")}')">取消隐藏</button>`:'';
         return `<div class="node ${n===p.now&&!lb?'sel':''} ${lb?'lbm':''}" onclick="pick(${i},${j})" title="${esc(n)}">
-        <div class="n">${sg?'📁 ':''}${esc(n)}</div>${s2}<div class="d"><span class="mut">${esc(sg?'分组':PROXIES[n]?.type||'')}</span> <span class="${dcls(d)}">${dtxt(d)}</span></div></div>`}).join('')}</div></div></div>`}).join('')||(filt?'<div class="card mut">没有匹配的节点</div>':'<div class="card mut">还没有节点，先去“订阅”添加订阅或导入节点</div>');
+        <div class="n">${hIcon(n)}${sg?'📁 ':''}${esc(n)}</div>${s2}<div class="d"><span class="mut">${esc(sg?'分组':PROXIES[n]?.type||'')}</span> <span class="${dcls(d)}">${dtxt(d)}</span></div>${unh}</div>`}).join('')}</div></div></div>`}).join('')||(filt?'<div class="card mut">没有匹配的节点</div>':'<div class="card mut">还没有节点，先去“订阅”添加订阅或导入节点</div>');
   $('#hidedead').classList.toggle('on',HIDEDEAD);$('#hidedead').textContent=HIDEDEAD?'显示超时':'隐藏超时';
   renderPolicies()}
 function renderPolicies(){const sel=GL.filter(g=>g!=='GLOBAL'&&PROXIES[g].type==='Selector'&&(PROXIES[g].all||[]).length>1);
