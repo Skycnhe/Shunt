@@ -1,5 +1,8 @@
 # 更新记录与详细说明
 
+## v7.9.8 WARP 连接前清理残留接口
+- **修复**：`connect()` 在 `wg-quick up` 之前先 `ip link delete` 删掉可能残留的同名接口，解决异常断开后残留接口导致 `wg-quick: 'warp-sanitized' already exists` 报错（残留时 `is_connected()` 查 `wg show wgcf` 无输出，检测不到）
+
 ## v7.9.7 WARP 停止按钮可靠化 + 状态显示强化
 - **停止更可靠**：`disconnect()` 改为三级兜底——① `ip link delete` 直接删接口（最可靠，放第一位）、② `wg-quick down <接口名>`、③ `wg-quick down /tmp/warp-sanitized.conf`（文件存在时）。之前只用 `wg-quick down` 会因找不到配置文件（实际在 /tmp 不在 /etc/wireguard）而失败，用户被迫手动删接口
 - **文案统一**：按钮"断开"改为"停止"，与内核的停止按钮一致；状态标签改为"● 运行中"/"○ 已停止"

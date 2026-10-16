@@ -427,6 +427,8 @@ def connect():
     if is_connected():
         st = status()
         return True, "WARP 已在连接中", st
+    # 先清理可能残留的接口，避免 "already exists"（接口名由 wg-quick 按配置文件名生成）
+    sh("ip link delete %s 2>/dev/null" % os.path.basename(SANITIZED_CONF).replace(".conf", ""), timeout=10)
     code, out = sh("wg-quick up %s" % _sanitized_conf(), timeout=30)
     if code != 0:
         return False, "WARP 连接失败：%s" % (out[-500:] if out else "未知错误"), status()
