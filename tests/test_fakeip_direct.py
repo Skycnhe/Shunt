@@ -77,7 +77,7 @@ class SingboxFakeIP(unittest.TestCase):
         d["dns"] = dict(d["dns"], mode="fake-ip")
         conf = server.build_singbox(d)[0]
         fake = [s for s in conf["dns"]["servers"] if s.get("type") == "fakeip"]
-        self.assertEqual(fake[0]["inet4_range"], "198.18.0.0/16")
+        self.assertEqual(fake[0]["inet4_range"], "198.18.0.0/15")  # v8.2.2：/15 兼容老版本分配的 198.19.x.x
         rule = [r for r in conf["dns"]["rules"] if r.get("server") == "dns-fake"]
         self.assertEqual(rule[0].get("rewrite_ttl"), 1)
         cf = conf["experimental"]["cache_file"]

@@ -110,8 +110,9 @@ def sb_dns(d, cfg, policies, rs, alias, v6):
         rules.append({"domain": sorted(exact), "action": "route", "server": "dns-hosts"})
     cn_cond = {"rule_set": [rs.use_geo("geosite", "cn"), rs.use_geo("geosite", "private")]}
     if dc["mode"] == "fake-ip":
-        # 与 mihomo 的 fake-ip-range 198.18.0.1/16 同网段；映射由 cache_file(store_fakeip) 持久化
-        servers.append({"type": "fakeip", "tag": "dns-fake", "inet4_range": "198.18.0.0/16",
+        # v7.5.9 曾把范围从 198.18.0.0/15 缩小到 /16，导致老版本分配的 198.19.x.x 映射变孤儿
+        # （sing-box 不认识 → missing fakeip record）。/15 是 /16 的超集，含 198.18.x 和 198.19.x
+        servers.append({"type": "fakeip", "tag": "dns-fake", "inet4_range": "198.18.0.0/15",
                         **({"inet6_range": "fc00::/18"} if v6 else {})})
         conds = {}
         for x in dc["fake_filter"]:

@@ -1,5 +1,10 @@
 # 更新记录与详细说明
 
+## v8.2.2
+- 修复回归：sing-box Fake-IP `inet4_range` 从 `198.18.0.0/16` 改回 `198.18.0.0/15`
+  - v7.5.9 把范围从 /15 缩小到 /16，导致老版本分配的 198.19.x.x 映射在升级后变孤儿（sing-box 不认识 → `missing fakeip record`），YouTube 等 App 连接失败
+  - /15 是 /16 的超集（含 198.18.x.x 和 198.19.x.x），无兼容问题；mihomo 的 `198.18.0.1/16` 未变所以一直正常
+
 ## v8.2.1
 - 修复 pyflakes F841：`shunt/health.py` 未使用的 `today` 变量（CI check 失败）
 ## v8.2 sing-box DNS 防绕过增强
