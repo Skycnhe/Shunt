@@ -37,7 +37,13 @@ WARP_IPS = [
     "188.114.99.10",
 ]
 WARP_PORT = 2408
-WARP_PORTS = [2408, 500, 1701, 4500]
+WARP_PORTS = [2408, 500, 1701, 4500, 443, 2053, 2083, 2087, 2096, 8443,
+              80, 8080, 8880, 2052, 2082, 2086, 2095]
+WARP_PORT_GROUPS = {
+    "WARP": [2408, 500, 1701, 4500],
+    "HTTPS": [443, 2053, 2083, 2087, 2096, 8443],
+    "HTTP": [80, 8080, 8880, 2052, 2082, 2086, 2095],
+}
 CUSTOM_IPS_FILE = os.path.join(WARP_DIR, "custom_ips.json")
 SPEED_URL = "https://speed.cloudflare.com/__down?bytes=5000000"
 SPEED_TIMEOUT = 12

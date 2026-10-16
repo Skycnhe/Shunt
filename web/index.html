@@ -246,12 +246,28 @@
       <div class="mut small" style="margin-top:6px">直接编辑 wgcf-profile.conf；保存前原配置自动备份为 wgcf-profile.conf.bak。DNS 行保留也无妨，连接时会自动忽略。</div></div>
     <div class="card"><div class="row" style="margin-bottom:10px"><h3 class="sp" style="margin:0">CF 优选 IP</h3>
       <span class="mut small">端口：</span><span id="warp-pref-ports">
+        <span class="mut small">WARP:</span>
         <label class="small"><input type="checkbox" value="2408" checked> 2408</label>
-        <label class="small"><input type="checkbox" value="500" checked> 500</label>
-        <label class="small"><input type="checkbox" value="1701" checked> 1701</label>
-        <label class="small"><input type="checkbox" value="4500" checked> 4500</label></span>
+        <label class="small"><input type="checkbox" value="500"> 500</label>
+        <label class="small"><input type="checkbox" value="1701"> 1701</label>
+        <label class="small"><input type="checkbox" value="4500"> 4500</label>
+        <span class="mut small" style="margin-left:8px">HTTPS:</span>
+        <label class="small"><input type="checkbox" value="443"> 443</label>
+        <label class="small"><input type="checkbox" value="2053"> 2053</label>
+        <label class="small"><input type="checkbox" value="2083"> 2083</label>
+        <label class="small"><input type="checkbox" value="2087"> 2087</label>
+        <label class="small"><input type="checkbox" value="2096"> 2096</label>
+        <label class="small"><input type="checkbox" value="8443"> 8443</label>
+        <span class="mut small" style="margin-left:8px">HTTP:</span>
+        <label class="small"><input type="checkbox" value="80"> 80</label>
+        <label class="small"><input type="checkbox" value="8080"> 8080</label>
+        <label class="small"><input type="checkbox" value="8880"> 8880</label>
+        <label class="small"><input type="checkbox" value="2052"> 2052</label>
+        <label class="small"><input type="checkbox" value="2082"> 2082</label>
+        <label class="small"><input type="checkbox" value="2086"> 2086</label>
+        <label class="small"><input type="checkbox" value="2095"> 2095</label></span>
       <button class="btn g sm" onclick="warpPreferred()">开始测速</button></div>
-      <div class="mut small" style="margin-bottom:8px">对候选池 IP × 选中端口测 TCP 延迟（每个组合 3 次），选最快的点「使用」自动填入配置 Endpoint。候选池 = 内置 Cloudflare 入口 IP + 下方自定义 IP。</div>
+      <div class="mut small" style="margin-bottom:8px">对候选池 IP × 选中端口测 TCP 延迟（每个组合 3 次），选最快的点「使用」自动填入配置 Endpoint。候选池 = 内置 Cloudflare 入口 IP + 下方自定义 IP。端口全选时组合数多（24 IP × 17 端口 ≈ 400+ 组合），约需 1-2 分钟，请耐心等待。</div>
       <div id="warp-pref-list"></div>
       <div id="warp-pref-r" class="small mt"></div></div>
     <div class="card"><div class="row" style="margin-bottom:10px"><h3 class="sp" style="margin:0">自定义 IP</h3>
