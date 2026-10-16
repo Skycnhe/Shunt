@@ -3,11 +3,11 @@ import json, os, socket, threading, time, urllib.request, urllib.error
 from collections import deque
 from urllib.parse import quote
 
-from .base import CORE_UPD, G_MANUAL, HC, MASS_TEST, MIHOMO_LOG, NOTIFY_FILE, TPROXY_SH, WD_HOLD
+from .base import CORE_UPD, G_MANUAL, HC, MASS_TEST, MIHOMO_LOG, NOTIFY_FILE, PANEL_DIR, TPROXY_SH, WD_HOLD
 from .data import load, read_json, write_json
 from .corehttp import core, core_json
 from .sb_common import CORE_PID, CORES, active_core
-from .sysopt import proxy_opener, sh, svc_restart
+from .sysopt import SVC_OP, proxy_opener, sh, svc_restart
 def tg_send(text, d=None):
     d = d or load()
     if not d.get("tg_token") or not d.get("tg_chat"):
@@ -36,7 +36,24 @@ def notify(text):
 
 
 # ---------------------------------------------------------------- 故障自动直连 (watchdog) + 定期告警
-WD = {"status": "ok", "fails": 0, "events": deque(maxlen=50), "last_check": 0, "manual_stop": False, "tp_off": False}
+# 「手动停止」标志落盘：以前只在内存里，面板一重启（在线更新、切 HTTPS、rc-service shunt restart）标志就丢了，
+# 看门狗随即把用户手动停掉的核心又拉起来
+STOP_FLAG = os.path.join(PANEL_DIR, "core_stopped")
+WD = {"status": "ok", "fails": 0, "events": deque(maxlen=50), "last_check": 0, "manual_stop": os.path.isfile(STOP_FLAG),
+      "tp_off": False}
+
+
+def set_manual_stop(on):
+    """置位 / 清除「用户手动停止了核心」：内存 + 标志文件"""
+    WD["manual_stop"] = bool(on)
+    try:
+        if on:
+            with open(STOP_FLAG, "w") as f:
+                f.write(str(int(time.time())))
+        elif os.path.exists(STOP_FLAG):
+            os.remove(STOP_FLAG)
+    except OSError:
+        pass
 
 
 def wd_event(msg, push=True):
@@ -68,7 +85,8 @@ def core_alive_confirmed(retries=2, gap=3):
 def core_proc_alive():
     """核心进程是否还在（pid 文件 + kill 0）。用来区分「进程退出」和「进程在但控制接口卡住」"""
     try:
-        os.kill(int(open(CORE_PID).read().strip()), 0)
+        with open(CORE_PID) as f:
+            os.kill(int(f.read().strip()), 0)
         return True
     except Exception:
         return False
@@ -105,6 +123,14 @@ def watchdog_tick():
     redirecting = d["proxy_mode"] != "off"  # TProxy 或 TUN（TUN 模式下 tproxy.sh 仍负责 DNS 重定向）
     cname = CORES.get(active_core(d), "mihomo")
     if core_alive_confirmed():
+        # 核心在跑（开机自启、SSH 手动 start）：「手动停止」已过时，恢复看门狗。
+        # 只在没人控制服务时清（拿不到锁说明正在停止 / 启动，不能清）
+        if WD["manual_stop"] and SVC_OP.acquire(blocking=False):
+            try:
+                if core_proc_alive():
+                    set_manual_stop(False)
+            finally:
+                SVC_OP.release()
         if WD["status"] in ("restarting", "direct"):
             msg = f"{cname} 核心已恢复"
             if WD["tp_off"] and redirecting:
@@ -124,7 +150,7 @@ def watchdog_tick():
         err = core_last_error()
         wd_event(f"{cname} 核心{why}，第 {WD['fails']} 次自动重启" + (f"；日志最后一条错误：{err}" if err else ""),
                  push=WD["fails"] == 1)
-        svc_restart(timeout=60, why="看门狗重启核心")
+        svc_restart(timeout=60, why="看门狗重启核心", cancel=lambda: WD["manual_stop"])
         return
     if WD["status"] != "direct":
         WD["status"] = "direct"
@@ -133,7 +159,7 @@ def watchdog_tick():
             WD["tp_off"] = True
         wd_event(f"{cname} 核心重启 2 次仍无响应，已关闭透明代理，局域网暂时直连上网")
     elif WD["fails"] % 10 == 0:  # 直连状态下每 5 分钟再尝试拉起一次
-        svc_restart(timeout=60)
+        svc_restart(timeout=60, why="看门狗重启核心", cancel=lambda: WD["manual_stop"])
         if redirecting and core_alive():
             sh(TPROXY_SH + " stop")  # rc 的 start_post 会重新挂上规则，等下一轮确认恢复后再开
             # TUN 模式下核心一启动就接管路由，无法“暂不接管”，下一轮检查会正常恢复

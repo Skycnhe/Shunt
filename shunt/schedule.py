@@ -50,8 +50,9 @@ def run_task(name):
             log_err("定时任务：刷新地区分组", e)
         return not bad, "订阅已更新" if not bad else "以下订阅更新失败：" + "、".join(bad)
     if name == "core_restart":
-        WD["manual_stop"] = False
-        code, out = svc_restart(timeout=90)
+        if WD["manual_stop"]:  # 用户手动停止了核心：定时重启不能替用户把它拉起来
+            return True, "核心已手动停止，跳过定时重启"
+        code, out = svc_restart(timeout=90, why="定时重启核心", cancel=lambda: WD["manual_stop"])
         return code == 0, "核心已重启" if code == 0 else out[-200:]
     if name == "geo_update":
         code, raw = core("POST", "/configs/geo", {}, timeout=180)

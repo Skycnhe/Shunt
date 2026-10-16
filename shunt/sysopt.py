@@ -423,17 +423,27 @@ _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _RC_BUSY = re.compile(r"already (?:starting|stopping)|is (?:starting|stopping)|has started, but is inactive", re.I)
 
 
+SVC_OP = threading.RLock()  # 核心服务控制（启动 / 停止 / 重启）全局互斥：面板按钮、看门狗、定时任务、切换 / 更新内核共用，避免两个 rc-service 并发互相打断
+
+
 def _rc_once(cmd, timeout):
-    import tempfile
+    import signal, tempfile
     with tempfile.TemporaryFile() as f:
         try:
             # 输出写临时文件而不是管道：核心 / start_post 拉起的子进程会继承管道，用 capture_output 时
             # 调用方要一直等到这些子进程退出（或 90 秒超时），按钮看起来就像「没反应」
-            pr = subprocess.Popen(cmd, shell=True, stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.STDOUT)
+            # 单独的进程组：超时时连同 rc-service / openrc-run 子进程一起杀掉，不留一个仍在 stopping 的孤儿
+            #（核心本身由 start-stop-daemon 另起会话，不在这个进程组里，不受影响）
+            pr = subprocess.Popen(cmd, shell=True, stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.STDOUT,
+                                  start_new_session=True)
             try:
                 code = pr.wait(timeout)
             except subprocess.TimeoutExpired:
-                pr.kill()
+                try:
+                    os.killpg(pr.pid, signal.SIGKILL)
+                except OSError:
+                    pr.kill()
+                pr.wait()
                 code = 124
         except OSError as e:
             return 1, str(e)
@@ -443,28 +453,36 @@ def _rc_once(cmd, timeout):
 
 
 def rc_run(act, timeout=90):
-    """rc-service <核心> start|stop|restart。OpenRC 卡在 starting / stopping 时先 zap 再重试一次"""
-    code, out = _rc_once(f"{SVC} {act}", timeout)
-    if code != 0 and _RC_BUSY.search(out):
-        _rc_once(f"{SVC} zap", 15)
+    """rc-service <核心> start|stop|restart。OpenRC 卡在 starting / stopping 时先 zap 再重试一次；
+    超时（124）时先 zap，避免 OpenRC 一直停在 starting / stopping，下次操作直接报 already stopping"""
+    with SVC_OP:
         code, out = _rc_once(f"{SVC} {act}", timeout)
-        out = "（服务状态卡住，已自动 zap 后重试）\n" + out
-    return code, out
+        if code != 0 and code != 124 and _RC_BUSY.search(out):
+            _rc_once(f"{SVC} zap", 15)
+            code, out = _rc_once(f"{SVC} {act}", timeout)
+            out = "（服务状态卡住，已自动 zap 后重试）\n" + out
+        elif code == 124:
+            _rc_once(f"{SVC} zap", 15)
+        return code, out
 
 
-def svc_restart(timeout=90, why="面板重启核心"):
+def svc_restart(timeout=90, why="面板重启核心", cancel=None):
     """重启核心服务。重启及启动后的加载期（大规则集、Fake-IP 缓存）内看门狗暂停判定，
-    否则启动慢一点就会被看门狗当成「无响应」再重启一次，形成连环重启"""
-    wd_hold(timeout + 60, why)
-    try:
-        return rc_run("restart", timeout=timeout)
-    finally:
-        wd_hold(60, why, reset=True)  # 命令返回后只再给 60 秒加载时间
+    否则启动慢一点就会被看门狗当成「无响应」再重启一次，形成连环重启。
+    cancel：拿到服务锁后再调用一次，返回真就放弃重启（看门狗用：等锁期间用户点了「停止」，不能再把核心拉起来）"""
+    with SVC_OP:
+        if cancel is not None and cancel():
+            return 1, "已取消：核心已被手动停止"
+        wd_hold(timeout + 60, why)
         try:
-            from .ipinfo import reset as ip_reset
-            ip_reset()  # 概览 IP 信息：重启后重新查，出口可能已变
-        except Exception:
-            pass
+            return rc_run("restart", timeout=timeout)
+        finally:
+            wd_hold(60, why, reset=True)  # 命令返回后只再给 60 秒加载时间
+            try:
+                from .ipinfo import reset as ip_reset
+                ip_reset()  # 概览 IP 信息：重启后重新查，出口可能已变
+            except Exception:
+                pass
 
 
 def proxy_opener(proxy=True):

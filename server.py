@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "8.2.2"
+PANEL_VERSION = "8.3.3"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -250,7 +250,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "8.2.2"
+PANEL_VERSION = "8.3.3"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -1664,7 +1664,7 @@ from .mihomo import build_config, check_config, write_config
 from .sb_common import SB_CONF, active_core
 from .sb_config import build_singbox, check_sb_config, sb_hot_reload, sb_log_error, sb_rule_need, sb_sync_assets, write_sb_config
 from .sysopt import svc_restart
-from .notify import WD, core_alive
+from .notify import core_alive, set_manual_stop
 
 
 _CONN_SNAP = {}
@@ -1714,7 +1714,7 @@ def reload_core(prev=None):
                 save(prev)
             return False, "配置校验失败，已撤销本次修改：" + err
         os.replace(tmp, final)
-    WD["manual_stop"] = False
+    set_manual_stop(False)
     retest_soon()
     if sb:
         ok, msg = sb_hot_reload()
@@ -3347,7 +3347,7 @@ from .sb_subs import sb_update_subs
 from .sb_config import check_sb_config, sb_sync_assets, sb_version, write_sb_config
 from .core_update import LGBM_FILE, _cu, bin_version, lgbm_fetch, mh_fetch, open_url, release_digest
 from .sysopt import sh, svc_restart
-from .notify import WD, core_alive, notify
+from .notify import core_alive, notify, set_manual_stop
 from .migrate import restore_selections, snapshot_selections
 def sb_arch():
     m = os.uname().machine
@@ -3515,7 +3515,7 @@ def core_switch_job(kind, gh):
         write_core_file(kind)
         PROV.update(t=0, data=None)
         _cu("重启核心", 88, f"正在以 {label} 重启核心（局域网会断网几秒）")
-        WD["manual_stop"] = False
+        set_manual_stop(False)
         svc_restart(timeout=90)
         for _ in range(30):
             time.sleep(1)
@@ -4811,17 +4811,27 @@ _ANSI = re.compile(r"\\x1b\\[[0-9;]*m")
 _RC_BUSY = re.compile(r"already (?:starting|stopping)|is (?:starting|stopping)|has started, but is inactive", re.I)
 
 
+SVC_OP = threading.RLock()  # 核心服务控制（启动 / 停止 / 重启）全局互斥：面板按钮、看门狗、定时任务、切换 / 更新内核共用，避免两个 rc-service 并发互相打断
+
+
 def _rc_once(cmd, timeout):
-    import tempfile
+    import signal, tempfile
     with tempfile.TemporaryFile() as f:
         try:
             # 输出写临时文件而不是管道：核心 / start_post 拉起的子进程会继承管道，用 capture_output 时
             # 调用方要一直等到这些子进程退出（或 90 秒超时），按钮看起来就像「没反应」
-            pr = subprocess.Popen(cmd, shell=True, stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.STDOUT)
+            # 单独的进程组：超时时连同 rc-service / openrc-run 子进程一起杀掉，不留一个仍在 stopping 的孤儿
+            #（核心本身由 start-stop-daemon 另起会话，不在这个进程组里，不受影响）
+            pr = subprocess.Popen(cmd, shell=True, stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.STDOUT,
+                                  start_new_session=True)
             try:
                 code = pr.wait(timeout)
             except subprocess.TimeoutExpired:
-                pr.kill()
+                try:
+                    os.killpg(pr.pid, signal.SIGKILL)
+                except OSError:
+                    pr.kill()
+                pr.wait()
                 code = 124
         except OSError as e:
             return 1, str(e)
@@ -4831,28 +4841,36 @@ def _rc_once(cmd, timeout):
 
 
 def rc_run(act, timeout=90):
-    """rc-service <核心> start|stop|restart。OpenRC 卡在 starting / stopping 时先 zap 再重试一次"""
-    code, out = _rc_once(f"{SVC} {act}", timeout)
-    if code != 0 and _RC_BUSY.search(out):
-        _rc_once(f"{SVC} zap", 15)
+    """rc-service <核心> start|stop|restart。OpenRC 卡在 starting / stopping 时先 zap 再重试一次；
+    超时（124）时先 zap，避免 OpenRC 一直停在 starting / stopping，下次操作直接报 already stopping"""
+    with SVC_OP:
         code, out = _rc_once(f"{SVC} {act}", timeout)
-        out = "（服务状态卡住，已自动 zap 后重试）\\n" + out
-    return code, out
+        if code != 0 and code != 124 and _RC_BUSY.search(out):
+            _rc_once(f"{SVC} zap", 15)
+            code, out = _rc_once(f"{SVC} {act}", timeout)
+            out = "（服务状态卡住，已自动 zap 后重试）\\n" + out
+        elif code == 124:
+            _rc_once(f"{SVC} zap", 15)
+        return code, out
 
 
-def svc_restart(timeout=90, why="面板重启核心"):
+def svc_restart(timeout=90, why="面板重启核心", cancel=None):
     """重启核心服务。重启及启动后的加载期（大规则集、Fake-IP 缓存）内看门狗暂停判定，
-    否则启动慢一点就会被看门狗当成「无响应」再重启一次，形成连环重启"""
-    wd_hold(timeout + 60, why)
-    try:
-        return rc_run("restart", timeout=timeout)
-    finally:
-        wd_hold(60, why, reset=True)  # 命令返回后只再给 60 秒加载时间
+    否则启动慢一点就会被看门狗当成「无响应」再重启一次，形成连环重启。
+    cancel：拿到服务锁后再调用一次，返回真就放弃重启（看门狗用：等锁期间用户点了「停止」，不能再把核心拉起来）"""
+    with SVC_OP:
+        if cancel is not None and cancel():
+            return 1, "已取消：核心已被手动停止"
+        wd_hold(timeout + 60, why)
         try:
-            from .ipinfo import reset as ip_reset
-            ip_reset()  # 概览 IP 信息：重启后重新查，出口可能已变
-        except Exception:
-            pass
+            return rc_run("restart", timeout=timeout)
+        finally:
+            wd_hold(60, why, reset=True)  # 命令返回后只再给 60 秒加载时间
+            try:
+                from .ipinfo import reset as ip_reset
+                ip_reset()  # 概览 IP 信息：重启后重新查，出口可能已变
+            except Exception:
+                pass
 
 
 def proxy_opener(proxy=True):
@@ -5039,11 +5057,11 @@ import json, os, socket, threading, time, urllib.request, urllib.error
 from collections import deque
 from urllib.parse import quote
 
-from .base import CORE_UPD, G_MANUAL, HC, MASS_TEST, MIHOMO_LOG, NOTIFY_FILE, TPROXY_SH, WD_HOLD
+from .base import CORE_UPD, G_MANUAL, HC, MASS_TEST, MIHOMO_LOG, NOTIFY_FILE, PANEL_DIR, TPROXY_SH, WD_HOLD
 from .data import load, read_json, write_json
 from .corehttp import core, core_json
 from .sb_common import CORE_PID, CORES, active_core
-from .sysopt import proxy_opener, sh, svc_restart
+from .sysopt import SVC_OP, proxy_opener, sh, svc_restart
 def tg_send(text, d=None):
     d = d or load()
     if not d.get("tg_token") or not d.get("tg_chat"):
@@ -5072,7 +5090,24 @@ def notify(text):
 
 
 # ---------------------------------------------------------------- 故障自动直连 (watchdog) + 定期告警
-WD = {"status": "ok", "fails": 0, "events": deque(maxlen=50), "last_check": 0, "manual_stop": False, "tp_off": False}
+# 「手动停止」标志落盘：以前只在内存里，面板一重启（在线更新、切 HTTPS、rc-service shunt restart）标志就丢了，
+# 看门狗随即把用户手动停掉的核心又拉起来
+STOP_FLAG = os.path.join(PANEL_DIR, "core_stopped")
+WD = {"status": "ok", "fails": 0, "events": deque(maxlen=50), "last_check": 0, "manual_stop": os.path.isfile(STOP_FLAG),
+      "tp_off": False}
+
+
+def set_manual_stop(on):
+    """置位 / 清除「用户手动停止了核心」：内存 + 标志文件"""
+    WD["manual_stop"] = bool(on)
+    try:
+        if on:
+            with open(STOP_FLAG, "w") as f:
+                f.write(str(int(time.time())))
+        elif os.path.exists(STOP_FLAG):
+            os.remove(STOP_FLAG)
+    except OSError:
+        pass
 
 
 def wd_event(msg, push=True):
@@ -5104,7 +5139,8 @@ def core_alive_confirmed(retries=2, gap=3):
 def core_proc_alive():
     """核心进程是否还在（pid 文件 + kill 0）。用来区分「进程退出」和「进程在但控制接口卡住」"""
     try:
-        os.kill(int(open(CORE_PID).read().strip()), 0)
+        with open(CORE_PID) as f:
+            os.kill(int(f.read().strip()), 0)
         return True
     except Exception:
         return False
@@ -5141,6 +5177,14 @@ def watchdog_tick():
     redirecting = d["proxy_mode"] != "off"  # TProxy 或 TUN（TUN 模式下 tproxy.sh 仍负责 DNS 重定向）
     cname = CORES.get(active_core(d), "mihomo")
     if core_alive_confirmed():
+        # 核心在跑（开机自启、SSH 手动 start）：「手动停止」已过时，恢复看门狗。
+        # 只在没人控制服务时清（拿不到锁说明正在停止 / 启动，不能清）
+        if WD["manual_stop"] and SVC_OP.acquire(blocking=False):
+            try:
+                if core_proc_alive():
+                    set_manual_stop(False)
+            finally:
+                SVC_OP.release()
         if WD["status"] in ("restarting", "direct"):
             msg = f"{cname} 核心已恢复"
             if WD["tp_off"] and redirecting:
@@ -5160,7 +5204,7 @@ def watchdog_tick():
         err = core_last_error()
         wd_event(f"{cname} 核心{why}，第 {WD['fails']} 次自动重启" + (f"；日志最后一条错误：{err}" if err else ""),
                  push=WD["fails"] == 1)
-        svc_restart(timeout=60, why="看门狗重启核心")
+        svc_restart(timeout=60, why="看门狗重启核心", cancel=lambda: WD["manual_stop"])
         return
     if WD["status"] != "direct":
         WD["status"] = "direct"
@@ -5169,7 +5213,7 @@ def watchdog_tick():
             WD["tp_off"] = True
         wd_event(f"{cname} 核心重启 2 次仍无响应，已关闭透明代理，局域网暂时直连上网")
     elif WD["fails"] % 10 == 0:  # 直连状态下每 5 分钟再尝试拉起一次
-        svc_restart(timeout=60)
+        svc_restart(timeout=60, why="看门狗重启核心", cancel=lambda: WD["manual_stop"])
         if redirecting and core_alive():
             sh(TPROXY_SH + " stop")  # rc 的 start_post 会重新挂上规则，等下一轮确认恢复后再开
             # TUN 模式下核心一启动就接管路由，无法“暂不接管”，下一轮检查会正常恢复
@@ -6653,8 +6697,9 @@ def run_task(name):
             log_err("定时任务：刷新地区分组", e)
         return not bad, "订阅已更新" if not bad else "以下订阅更新失败：" + "、".join(bad)
     if name == "core_restart":
-        WD["manual_stop"] = False
-        code, out = svc_restart(timeout=90)
+        if WD["manual_stop"]:  # 用户手动停止了核心：定时重启不能替用户把它拉起来
+            return True, "核心已手动停止，跳过定时重启"
+        code, out = svc_restart(timeout=90, why="定时重启核心", cancel=lambda: WD["manual_stop"])
         return code == 0, "核心已重启" if code == 0 else out[-200:]
     if name == "geo_update":
         code, raw = core("POST", "/configs/geo", {}, timeout=180)
@@ -7872,8 +7917,8 @@ from .core_update import (
     CORE_CHANNELS, CORE_UPD, LGBM_FILE, bin_version, core_check, core_job_start, core_rollback_job, core_upd_status, core_update_job,
     lgbm_fetch, lgbm_fetch_reload
 )
-from .sysopt import delay_test, favicon, nft_ok, opt_apply, opt_status, rc_run, sh, speed_test, svc_restart
-from .notify import WD, core_alive, core_proc_alive, tg_send
+from .sysopt import SVC_OP, delay_test, favicon, nft_ok, opt_apply, opt_status, rc_run, sh, speed_test, svc_restart
+from .notify import WD, core_alive, core_proc_alive, set_manual_stop, tg_send
 from .latency import BG_FILE, RETEST, bg_fetch, bg_meta, bg_meta_save, bg_save, bg_type, fix_global, proxies_merged, retest_soon
 from .stats import arp_table
 from .unlock import unlock_test
@@ -7904,22 +7949,30 @@ SVC_NAMES = {"start": "启动", "stop": "停止", "restart": "重启"}
 def _svc_do(act):
     """执行启停并确认结果，返回 (成功?, 提示)"""
     if act == "stop":
-        WD["manual_stop"] = True  # 先置位：停止过程中看门狗不要把它拉起来
-        code, out = rc_run("stop", timeout=90)
-        for _ in range(40):  # rc-service 的返回值不可靠，以 pid 为准，每 0.2 秒查一次，最多等 8 秒
-            if not core_proc_alive():
-                return True, "核心已停止"
-            time.sleep(0.2)
-        WD["manual_stop"] = False  # 没停下来：交还给看门狗，避免核心卡死后再也没人拉起
+        with SVC_OP:  # 看门狗 / 定时任务正在重启核心时，等它做完再停，不并发跑两个 rc-service
+            set_manual_stop(True)  # 拿到锁后置位（并落盘）：之后看门狗不会再把它拉起来，面板重启后也记得
+            wd_hold(150, "手动停止")
+            try:
+                code, out = rc_run("stop", timeout=90)
+                for _ in range(40):  # rc-service 的返回值不可靠，以 pid 为准，每 0.2 秒查一次，最多等 8 秒
+                    if not core_proc_alive():
+                        return True, "核心已停止"
+                    time.sleep(0.2)
+            finally:
+                wd_hold(0, "手动停止", reset=True)
+        set_manual_stop(False)  # 没停下来：交还给看门狗，避免核心卡死后再也没人拉起
         log_err("api/service stop", Exception(f"停止后核心进程仍在（rc 返回 {code}）：{out[-200:]}"))
         return False, "核心进程仍在运行，停止失败：" + (out[-200:] or "无输出")
-    WD["manual_stop"] = False
+    set_manual_stop(False)
     if act == "restart":
         code, out = svc_restart(timeout=90, why="手动重启")  # 与看门狗、切换内核同一入口：含看门狗暂停和 IP 信息重查
     else:
-        wd_hold(150, "手动启动")
-        code, out = rc_run("start", timeout=90)
-        wd_hold(60, "手动启动", reset=True)
+        with SVC_OP:
+            wd_hold(150, "手动启动")
+            code, out = rc_run("start", timeout=90)
+            wd_hold(60, "手动启动", reset=True)
+    if code == 124:
+        return False, f"核心{SVC_NAMES[act]}超时，请 SSH 检查 `{SVC} status` 和核心日志"
     # 后台启动的服务 rc 总返回 0，要自己确认：控制接口一应答就算成功（通常 1 秒内）；
     # 进程在但接口还没起来（加载大规则集）最多等 8 秒，期间进程退出立即判失败
     for i in range(40):

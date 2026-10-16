@@ -26,8 +26,8 @@ from .core_update import (
     CORE_CHANNELS, CORE_UPD, LGBM_FILE, bin_version, core_check, core_job_start, core_rollback_job, core_upd_status, core_update_job,
     lgbm_fetch, lgbm_fetch_reload
 )
-from .sysopt import delay_test, favicon, nft_ok, opt_apply, opt_status, rc_run, sh, speed_test, svc_restart
-from .notify import WD, core_alive, core_proc_alive, tg_send
+from .sysopt import SVC_OP, delay_test, favicon, nft_ok, opt_apply, opt_status, rc_run, sh, speed_test, svc_restart
+from .notify import WD, core_alive, core_proc_alive, set_manual_stop, tg_send
 from .latency import BG_FILE, RETEST, bg_fetch, bg_meta, bg_meta_save, bg_save, bg_type, fix_global, proxies_merged, retest_soon
 from .stats import arp_table
 from .unlock import unlock_test
@@ -58,22 +58,30 @@ SVC_NAMES = {"start": "启动", "stop": "停止", "restart": "重启"}
 def _svc_do(act):
     """执行启停并确认结果，返回 (成功?, 提示)"""
     if act == "stop":
-        WD["manual_stop"] = True  # 先置位：停止过程中看门狗不要把它拉起来
-        code, out = rc_run("stop", timeout=90)
-        for _ in range(40):  # rc-service 的返回值不可靠，以 pid 为准，每 0.2 秒查一次，最多等 8 秒
-            if not core_proc_alive():
-                return True, "核心已停止"
-            time.sleep(0.2)
-        WD["manual_stop"] = False  # 没停下来：交还给看门狗，避免核心卡死后再也没人拉起
+        with SVC_OP:  # 看门狗 / 定时任务正在重启核心时，等它做完再停，不并发跑两个 rc-service
+            set_manual_stop(True)  # 拿到锁后置位（并落盘）：之后看门狗不会再把它拉起来，面板重启后也记得
+            wd_hold(150, "手动停止")
+            try:
+                code, out = rc_run("stop", timeout=90)
+                for _ in range(40):  # rc-service 的返回值不可靠，以 pid 为准，每 0.2 秒查一次，最多等 8 秒
+                    if not core_proc_alive():
+                        return True, "核心已停止"
+                    time.sleep(0.2)
+            finally:
+                wd_hold(0, "手动停止", reset=True)
+        set_manual_stop(False)  # 没停下来：交还给看门狗，避免核心卡死后再也没人拉起
         log_err("api/service stop", Exception(f"停止后核心进程仍在（rc 返回 {code}）：{out[-200:]}"))
         return False, "核心进程仍在运行，停止失败：" + (out[-200:] or "无输出")
-    WD["manual_stop"] = False
+    set_manual_stop(False)
     if act == "restart":
         code, out = svc_restart(timeout=90, why="手动重启")  # 与看门狗、切换内核同一入口：含看门狗暂停和 IP 信息重查
     else:
-        wd_hold(150, "手动启动")
-        code, out = rc_run("start", timeout=90)
-        wd_hold(60, "手动启动", reset=True)
+        with SVC_OP:
+            wd_hold(150, "手动启动")
+            code, out = rc_run("start", timeout=90)
+            wd_hold(60, "手动启动", reset=True)
+    if code == 124:
+        return False, f"核心{SVC_NAMES[act]}超时，请 SSH 检查 `{SVC} status` 和核心日志"
     # 后台启动的服务 rc 总返回 0，要自己确认：控制接口一应答就算成功（通常 1 秒内）；
     # 进程在但接口还没起来（加载大规则集）最多等 8 秒，期间进程退出立即判失败
     for i in range(40):

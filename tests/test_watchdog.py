@@ -57,7 +57,7 @@ class Watchdog(unittest.TestCase):
 
     def test_svc_restart_sets_hold(self):
         S = sys.modules["shunt.sysopt"]
-        with mock.patch.object(S, "sh", return_value=(0, "")):
+        with mock.patch.object(S, "rc_run", return_value=(0, "")):
             S.svc_restart(timeout=10)
         self.assertGreater(N.WD_HOLD["until"], N.time.time() + 30)
 
@@ -65,7 +65,8 @@ class Watchdog(unittest.TestCase):
 class InitScript(unittest.TestCase):
     def test_graceful_stop(self):
         import os
-        txt = open(os.path.join(os.path.dirname(os.path.dirname(__file__)), "init.d", "shunt-core")).read()
+        with open(os.path.join(os.path.dirname(os.path.dirname(__file__)), "init.d", "shunt-core")) as f:
+            txt = f.read()
         self.assertIn('retry="TERM/15/KILL/5"', txt)
 
 

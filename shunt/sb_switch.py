@@ -10,7 +10,7 @@ from .sb_subs import sb_update_subs
 from .sb_config import check_sb_config, sb_sync_assets, sb_version, write_sb_config
 from .core_update import LGBM_FILE, _cu, bin_version, lgbm_fetch, mh_fetch, open_url, release_digest
 from .sysopt import sh, svc_restart
-from .notify import WD, core_alive, notify
+from .notify import core_alive, notify, set_manual_stop
 from .migrate import restore_selections, snapshot_selections
 def sb_arch():
     m = os.uname().machine
@@ -178,7 +178,7 @@ def core_switch_job(kind, gh):
         write_core_file(kind)
         PROV.update(t=0, data=None)
         _cu("重启核心", 88, f"正在以 {label} 重启核心（局域网会断网几秒）")
-        WD["manual_stop"] = False
+        set_manual_stop(False)
         svc_restart(timeout=90)
         for _ in range(30):
             time.sleep(1)

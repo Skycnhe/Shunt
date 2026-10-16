@@ -101,9 +101,12 @@ async function svc(a){if(a==='stop'&&!confirm('停止代理核心？\n停止后�
   if(a==='restart'&&!confirm('重启代理核心？现有连接会断开。'))return;
   if(!SVC_TXT[a]){try{toast('执行中…');const j=await api('/api/service','POST',{action:a});toast(j.message||'完成');setTimeout(loadState,1500)}catch(e){toast(e.message)}return}
   svcBusy(true);
-  try{const j=await api('/api/service','POST',{action:a});toast(j.message||'执行中…');
-    let s=j;for(let i=0;i<300&&s.busy;i++){await new Promise(r=>setTimeout(r,400));try{s=await api('/api/service')}catch(e){}}
-    toast(s.busy?SVC_TXT[a]+'仍在进行，请稍后刷新':(s.message||'完成'))}
+  try{let s;
+    try{s=await api('/api/service','POST',{action:a});toast(s.message||'执行中…')}
+    catch(e){s=await api('/api/service').catch(()=>({}));if(!s.busy)throw e;toast(e.message)}  // 409：别的标签页 / 看门狗正在操作，跟着等它完成
+    // 后端最长：rc-service 90 秒 + 卡住时 zap 重试 90 秒 + pid 确认 8 秒，轮询覆盖 4 分钟
+    for(let i=0;i<600&&s.busy;i++){await new Promise(r=>setTimeout(r,400));try{s=await api('/api/service')}catch(e){}}
+    toast(s.busy?SVC_TXT[s.act||a]+'仍在进行，请稍后刷新':(s.message||'完成'))}
   catch(e){toast(e.message)}
   finally{svcBusy(false);STATE_VER=-1;try{await loadState()}catch(e){}}}
 async function flushFake(){try{await core('/cache/fakeip/flush','POST');toast('已清空')}catch(e){toast(e.message)}}
