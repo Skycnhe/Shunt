@@ -28,7 +28,7 @@ from .core_update import (
 )
 from .sysopt import delay_test, favicon, nft_ok, opt_apply, opt_status, sh, speed_test, svc_restart
 from . import warp as warp_mod
-from .notify import WD, tg_send
+from .notify import WD, core_proc_alive, tg_send
 from .latency import BG_FILE, RETEST, bg_fetch, bg_meta, bg_meta_save, bg_save, bg_type, fix_global, proxies_merged, retest_soon
 from .stats import arp_table
 from .unlock import unlock_test
@@ -1273,6 +1273,19 @@ class H(BaseHTTPRequestHandler):
                 warp_mod.disconnect()  # 内核启动前先断 WARP（双向互斥）
             if act == "stop":
                 code, out = sh(SVC + " stop", timeout=90)
+                # 验证内核真的停了：rc-service 返回 0 不代表进程已退出
+                # （stop 脚本可能只发了信号），用 pid 文件二次确认
+                if code == 0:
+                    time.sleep(2)
+                    if core_proc_alive():
+                        # 再等 3 秒，仍在则判定停止失败（返回真实失败，不谎报成功）
+                        time.sleep(3)
+                        if core_proc_alive():
+                            log_err("api/service stop",
+                                    Exception("rc-service 返回 0 但核心进程仍在：%s" % out[-200:]))
+                            return self.send(500, {"message": "停止命令已执行，但核心进程仍在运行，请 SSH 手动检查"})
+                else:
+                    log_err("api/service stop", Exception("rc-service stop 失败：%s" % out[-200:]))
             else:  # 启动 / 重启：同样让看门狗等内核加载完
                 wd_hold(150, "手动" + act)
                 code, out = sh(SVC + " " + act, timeout=90)

@@ -332,6 +332,65 @@ def setup():
     return True, "WARP 配置已生成"
 
 
+def _lan_subnet():
+    """检测局域网段：从 ip route 找默认路由的 dev 上的直连网段。
+
+    例如 `192.168.31.0/24 dev eth0 proto kernel scope link src 192.168.31.20`
+    返回 (subnet, iface)，如 ("192.168.31.0/24", "eth0")；失败返回 (None, None)。
+    """
+    try:
+        code, out = sh("ip route show", timeout=10)
+        if code != 0:
+            return None, None
+        default_iface = None
+        for line in out.splitlines():
+            if line.startswith("default "):
+                m = re.search(r"\bdev\s+(\S+)", line)
+                if m:
+                    default_iface = m.group(1)
+                break
+        if not default_iface:
+            return None, None
+        for line in out.splitlines():
+            # 直连路由形如: 192.168.31.0/24 dev eth0 proto kernel scope link src 192.168.31.20
+            m = re.match(r"^(\d+\.\d+\.\d+\.\d+/\d+)\s+dev\s+(\S+)\s+.*scope\s+link", line)
+            if m and m.group(2) == default_iface:
+                return m.group(1), m.group(2)
+    except Exception:
+        pass
+    return None, None
+
+
+def _ensure_lan_bypass():
+    """WARP 连接后加一条局域网直连路由（metric 更小优先），保住面板/局域网访问。
+
+    wg-quick 的 AllowedIPs=0.0.0.0/0 会接管全部流量，浏览器访问面板的回包
+    进隧道就回不来了。加这条路由让局域网流量不走隧道。幂等，失败只记日志不阻断。
+    """
+    try:
+        subnet, iface = _lan_subnet()
+        if not subnet or not iface:
+            return
+        # 已存在则不重复加
+        code, out = sh("ip route show %s 2>/dev/null" % subnet, timeout=10)
+        if code == 0 and ("dev %s" % iface) in out:
+            return
+        sh("ip route add %s dev %s metric 5 2>/dev/null" % (subnet, iface), timeout=10)
+    except Exception:
+        pass
+
+
+def _remove_lan_bypass():
+    """删除 _ensure_lan_bypass 加的局域网直连路由。"""
+    try:
+        subnet, iface = _lan_subnet()
+        if not subnet:
+            return
+        sh("ip route del %s dev %s metric 5 2>/dev/null" % (subnet, iface or ""), timeout=10)
+    except Exception:
+        pass
+
+
 def _sanitized_conf():
     """去掉配置里的 DNS 行（wg-quick 会用 resolvconf 改系统 DNS，Alpine 上失败且与面板 DNS 冲突）。
 
@@ -370,6 +429,7 @@ def connect():
     code, out = sh("wg-quick up %s" % _sanitized_conf(), timeout=30)
     if code != 0:
         return False, "WARP 连接失败：%s" % (out[-500:] if out else "未知错误"), status()
+    _ensure_lan_bypass()  # 保住局域网/面板访问，不让回包进隧道
     msg = "WARP 已连接"
     if get_mutex():
         c2, o2 = _stop_core()
@@ -389,6 +449,7 @@ def disconnect():
     if code != 0:
         # 兜底：直接删接口
         sh("ip link del %s 2>/dev/null" % IFACE, timeout=10)
+    _remove_lan_bypass()  # 清掉我们加的局域网直连路由
     st = status()
     if st["connected"]:
         return False, "WARP 断开失败：%s" % (out[-300:] if out else "未知错误"), st

@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.9.4"
+PANEL_VERSION = "7.9.5"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -249,7 +249,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.9.4"
+PANEL_VERSION = "7.9.5"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -7735,6 +7735,65 @@ def setup():
     return True, "WARP 配置已生成"
 
 
+def _lan_subnet():
+    """检测局域网段：从 ip route 找默认路由的 dev 上的直连网段。
+
+    例如 `192.168.31.0/24 dev eth0 proto kernel scope link src 192.168.31.20`
+    返回 (subnet, iface)，如 ("192.168.31.0/24", "eth0")；失败返回 (None, None)。
+    """
+    try:
+        code, out = sh("ip route show", timeout=10)
+        if code != 0:
+            return None, None
+        default_iface = None
+        for line in out.splitlines():
+            if line.startswith("default "):
+                m = re.search(r"\\bdev\\s+(\\S+)", line)
+                if m:
+                    default_iface = m.group(1)
+                break
+        if not default_iface:
+            return None, None
+        for line in out.splitlines():
+            # 直连路由形如: 192.168.31.0/24 dev eth0 proto kernel scope link src 192.168.31.20
+            m = re.match(r"^(\\d+\\.\\d+\\.\\d+\\.\\d+/\\d+)\\s+dev\\s+(\\S+)\\s+.*scope\\s+link", line)
+            if m and m.group(2) == default_iface:
+                return m.group(1), m.group(2)
+    except Exception:
+        pass
+    return None, None
+
+
+def _ensure_lan_bypass():
+    """WARP 连接后加一条局域网直连路由（metric 更小优先），保住面板/局域网访问。
+
+    wg-quick 的 AllowedIPs=0.0.0.0/0 会接管全部流量，浏览器访问面板的回包
+    进隧道就回不来了。加这条路由让局域网流量不走隧道。幂等，失败只记日志不阻断。
+    """
+    try:
+        subnet, iface = _lan_subnet()
+        if not subnet or not iface:
+            return
+        # 已存在则不重复加
+        code, out = sh("ip route show %s 2>/dev/null" % subnet, timeout=10)
+        if code == 0 and ("dev %s" % iface) in out:
+            return
+        sh("ip route add %s dev %s metric 5 2>/dev/null" % (subnet, iface), timeout=10)
+    except Exception:
+        pass
+
+
+def _remove_lan_bypass():
+    """删除 _ensure_lan_bypass 加的局域网直连路由。"""
+    try:
+        subnet, iface = _lan_subnet()
+        if not subnet:
+            return
+        sh("ip route del %s dev %s metric 5 2>/dev/null" % (subnet, iface or ""), timeout=10)
+    except Exception:
+        pass
+
+
 def _sanitized_conf():
     """去掉配置里的 DNS 行（wg-quick 会用 resolvconf 改系统 DNS，Alpine 上失败且与面板 DNS 冲突）。
 
@@ -7773,6 +7832,7 @@ def connect():
     code, out = sh("wg-quick up %s" % _sanitized_conf(), timeout=30)
     if code != 0:
         return False, "WARP 连接失败：%s" % (out[-500:] if out else "未知错误"), status()
+    _ensure_lan_bypass()  # 保住局域网/面板访问，不让回包进隧道
     msg = "WARP 已连接"
     if get_mutex():
         c2, o2 = _stop_core()
@@ -7792,6 +7852,7 @@ def disconnect():
     if code != 0:
         # 兜底：直接删接口
         sh("ip link del %s 2>/dev/null" % IFACE, timeout=10)
+    _remove_lan_bypass()  # 清掉我们加的局域网直连路由
     st = status()
     if st["connected"]:
         return False, "WARP 断开失败：%s" % (out[-300:] if out else "未知错误"), st
@@ -7832,7 +7893,7 @@ from .core_update import (
 )
 from .sysopt import delay_test, favicon, nft_ok, opt_apply, opt_status, sh, speed_test, svc_restart
 from . import warp as warp_mod
-from .notify import WD, tg_send
+from .notify import WD, core_proc_alive, tg_send
 from .latency import BG_FILE, RETEST, bg_fetch, bg_meta, bg_meta_save, bg_save, bg_type, fix_global, proxies_merged, retest_soon
 from .stats import arp_table
 from .unlock import unlock_test
@@ -9077,6 +9138,19 @@ class H(BaseHTTPRequestHandler):
                 warp_mod.disconnect()  # 内核启动前先断 WARP（双向互斥）
             if act == "stop":
                 code, out = sh(SVC + " stop", timeout=90)
+                # 验证内核真的停了：rc-service 返回 0 不代表进程已退出
+                # （stop 脚本可能只发了信号），用 pid 文件二次确认
+                if code == 0:
+                    time.sleep(2)
+                    if core_proc_alive():
+                        # 再等 3 秒，仍在则判定停止失败（返回真实失败，不谎报成功）
+                        time.sleep(3)
+                        if core_proc_alive():
+                            log_err("api/service stop",
+                                    Exception("rc-service 返回 0 但核心进程仍在：%s" % out[-200:]))
+                            return self.send(500, {"message": "停止命令已执行，但核心进程仍在运行，请 SSH 手动检查"})
+                else:
+                    log_err("api/service stop", Exception("rc-service stop 失败：%s" % out[-200:]))
             else:  # 启动 / 重启：同样让看门狗等内核加载完
                 wd_hold(150, "手动" + act)
                 code, out = sh(SVC + " " + act, timeout=90)
