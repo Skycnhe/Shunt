@@ -68,7 +68,7 @@ def reload_core(prev=None):
             with LOCK:
                 save(prev)
                 write_sb_config(load(), SB_CONF)
-            svc_restart(timeout=90)
+            svc_restart(timeout=30)
             return False, "sing-box 启动失败，已撤销本次修改" + ("：" + tail if tail else "")
         return ok, msg
     wd_hold(45, "mihomo 重载配置")

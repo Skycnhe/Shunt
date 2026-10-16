@@ -419,9 +419,10 @@ def sh(cmd, timeout=60):
         return 1, str(e)
 
 
-def svc_restart(timeout=90, why="面板重启核心"):
+def svc_restart(timeout=30, why="面板重启核心"):
     """重启核心服务。重启及启动后的加载期（大规则集、Fake-IP 缓存）内看门狗暂停判定，
-    否则启动慢一点就会被看门狗当成「无响应」再重启一次，形成连环重启"""
+    否则启动慢一点就会被看门狗当成「无响应」再重启一次，形成连环重启。
+    v8.3：rc-service 超时从 90 秒缩到 30 秒（正常应在 10 秒内返回），超时由调用方提示用户 SSH 检查。"""
     wd_hold(timeout + 60, why)
     try:
         return sh(SVC + " restart", timeout=timeout)

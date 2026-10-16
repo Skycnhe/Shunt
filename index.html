@@ -346,6 +346,8 @@ nav button{font-size:15.5px;font-weight:600;opacity:.85}nav button.on{font-weigh
   .hstats{order:4;flex:1 1 100%;margin-left:0}
   .hstats>.chip,.vchips .chip{flex:1 0 auto}.vchips{flex:2 0 auto;margin-left:0}
 }
+.ib.busy{opacity:.65}.ib.busy svg{animation:svrot 1s linear infinite}
+@keyframes svrot{to{transform:rotate(360deg)}}
 </style>
 </head>
 <body><div id="bgimg"></div><div id="bgdim"></div>
@@ -809,8 +811,8 @@ async function bgSync(){if(BG.src&&!BG.src.startsWith('/bg'))return;
 async function renderLook(){renderSkins();bgApply();bgSync()}
 bgApply();
 
-async function api(path,method='GET',body){
-  const r=await fetch(path,{method,headers:{'X-Shunt':'1','Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
+async function api(path,method='GET',body,signal){
+  const r=await fetch(path,{method,headers:{'X-Shunt':'1','Content-Type':'application/json'},body:body?JSON.stringify(body):undefined,signal});
   const t=await r.text();let j;try{j=t?JSON.parse(t):{}}catch{j={message:t}}
   if(!r.ok)throw new Error(j.message||('HTTP '+r.status));return j}
 const core=(p,m,b)=>api('/api/core'+p,m,b);
@@ -1469,7 +1471,14 @@ async function saveDevNames(){const d={};for(const l of lines($('#dev-names').va
   try{const j=await api('/api/devices','PUT',{devices:d});toast(j.message);await loadDevs();$('#dev-names').value=Object.entries(STATE.devices||{}).map(([k,v])=>k+' = '+v).join('\n')}catch(e){toast(e.message)}}
 async function svc(a){if(a==='stop'&&!confirm('停止 mihomo 核心？\n停止后经旁路由的设备将无法上网（看门狗不会自动拉起，需手动启动）。'))return;
   if(a==='restart'&&!confirm('重启 mihomo 核心？现有连接会断开。'))return;
-  try{toast('执行中…');const j=await api('/api/service','POST',{action:a});toast(j.message||'完成');setTimeout(loadState,1500)}catch(e){toast(e.message)}}
+  const ctl=new AbortController(),to=setTimeout(()=>ctl.abort(),30000);
+  try{const j=await api('/api/service','POST',{action:a},ctl.signal);clearTimeout(to);
+    if(a==='reload'||a==='geo'||a==='upgrade'){toast(j.message||'完成');setTimeout(loadState,1500);return}
+    toast('已接受，后台执行中…');setSvcBusy(true);
+    const poll=setInterval(async()=>{try{const st=await api('/api/service/status');
+      if(!st.running){clearInterval(poll);setSvcBusy(false);toast(st.message||'完成');setTimeout(loadState,1500)}}catch(e){clearInterval(poll);setSvcBusy(false)}},2000);
+  }catch(e){clearTimeout(to);setSvcBusy(false);toast(e.name==='AbortError'?'后端无响应（30 秒），请检查面板日志或 SSH':e.message)}}
+function setSvcBusy(b){for(const id of ['h-restart','h-start','h-stop']){const el=document.getElementById(id);if(el){el.disabled=b;el.classList.toggle('busy',b)}}}
 async function flushFake(){try{await core('/cache/fakeip/flush','POST');toast('已清空')}catch(e){toast(e.message)}}
 function saveTg(){saveSettings({tg_token:$('#tg-token').value.trim(),tg_chat:$('#tg-chat').value.trim()},'Telegram 设置已保存').catch(()=>{})}
 async function tgTest(){try{toast('发送中…');const j=await api('/api/tg/test','POST',{tg_token:$('#tg-token').value.trim(),tg_chat:$('#tg-chat').value.trim()});toast(j.message)}catch(e){toast(e.message)}}

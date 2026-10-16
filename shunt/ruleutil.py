@@ -29,12 +29,15 @@ def dns_policy_of(server):
 def _mh_domain(x):
     """mihomo 域名通配（+.a.com / *.a.com / a.*.com）→ (sing-box 字段, 值)"""
     x = x.strip().lower()
-    if x.startswith("+."):
-        return "domain_suffix", x[2:]
-    if x.startswith("."):
-        return "domain_suffix", x[1:]
-    if "*" in x:
-        return "domain_regex", "^" + re.escape(x).replace(r"\*", r"[^.]+") + "$"
+    pre = ""
+    if x.startswith("+."):  # 自身及所有子域
+        x, pre = x[2:], r"(?:[^.]+\.)*"
+    elif x.startswith("."):  # 只匹配子域（mihomo 语义，不含自身）
+        x, pre = x[1:], r"(?:[^.]+\.)+"
+    if "*" in x:  # 含通配：只能用正则，否则 domain_suffix 会把「stun.*.*」当成字面量，永远匹配不到
+        return "domain_regex", "^" + pre + re.escape(x).replace(r"\*", r"[^.]+") + "$"
+    if pre:
+        return "domain_suffix", x if pre.endswith("*") else "." + x
     return "domain", x
 
 

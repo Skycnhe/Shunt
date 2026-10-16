@@ -137,6 +137,9 @@ def core_switch_job(kind, gh):
             bad = sb_sync_assets(d)
             for x in bad[:5]:
                 _cu("规则集", None, "✗ " + x)
+            crit = [x for x in bad if x.split("：", 1)[0] in ("geosite-cn", "geoip-cn", "geosite-private")]
+            if crit:  # 缺了国内 / 私有地址规则集，相关规则会被裁掉，国内流量全部走「漏网之鱼」代理，宁可不切
+                raise ValueError("国内分流规则集下载失败，未切换（可在 设置 里填 GitHub 加速地址后重试）：" + "；".join(crit)[:300])
             tmp = write_sb_config(d, SB_CONF + ".new")
             ok, err = check_sb_config(tmp)
             if not ok:
@@ -176,7 +179,7 @@ def core_switch_job(kind, gh):
         PROV.update(t=0, data=None)
         _cu("重启核心", 88, f"正在以 {label} 重启核心（局域网会断网几秒）")
         WD["manual_stop"] = False
-        svc_restart(timeout=90)
+        svc_restart(timeout=30)
         for _ in range(30):
             time.sleep(1)
             if core_alive():
@@ -185,7 +188,7 @@ def core_switch_job(kind, gh):
             tail = [l for l in sh(f"tail -n 30 '{MIHOMO_LOG}'")[1].splitlines() if re.search(r"FATAL|ERROR|level=(?:error|fatal)", l)]
             update(lambda x: x.update(core=prev))
             write_core_file(prev)
-            svc_restart(timeout=90)
+            svc_restart(timeout=30)
             log = re.sub(r"\x1b\[[0-9;]*m", "", "\n".join(tail[-3:]))[-400:]
             raise ValueError(f"{label} 30 秒内未响应，已切回 {CORES[prev]}。" + ("日志：" + log if log else "请查看核心日志"))
         threading.Thread(target=restore_selections, daemon=True).start()
@@ -221,14 +224,14 @@ def sb_update_job(channel, gh, force=False):
                 shutil.copy2(SB_BIN + ".bak", SB_BIN)
                 raise ValueError("新版 sing-box 不兼容当前配置，已恢复原版本：" + err)
             _cu("重启核心", 85, "正在重启核心")
-            svc_restart(timeout=90)
+            svc_restart(timeout=30)
             for _ in range(30):
                 time.sleep(1)
                 if core_alive():
                     break
             else:
                 shutil.copy2(SB_BIN + ".bak", SB_BIN)
-                svc_restart(timeout=90)
+                svc_restart(timeout=30)
                 raise ValueError("新版 sing-box 30 秒内未响应，已恢复原版本")
         CORE_UPD.update(ok=True, message=f"sing-box 已从 {cur or '未安装'} 更新到 {nv}" + ("，旧版本已备份" if cur else ""))
     except Exception as e:

@@ -51,7 +51,7 @@ def run_task(name):
         return not bad, "订阅已更新" if not bad else "以下订阅更新失败：" + "、".join(bad)
     if name == "core_restart":
         WD["manual_stop"] = False
-        code, out = svc_restart(timeout=90)
+        code, out = svc_restart(timeout=30)
         return code == 0, "核心已重启" if code == 0 else out[-200:]
     if name == "geo_update":
         code, raw = core("POST", "/configs/geo", {}, timeout=180)

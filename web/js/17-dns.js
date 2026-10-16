@@ -97,7 +97,14 @@ async function saveDevNames(){const d={};for(const l of lines($('#dev-names').va
   try{const j=await api('/api/devices','PUT',{devices:d});toast(j.message);await loadDevs();$('#dev-names').value=Object.entries(STATE.devices||{}).map(([k,v])=>k+' = '+v).join('\n')}catch(e){toast(e.message)}}
 async function svc(a){if(a==='stop'&&!confirm('停止 mihomo 核心？\n停止后经旁路由的设备将无法上网（看门狗不会自动拉起，需手动启动）。'))return;
   if(a==='restart'&&!confirm('重启 mihomo 核心？现有连接会断开。'))return;
-  try{toast('执行中…');const j=await api('/api/service','POST',{action:a});toast(j.message||'完成');setTimeout(loadState,1500)}catch(e){toast(e.message)}}
+  const ctl=new AbortController(),to=setTimeout(()=>ctl.abort(),30000);
+  try{const j=await api('/api/service','POST',{action:a},ctl.signal);clearTimeout(to);
+    if(a==='reload'||a==='geo'||a==='upgrade'){toast(j.message||'完成');setTimeout(loadState,1500);return}
+    toast('已接受，后台执行中…');setSvcBusy(true);
+    const poll=setInterval(async()=>{try{const st=await api('/api/service/status');
+      if(!st.running){clearInterval(poll);setSvcBusy(false);toast(st.message||'完成');setTimeout(loadState,1500)}}catch(e){clearInterval(poll);setSvcBusy(false)}},2000);
+  }catch(e){clearTimeout(to);setSvcBusy(false);toast(e.name==='AbortError'?'后端无响应（30 秒），请检查面板日志或 SSH':e.message)}}
+function setSvcBusy(b){for(const id of ['h-restart','h-start','h-stop']){const el=document.getElementById(id);if(el){el.disabled=b;el.classList.toggle('busy',b)}}}
 async function flushFake(){try{await core('/cache/fakeip/flush','POST');toast('已清空')}catch(e){toast(e.message)}}
 function saveTg(){saveSettings({tg_token:$('#tg-token').value.trim(),tg_chat:$('#tg-chat').value.trim()},'Telegram 设置已保存').catch(()=>{})}
 async function tgTest(){try{toast('发送中…');const j=await api('/api/tg/test','POST',{tg_token:$('#tg-token').value.trim(),tg_chat:$('#tg-chat').value.trim()});toast(j.message)}catch(e){toast(e.message)}}

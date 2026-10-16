@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "8.2.2"
+PANEL_VERSION = "8.3"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -250,7 +250,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "8.2.2"
+PANEL_VERSION = "8.3"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -983,12 +983,15 @@ def dns_policy_of(server):
 def _mh_domain(x):
     """mihomo 域名通配（+.a.com / *.a.com / a.*.com）→ (sing-box 字段, 值)"""
     x = x.strip().lower()
-    if x.startswith("+."):
-        return "domain_suffix", x[2:]
-    if x.startswith("."):
-        return "domain_suffix", x[1:]
-    if "*" in x:
-        return "domain_regex", "^" + re.escape(x).replace(r"\\*", r"[^.]+") + "$"
+    pre = ""
+    if x.startswith("+."):  # 自身及所有子域
+        x, pre = x[2:], r"(?:[^.]+\\.)*"
+    elif x.startswith("."):  # 只匹配子域（mihomo 语义，不含自身）
+        x, pre = x[1:], r"(?:[^.]+\\.)+"
+    if "*" in x:  # 含通配：只能用正则，否则 domain_suffix 会把「stun.*.*」当成字面量，永远匹配不到
+        return "domain_regex", "^" + pre + re.escape(x).replace(r"\\*", r"[^.]+") + "$"
+    if pre:
+        return "domain_suffix", x if pre.endswith("*") else "." + x
     return "domain", x
 
 
@@ -1720,7 +1723,7 @@ def reload_core(prev=None):
             with LOCK:
                 save(prev)
                 write_sb_config(load(), SB_CONF)
-            svc_restart(timeout=90)
+            svc_restart(timeout=30)
             return False, "sing-box 启动失败，已撤销本次修改" + ("：" + tail if tail else "")
         return ok, msg
     wd_hold(45, "mihomo 重载配置")
@@ -3286,7 +3289,7 @@ def sb_hot_reload():
             return False, "sing-box 重载后未响应，请查看日志"
         except OSError:
             pass
-    svc_restart(timeout=90)
+    svc_restart(timeout=30)
     return True, "已写入配置并重启 sing-box"
 
 
@@ -3471,6 +3474,9 @@ def core_switch_job(kind, gh):
             bad = sb_sync_assets(d)
             for x in bad[:5]:
                 _cu("规则集", None, "✗ " + x)
+            crit = [x for x in bad if x.split("：", 1)[0] in ("geosite-cn", "geoip-cn", "geosite-private")]
+            if crit:  # 缺了国内 / 私有地址规则集，相关规则会被裁掉，国内流量全部走「漏网之鱼」代理，宁可不切
+                raise ValueError("国内分流规则集下载失败，未切换（可在 设置 里填 GitHub 加速地址后重试）：" + "；".join(crit)[:300])
             tmp = write_sb_config(d, SB_CONF + ".new")
             ok, err = check_sb_config(tmp)
             if not ok:
@@ -3510,7 +3516,7 @@ def core_switch_job(kind, gh):
         PROV.update(t=0, data=None)
         _cu("重启核心", 88, f"正在以 {label} 重启核心（局域网会断网几秒）")
         WD["manual_stop"] = False
-        svc_restart(timeout=90)
+        svc_restart(timeout=30)
         for _ in range(30):
             time.sleep(1)
             if core_alive():
@@ -3519,7 +3525,7 @@ def core_switch_job(kind, gh):
             tail = [l for l in sh(f"tail -n 30 '{MIHOMO_LOG}'")[1].splitlines() if re.search(r"FATAL|ERROR|level=(?:error|fatal)", l)]
             update(lambda x: x.update(core=prev))
             write_core_file(prev)
-            svc_restart(timeout=90)
+            svc_restart(timeout=30)
             log = re.sub(r"\\x1b\\[[0-9;]*m", "", "\\n".join(tail[-3:]))[-400:]
             raise ValueError(f"{label} 30 秒内未响应，已切回 {CORES[prev]}。" + ("日志：" + log if log else "请查看核心日志"))
         threading.Thread(target=restore_selections, daemon=True).start()
@@ -3555,14 +3561,14 @@ def sb_update_job(channel, gh, force=False):
                 shutil.copy2(SB_BIN + ".bak", SB_BIN)
                 raise ValueError("新版 sing-box 不兼容当前配置，已恢复原版本：" + err)
             _cu("重启核心", 85, "正在重启核心")
-            svc_restart(timeout=90)
+            svc_restart(timeout=30)
             for _ in range(30):
                 time.sleep(1)
                 if core_alive():
                     break
             else:
                 shutil.copy2(SB_BIN + ".bak", SB_BIN)
-                svc_restart(timeout=90)
+                svc_restart(timeout=30)
                 raise ValueError("新版 sing-box 30 秒内未响应，已恢复原版本")
         CORE_UPD.update(ok=True, message=f"sing-box 已从 {cur or '未安装'} 更新到 {nv}" + ("，旧版本已备份" if cur else ""))
     except Exception as e:
@@ -4211,7 +4217,7 @@ def _core_swap_and_restart(src, label, kind="mihomo"):
         _cu("完成", 95, f"已替换为 {label}（当前内核是 {CORES[active_core()]}，切到 {CORES[kind]} 时生效）")
         return True, ""
     _cu("重启核心", 90, f"已替换为 {label}，正在重启核心")
-    svc_restart(timeout=90)
+    svc_restart(timeout=30)
     for _ in range(30):
         time.sleep(1)
         if core_alive():
@@ -4219,7 +4225,7 @@ def _core_swap_and_restart(src, label, kind="mihomo"):
     if had_old and src != bak:  # 新核心起不来 → 自动恢复
         _cu("自动回滚", 95, "新核心 30 秒内未响应，正在恢复原核心")
         shutil.copy2(bak, B)
-        svc_restart(timeout=90)
+        svc_restart(timeout=30)
         return False, "新核心启动失败，已自动恢复为原核心。日志：" + sh(f"tail -n 5 '{MIHOMO_LOG}'")[1][-300:]
     return False, "核心重启后 30 秒内未响应，请查看日志"
 
@@ -4801,9 +4807,10 @@ def sh(cmd, timeout=60):
         return 1, str(e)
 
 
-def svc_restart(timeout=90, why="面板重启核心"):
+def svc_restart(timeout=30, why="面板重启核心"):
     """重启核心服务。重启及启动后的加载期（大规则集、Fake-IP 缓存）内看门狗暂停判定，
-    否则启动慢一点就会被看门狗当成「无响应」再重启一次，形成连环重启"""
+    否则启动慢一点就会被看门狗当成「无响应」再重启一次，形成连环重启。
+    v8.3：rc-service 超时从 90 秒缩到 30 秒（正常应在 10 秒内返回），超时由调用方提示用户 SSH 检查。"""
     wd_hold(timeout + 60, why)
     try:
         return sh(SVC + " restart", timeout=timeout)
@@ -6615,7 +6622,7 @@ def run_task(name):
         return not bad, "订阅已更新" if not bad else "以下订阅更新失败：" + "、".join(bad)
     if name == "core_restart":
         WD["manual_stop"] = False
-        code, out = svc_restart(timeout=90)
+        code, out = svc_restart(timeout=30)
         return code == 0, "核心已重启" if code == 0 else out[-200:]
     if name == "geo_update":
         code, raw = core("POST", "/configs/geo", {}, timeout=180)
@@ -7858,6 +7865,7 @@ SENSITIVE_GET = ("/api/backup", "/api/backup/list", "/api/config", "/api/history
 
 _SVC_CACHE = {}  # {"v": (t, st, code, version)}：rc-service 状态 + 核心 /version 缓存 10 秒
 _GRP_CACHE = {}  # {"v": (cfgver, groups, gmeta)}：策略组名单按配置版本缓存，避免每次完整 build_config
+SERVICE_STATE = {"running": False, "action": "", "ok": None, "message": "", "t": 0}  # 重启/停止/启动后台任务状态：前端轮询用
 
 
 def _svc_status():
@@ -7977,6 +7985,47 @@ def validate_groups(d):
 def ad_today():
     """顶栏「广告拦截」：今天（本地自然日）拦截数，与概览「今日拦截广告」同一口径"""
     return adblock.AD_STATS.today() if adblock.AD_STATS else 0
+
+
+def _do_service(act):
+    """后台执行重启/停止/启动，返回 (ok, msg)。原 api_service_post 的同步逻辑搬到这里。
+    stop 保留 v7.9.5 的 pid 二次确认（rc-service 返回 0 不代表进程真退了）。"""
+    if act == "stop":
+        code, out = sh(SVC + " stop", timeout=30)
+        if "timed out" in out:
+            return False, "核心停止超时（30 秒），请 SSH 检查 `rc-service shunt-core status`"
+        # 验证内核真的停了：rc-service 返回 0 不代表进程已退出
+        # （stop 脚本可能只发了信号），用 pid 文件二次确认
+        if code == 0:
+            time.sleep(2)
+            if core_proc_alive():
+                # 再等 3 秒，仍在则判定停止失败（返回真实失败，不谎报成功）
+                time.sleep(3)
+                if core_proc_alive():
+                    log_err("api/service stop",
+                            Exception("rc-service 返回 0 但核心进程仍在：%s" % out[-200:]))
+                    return False, "停止命令已执行，但核心进程仍在运行，请 SSH 手动检查"
+        else:
+            log_err("api/service stop", Exception("rc-service stop 失败：%s" % out[-200:]))
+    else:  # 启动 / 重启：同样让看门狗等内核加载完
+        wd_hold(150, "手动" + act)
+        code, out = sh(SVC + " " + act, timeout=30)
+        wd_hold(60, "手动" + act, reset=True)
+        if "timed out" in out:
+            return False, "核心%s超时（30 秒），请 SSH 检查 `rc-service shunt-core status`" % ("重启" if act == "restart" else "启动")
+    if act != "stop":
+        retest_soon()
+    return code == 0, out
+
+
+def _service_job(act):
+    """后台线程入口：执行 _do_service 并更新 SERVICE_STATE，前端轮询 /api/service/status 获取结果"""
+    try:
+        ok, msg = _do_service(act)
+    except Exception as e:
+        log_err("api/service " + act, e)
+        ok, msg = False, str(e)
+    SERVICE_STATE.update({"running": False, "ok": ok, "message": msg, "t": int(time.time())})
 
 
 class H(BaseHTTPRequestHandler):
@@ -8480,7 +8529,7 @@ class H(BaseHTTPRequestHandler):
                 os.replace(SB_BIN + ".bak", SB_BIN)
                 os.replace(tmp, SB_BIN + ".bak")
                 if active_core() == "singbox":
-                    svc_restart(timeout=90)
+                    svc_restart(timeout=30)
                 return self.reply(True, f"已回滚到 sing-box {sb_version()}")
             ch = b.get("channel") or "stable"
             ok, msg = core_job_start(sb_update_job, ch, load().get("gh_proxy") or "", bool(b.get("force")))
@@ -9001,29 +9050,14 @@ class H(BaseHTTPRequestHandler):
         if act == "reload":
             return self.reply(*reload_core())
         if act in ("restart", "stop", "start"):
+            # 异步化：立即返回，后台线程执行 rc-service（v8.3；之前同步阻塞最长 95 秒，前端感知为"没反应"）
+            if SERVICE_STATE["running"]:
+                return self.send(409, {"message": "已有服务操作在后台执行中，请稍候"})
             WD["manual_stop"] = act == "stop"
-            if act == "stop":
-                code, out = sh(SVC + " stop", timeout=90)
-                # 验证内核真的停了：rc-service 返回 0 不代表进程已退出
-                # （stop 脚本可能只发了信号），用 pid 文件二次确认
-                if code == 0:
-                    time.sleep(2)
-                    if core_proc_alive():
-                        # 再等 3 秒，仍在则判定停止失败（返回真实失败，不谎报成功）
-                        time.sleep(3)
-                        if core_proc_alive():
-                            log_err("api/service stop",
-                                    Exception("rc-service 返回 0 但核心进程仍在：%s" % out[-200:]))
-                            return self.send(500, {"message": "停止命令已执行，但核心进程仍在运行，请 SSH 手动检查"})
-                else:
-                    log_err("api/service stop", Exception("rc-service stop 失败：%s" % out[-200:]))
-            else:  # 启动 / 重启：同样让看门狗等内核加载完
-                wd_hold(150, "手动" + act)
-                code, out = sh(SVC + " " + act, timeout=90)
-                wd_hold(60, "手动" + act, reset=True)
-            if act != "stop":
-                retest_soon()
-            return self.reply(code == 0, out)
+            SERVICE_STATE.update({"running": True, "action": act, "ok": None,
+                                  "message": "执行中…", "t": int(time.time())})
+            threading.Thread(target=_service_job, args=(act,), daemon=True).start()
+            return self.send(200, {"message": "已接受，后台执行中"})
         if act == "upgrade" and active_core() == "singbox":
             return self.send(400, {"message": "请在 设置 → 核心 → 内核更新 里更新 sing-box"})
         if act == "upgrade":
@@ -9035,6 +9069,11 @@ class H(BaseHTTPRequestHandler):
             code, raw = core("POST", "/configs/geo", {}, timeout=120)
             return self.send(code, raw or b'{"message":"ok"}')
         return self.send(400, {"message": "未知操作"})
+
+    @api_route("/api/service/status", "GET")
+    def api_service_status(self, m, p, b, q):
+        """重启/停止/启动后台任务状态：前端轮询用（v8.3 异步化）"""
+        return self.send(200, dict(SERVICE_STATE))
 
     @api_route("/api/settings", "PUT")
     def api_settings_put(self, m, p, b, q):

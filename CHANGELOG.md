@@ -1,5 +1,11 @@
 # 更新记录与详细说明
 
+## v8.3
+- 重启/停止/启动按钮异步化：`/api/service` 立即返回，后台线程执行 `rc-service`，前端轮询 `/api/service/status` 显示进度（之前同步阻塞最长 95 秒，前端感知为"没有反应"）
+- 服务控制超时从 90 秒缩短到 30 秒，超时返回明确提示（请 SSH 检查 `rc-service shunt-core status`）
+- 前端 `fetch()` 加 30 秒 AbortController 超时；按钮执行期间禁用 + 转圈 spinner
+- 保留 v7.9.5 的停止 pid 二次确认（在后台线程中执行）
+
 ## v8.2.2
 - 修复回归：sing-box Fake-IP `inet4_range` 从 `198.18.0.0/16` 改回 `198.18.0.0/15`
   - v7.5.9 把范围从 /15 缩小到 /16，导致老版本分配的 198.19.x.x 映射在升级后变孤儿（sing-box 不认识 → `missing fakeip record`），YouTube 等 App 连接失败

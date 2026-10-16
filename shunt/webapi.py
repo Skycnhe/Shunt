@@ -51,6 +51,7 @@ SENSITIVE_GET = ("/api/backup", "/api/backup/list", "/api/config", "/api/history
 
 _SVC_CACHE = {}  # {"v": (t, st, code, version)}：rc-service 状态 + 核心 /version 缓存 10 秒
 _GRP_CACHE = {}  # {"v": (cfgver, groups, gmeta)}：策略组名单按配置版本缓存，避免每次完整 build_config
+SERVICE_STATE = {"running": False, "action": "", "ok": None, "message": "", "t": 0}  # 重启/停止/启动后台任务状态：前端轮询用
 
 
 def _svc_status():
@@ -170,6 +171,47 @@ def validate_groups(d):
 def ad_today():
     """顶栏「广告拦截」：今天（本地自然日）拦截数，与概览「今日拦截广告」同一口径"""
     return adblock.AD_STATS.today() if adblock.AD_STATS else 0
+
+
+def _do_service(act):
+    """后台执行重启/停止/启动，返回 (ok, msg)。原 api_service_post 的同步逻辑搬到这里。
+    stop 保留 v7.9.5 的 pid 二次确认（rc-service 返回 0 不代表进程真退了）。"""
+    if act == "stop":
+        code, out = sh(SVC + " stop", timeout=30)
+        if "timed out" in out:
+            return False, "核心停止超时（30 秒），请 SSH 检查 `rc-service shunt-core status`"
+        # 验证内核真的停了：rc-service 返回 0 不代表进程已退出
+        # （stop 脚本可能只发了信号），用 pid 文件二次确认
+        if code == 0:
+            time.sleep(2)
+            if core_proc_alive():
+                # 再等 3 秒，仍在则判定停止失败（返回真实失败，不谎报成功）
+                time.sleep(3)
+                if core_proc_alive():
+                    log_err("api/service stop",
+                            Exception("rc-service 返回 0 但核心进程仍在：%s" % out[-200:]))
+                    return False, "停止命令已执行，但核心进程仍在运行，请 SSH 手动检查"
+        else:
+            log_err("api/service stop", Exception("rc-service stop 失败：%s" % out[-200:]))
+    else:  # 启动 / 重启：同样让看门狗等内核加载完
+        wd_hold(150, "手动" + act)
+        code, out = sh(SVC + " " + act, timeout=30)
+        wd_hold(60, "手动" + act, reset=True)
+        if "timed out" in out:
+            return False, "核心%s超时（30 秒），请 SSH 检查 `rc-service shunt-core status`" % ("重启" if act == "restart" else "启动")
+    if act != "stop":
+        retest_soon()
+    return code == 0, out
+
+
+def _service_job(act):
+    """后台线程入口：执行 _do_service 并更新 SERVICE_STATE，前端轮询 /api/service/status 获取结果"""
+    try:
+        ok, msg = _do_service(act)
+    except Exception as e:
+        log_err("api/service " + act, e)
+        ok, msg = False, str(e)
+    SERVICE_STATE.update({"running": False, "ok": ok, "message": msg, "t": int(time.time())})
 
 
 class H(BaseHTTPRequestHandler):
@@ -673,7 +715,7 @@ class H(BaseHTTPRequestHandler):
                 os.replace(SB_BIN + ".bak", SB_BIN)
                 os.replace(tmp, SB_BIN + ".bak")
                 if active_core() == "singbox":
-                    svc_restart(timeout=90)
+                    svc_restart(timeout=30)
                 return self.reply(True, f"已回滚到 sing-box {sb_version()}")
             ch = b.get("channel") or "stable"
             ok, msg = core_job_start(sb_update_job, ch, load().get("gh_proxy") or "", bool(b.get("force")))
@@ -1194,29 +1236,14 @@ class H(BaseHTTPRequestHandler):
         if act == "reload":
             return self.reply(*reload_core())
         if act in ("restart", "stop", "start"):
+            # 异步化：立即返回，后台线程执行 rc-service（v8.3；之前同步阻塞最长 95 秒，前端感知为"没反应"）
+            if SERVICE_STATE["running"]:
+                return self.send(409, {"message": "已有服务操作在后台执行中，请稍候"})
             WD["manual_stop"] = act == "stop"
-            if act == "stop":
-                code, out = sh(SVC + " stop", timeout=90)
-                # 验证内核真的停了：rc-service 返回 0 不代表进程已退出
-                # （stop 脚本可能只发了信号），用 pid 文件二次确认
-                if code == 0:
-                    time.sleep(2)
-                    if core_proc_alive():
-                        # 再等 3 秒，仍在则判定停止失败（返回真实失败，不谎报成功）
-                        time.sleep(3)
-                        if core_proc_alive():
-                            log_err("api/service stop",
-                                    Exception("rc-service 返回 0 但核心进程仍在：%s" % out[-200:]))
-                            return self.send(500, {"message": "停止命令已执行，但核心进程仍在运行，请 SSH 手动检查"})
-                else:
-                    log_err("api/service stop", Exception("rc-service stop 失败：%s" % out[-200:]))
-            else:  # 启动 / 重启：同样让看门狗等内核加载完
-                wd_hold(150, "手动" + act)
-                code, out = sh(SVC + " " + act, timeout=90)
-                wd_hold(60, "手动" + act, reset=True)
-            if act != "stop":
-                retest_soon()
-            return self.reply(code == 0, out)
+            SERVICE_STATE.update({"running": True, "action": act, "ok": None,
+                                  "message": "执行中…", "t": int(time.time())})
+            threading.Thread(target=_service_job, args=(act,), daemon=True).start()
+            return self.send(200, {"message": "已接受，后台执行中"})
         if act == "upgrade" and active_core() == "singbox":
             return self.send(400, {"message": "请在 设置 → 核心 → 内核更新 里更新 sing-box"})
         if act == "upgrade":
@@ -1228,6 +1255,11 @@ class H(BaseHTTPRequestHandler):
             code, raw = core("POST", "/configs/geo", {}, timeout=120)
             return self.send(code, raw or b'{"message":"ok"}')
         return self.send(400, {"message": "未知操作"})
+
+    @api_route("/api/service/status", "GET")
+    def api_service_status(self, m, p, b, q):
+        """重启/停止/启动后台任务状态：前端轮询用（v8.3 异步化）"""
+        return self.send(200, dict(SERVICE_STATE))
 
     @api_route("/api/settings", "PUT")
     def api_settings_put(self, m, p, b, q):
