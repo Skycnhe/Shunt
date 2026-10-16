@@ -327,5 +327,3 @@ nav button{font-size:15.5px;font-weight:600;opacity:.85}nav button.on{font-weigh
   .hstats{order:4;flex:1 1 100%;margin-left:0}
   .hstats>.chip,.vchips .chip{flex:1 0 auto}.vchips{flex:2 0 auto;margin-left:0}
 }
-.ib.busy{opacity:.65}.ib.busy svg{animation:svrot 1s linear infinite}
-@keyframes svrot{to{transform:rotate(360deg)}}

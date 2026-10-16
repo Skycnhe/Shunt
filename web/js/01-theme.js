@@ -43,8 +43,8 @@ async function bgSync(){if(BG.src&&!BG.src.startsWith('/bg'))return;
 async function renderLook(){renderSkins();bgApply();bgSync()}
 bgApply();
 
-async function api(path,method='GET',body,signal){
-  const r=await fetch(path,{method,headers:{'X-Shunt':'1','Content-Type':'application/json'},body:body?JSON.stringify(body):undefined,signal});
+async function api(path,method='GET',body){
+  const r=await fetch(path,{method,headers:{'X-Shunt':'1','Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
   const t=await r.text();let j;try{j=t?JSON.parse(t):{}}catch{j={message:t}}
   if(!r.ok)throw new Error(j.message||('HTTP '+r.status));return j}
 const core=(p,m,b)=>api('/api/core'+p,m,b);

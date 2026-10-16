@@ -485,7 +485,7 @@ def sb_hot_reload():
             return False, "sing-box 重载后未响应，请查看日志"
         except OSError:
             pass
-    svc_restart(timeout=30)
+    svc_restart(timeout=90)
     return True, "已写入配置并重启 sing-box"
 
 

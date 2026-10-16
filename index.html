@@ -346,8 +346,6 @@ nav button{font-size:15.5px;font-weight:600;opacity:.85}nav button.on{font-weigh
   .hstats{order:4;flex:1 1 100%;margin-left:0}
   .hstats>.chip,.vchips .chip{flex:1 0 auto}.vchips{flex:2 0 auto;margin-left:0}
 }
-.ib.busy{opacity:.65}.ib.busy svg{animation:svrot 1s linear infinite}
-@keyframes svrot{to{transform:rotate(360deg)}}
 </style>
 </head>
 <body><div id="bgimg"></div><div id="bgdim"></div>
@@ -358,9 +356,9 @@ nav button{font-size:15.5px;font-weight:600;opacity:.85}nav button.on{font-weigh
     <div class="brand"><span class="logo"><svg viewBox="80 100 360 312" width="20" height="20" aria-hidden="true"><g fill="none" stroke="#fff" stroke-width="34" stroke-linecap="round"><path d="M140 256 H196 C262 256 280 164 356 164"/><path d="M196 256 C256 256 278 340 330 347" stroke-opacity=".55"/></g><circle cx="132" cy="256" r="38" fill="#fff"/><circle cx="370" cy="164" r="46" fill="#fff"/><path d="M378 132 L352 170 H372 L362 198 L390 156 H370 Z" fill="#3b6cf5"/><circle cx="370" cy="348" r="34" fill="none" stroke="#fff" stroke-width="22" stroke-opacity=".75"/></svg></span><b>Shunt</b></div>
     <div class="corebox">
       <span class="pill"><i class="dot" id="h-dot"></i><span id="h-run">-</span></span><span class="ver" id="h-ver"></span>
-      <button class="ib hide" id="h-restart" onclick="svc('restart')" title="重启 mihomo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg><span class="tx">重启</span></button>
-      <button class="ib go hide" id="h-start" onclick="svc('start')" title="启动 mihomo"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l13-7.5z"/></svg><span class="tx">启动</span></button>
-      <button class="ib stop hide" id="h-stop" onclick="svc('stop')" title="停止 mihomo"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="5.5" y="5.5" width="13" height="13" rx="2.5"/></svg><span class="tx">停止</span></button>
+      <button class="ib hide" id="h-restart" onclick="svc('restart')" title="重启核心"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg><span class="tx">重启</span></button>
+      <button class="ib go hide" id="h-start" onclick="svc('start')" title="启动核心"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l13-7.5z"/></svg><span class="tx">启动</span></button>
+      <button class="ib stop hide" id="h-stop" onclick="svc('stop')" title="停止核心"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="5.5" y="5.5" width="13" height="13" rx="2.5"/></svg><span class="tx">停止</span></button>
       <span class="tag" id="h-mode" title="当前流量模式：内核运行时走代理，停止时直连"></span>
     </div>
     <div class="hstats">
@@ -811,8 +809,8 @@ async function bgSync(){if(BG.src&&!BG.src.startsWith('/bg'))return;
 async function renderLook(){renderSkins();bgApply();bgSync()}
 bgApply();
 
-async function api(path,method='GET',body,signal){
-  const r=await fetch(path,{method,headers:{'X-Shunt':'1','Content-Type':'application/json'},body:body?JSON.stringify(body):undefined,signal});
+async function api(path,method='GET',body){
+  const r=await fetch(path,{method,headers:{'X-Shunt':'1','Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
   const t=await r.text();let j;try{j=t?JSON.parse(t):{}}catch{j={message:t}}
   if(!r.ok)throw new Error(j.message||('HTTP '+r.status));return j}
 const core=(p,m,b)=>api('/api/core'+p,m,b);
@@ -1469,16 +1467,17 @@ async function loadLogInfo(){try{const j=await api('/api/logs/info');$('#log-siz
 async function cleanLogs(){try{const j=await api('/api/logs/clean','POST');toast(j.message);loadLogInfo()}catch(e){toast(e.message)}}
 async function saveDevNames(){const d={};for(const l of lines($('#dev-names').value)){const i=l.search(/[=\s]/);if(i<0)continue;const k=l.slice(0,i).trim(),v=l.slice(i).replace(/^[\s=]+/,'').trim();if(k&&v)d[k]=v}
   try{const j=await api('/api/devices','PUT',{devices:d});toast(j.message);await loadDevs();$('#dev-names').value=Object.entries(STATE.devices||{}).map(([k,v])=>k+' = '+v).join('\n')}catch(e){toast(e.message)}}
-async function svc(a){if(a==='stop'&&!confirm('停止 mihomo 核心？\n停止后经旁路由的设备将无法上网（看门狗不会自动拉起，需手动启动）。'))return;
-  if(a==='restart'&&!confirm('重启 mihomo 核心？现有连接会断开。'))return;
-  const ctl=new AbortController(),to=setTimeout(()=>ctl.abort(),30000);
-  try{const j=await api('/api/service','POST',{action:a},ctl.signal);clearTimeout(to);
-    if(a==='reload'||a==='geo'||a==='upgrade'){toast(j.message||'完成');setTimeout(loadState,1500);return}
-    toast('已接受，后台执行中…');setSvcBusy(true);
-    const poll=setInterval(async()=>{try{const st=await api('/api/service/status');
-      if(!st.running){clearInterval(poll);setSvcBusy(false);toast(st.message||'完成');setTimeout(loadState,1500)}}catch(e){clearInterval(poll);setSvcBusy(false)}},2000);
-  }catch(e){clearTimeout(to);setSvcBusy(false);toast(e.name==='AbortError'?'后端无响应（30 秒），请检查面板日志或 SSH':e.message)}}
-function setSvcBusy(b){for(const id of ['h-restart','h-start','h-stop']){const el=document.getElementById(id);if(el){el.disabled=b;el.classList.toggle('busy',b)}}}
+const SVC_TXT={start:'启动',stop:'停止',restart:'重启'};
+function svcBusy(on){['#h-restart','#h-stop','#h-start'].forEach(k=>{const b=$(k);if(b){b.disabled=on;b.style.opacity=on?.5:''}})}
+async function svc(a){if(a==='stop'&&!confirm('停止代理核心？\n停止后经旁路由的设备将无法上网（看门狗不会自动拉起，需手动启动）。'))return;
+  if(a==='restart'&&!confirm('重启代理核心？现有连接会断开。'))return;
+  if(!SVC_TXT[a]){try{toast('执行中…');const j=await api('/api/service','POST',{action:a});toast(j.message||'完成');setTimeout(loadState,1500)}catch(e){toast(e.message)}return}
+  svcBusy(true);
+  try{const j=await api('/api/service','POST',{action:a});toast(j.message||'执行中…');
+    let s=j;for(let i=0;i<300&&s.busy;i++){await new Promise(r=>setTimeout(r,400));try{s=await api('/api/service')}catch(e){}}
+    toast(s.busy?SVC_TXT[a]+'仍在进行，请稍后刷新':(s.message||'完成'))}
+  catch(e){toast(e.message)}
+  finally{svcBusy(false);STATE_VER=-1;try{await loadState()}catch(e){}}}
 async function flushFake(){try{await core('/cache/fakeip/flush','POST');toast('已清空')}catch(e){toast(e.message)}}
 function saveTg(){saveSettings({tg_token:$('#tg-token').value.trim(),tg_chat:$('#tg-chat').value.trim()},'Telegram 设置已保存').catch(()=>{})}
 async function tgTest(){try{toast('发送中…');const j=await api('/api/tg/test','POST',{tg_token:$('#tg-token').value.trim(),tg_chat:$('#tg-chat').value.trim()});toast(j.message)}catch(e){toast(e.message)}}

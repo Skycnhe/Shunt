@@ -428,7 +428,7 @@ def _rc_once(cmd, timeout):
     with tempfile.TemporaryFile() as f:
         try:
             # 输出写临时文件而不是管道：核心 / start_post 拉起的子进程会继承管道，用 capture_output 时
-            # 调用方要一直等到这些子进程退出（或超时），按钮看起来就像「没反应」
+            # 调用方要一直等到这些子进程退出（或 90 秒超时），按钮看起来就像「没反应」
             pr = subprocess.Popen(cmd, shell=True, stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.STDOUT)
             try:
                 code = pr.wait(timeout)
@@ -452,10 +452,9 @@ def rc_run(act, timeout=90):
     return code, out
 
 
-def svc_restart(timeout=30, why="面板重启核心"):
+def svc_restart(timeout=90, why="面板重启核心"):
     """重启核心服务。重启及启动后的加载期（大规则集、Fake-IP 缓存）内看门狗暂停判定，
-    否则启动慢一点就会被看门狗当成「无响应」再重启一次，形成连环重启。
-    v8.3：rc-service 超时从 90 秒缩到 30 秒（正常应在 10 秒内返回），超时由调用方提示用户 SSH 检查。"""
+    否则启动慢一点就会被看门狗当成「无响应」再重启一次，形成连环重启"""
     wd_hold(timeout + 60, why)
     try:
         return rc_run("restart", timeout=timeout)

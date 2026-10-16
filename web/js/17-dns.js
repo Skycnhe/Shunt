@@ -95,16 +95,17 @@ async function loadLogInfo(){try{const j=await api('/api/logs/info');$('#log-siz
 async function cleanLogs(){try{const j=await api('/api/logs/clean','POST');toast(j.message);loadLogInfo()}catch(e){toast(e.message)}}
 async function saveDevNames(){const d={};for(const l of lines($('#dev-names').value)){const i=l.search(/[=\s]/);if(i<0)continue;const k=l.slice(0,i).trim(),v=l.slice(i).replace(/^[\s=]+/,'').trim();if(k&&v)d[k]=v}
   try{const j=await api('/api/devices','PUT',{devices:d});toast(j.message);await loadDevs();$('#dev-names').value=Object.entries(STATE.devices||{}).map(([k,v])=>k+' = '+v).join('\n')}catch(e){toast(e.message)}}
-async function svc(a){if(a==='stop'&&!confirm('停止 mihomo 核心？\n停止后经旁路由的设备将无法上网（看门狗不会自动拉起，需手动启动）。'))return;
-  if(a==='restart'&&!confirm('重启 mihomo 核心？现有连接会断开。'))return;
-  const ctl=new AbortController(),to=setTimeout(()=>ctl.abort(),30000);
-  try{const j=await api('/api/service','POST',{action:a},ctl.signal);clearTimeout(to);
-    if(a==='reload'||a==='geo'||a==='upgrade'){toast(j.message||'完成');setTimeout(loadState,1500);return}
-    toast('已接受，后台执行中…');setSvcBusy(true);
-    const poll=setInterval(async()=>{try{const st=await api('/api/service/status');
-      if(!st.running){clearInterval(poll);setSvcBusy(false);toast(st.message||'完成');setTimeout(loadState,1500)}}catch(e){clearInterval(poll);setSvcBusy(false)}},2000);
-  }catch(e){clearTimeout(to);setSvcBusy(false);toast(e.name==='AbortError'?'后端无响应（30 秒），请检查面板日志或 SSH':e.message)}}
-function setSvcBusy(b){for(const id of ['h-restart','h-start','h-stop']){const el=document.getElementById(id);if(el){el.disabled=b;el.classList.toggle('busy',b)}}}
+const SVC_TXT={start:'启动',stop:'停止',restart:'重启'};
+function svcBusy(on){['#h-restart','#h-stop','#h-start'].forEach(k=>{const b=$(k);if(b){b.disabled=on;b.style.opacity=on?.5:''}})}
+async function svc(a){if(a==='stop'&&!confirm('停止代理核心？\n停止后经旁路由的设备将无法上网（看门狗不会自动拉起，需手动启动）。'))return;
+  if(a==='restart'&&!confirm('重启代理核心？现有连接会断开。'))return;
+  if(!SVC_TXT[a]){try{toast('执行中…');const j=await api('/api/service','POST',{action:a});toast(j.message||'完成');setTimeout(loadState,1500)}catch(e){toast(e.message)}return}
+  svcBusy(true);
+  try{const j=await api('/api/service','POST',{action:a});toast(j.message||'执行中…');
+    let s=j;for(let i=0;i<300&&s.busy;i++){await new Promise(r=>setTimeout(r,400));try{s=await api('/api/service')}catch(e){}}
+    toast(s.busy?SVC_TXT[a]+'仍在进行，请稍后刷新':(s.message||'完成'))}
+  catch(e){toast(e.message)}
+  finally{svcBusy(false);STATE_VER=-1;try{await loadState()}catch(e){}}}
 async function flushFake(){try{await core('/cache/fakeip/flush','POST');toast('已清空')}catch(e){toast(e.message)}}
 function saveTg(){saveSettings({tg_token:$('#tg-token').value.trim(),tg_chat:$('#tg-chat').value.trim()},'Telegram 设置已保存').catch(()=>{})}
 async function tgTest(){try{toast('发送中…');const j=await api('/api/tg/test','POST',{tg_token:$('#tg-token').value.trim(),tg_chat:$('#tg-chat').value.trim()});toast(j.message)}catch(e){toast(e.message)}}
