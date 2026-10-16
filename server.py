@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "8.3"
+PANEL_VERSION = "8.3.2"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -250,7 +250,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "8.3"
+PANEL_VERSION = "8.3.2"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -4807,13 +4807,46 @@ def sh(cmd, timeout=60):
         return 1, str(e)
 
 
+_ANSI = re.compile(r"\\x1b\\[[0-9;]*m")
+_RC_BUSY = re.compile(r"already (?:starting|stopping)|is (?:starting|stopping)|has started, but is inactive", re.I)
+
+
+def _rc_once(cmd, timeout):
+    import tempfile
+    with tempfile.TemporaryFile() as f:
+        try:
+            # 输出写临时文件而不是管道：核心 / start_post 拉起的子进程会继承管道，用 capture_output 时
+            # 调用方要一直等到这些子进程退出（或超时），按钮看起来就像「没反应」
+            pr = subprocess.Popen(cmd, shell=True, stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.STDOUT)
+            try:
+                code = pr.wait(timeout)
+            except subprocess.TimeoutExpired:
+                pr.kill()
+                code = 124
+        except OSError as e:
+            return 1, str(e)
+        f.seek(0)
+        out = _ANSI.sub("", f.read(64 << 10).decode("utf-8", "ignore")).strip()
+    return code, (out + ("\\n（命令超时）" if code == 124 else "")).strip()
+
+
+def rc_run(act, timeout=90):
+    """rc-service <核心> start|stop|restart。OpenRC 卡在 starting / stopping 时先 zap 再重试一次"""
+    code, out = _rc_once(f"{SVC} {act}", timeout)
+    if code != 0 and _RC_BUSY.search(out):
+        _rc_once(f"{SVC} zap", 15)
+        code, out = _rc_once(f"{SVC} {act}", timeout)
+        out = "（服务状态卡住，已自动 zap 后重试）\\n" + out
+    return code, out
+
+
 def svc_restart(timeout=30, why="面板重启核心"):
     """重启核心服务。重启及启动后的加载期（大规则集、Fake-IP 缓存）内看门狗暂停判定，
     否则启动慢一点就会被看门狗当成「无响应」再重启一次，形成连环重启。
     v8.3：rc-service 超时从 90 秒缩到 30 秒（正常应在 10 秒内返回），超时由调用方提示用户 SSH 检查。"""
     wd_hold(timeout + 60, why)
     try:
-        return sh(SVC + " restart", timeout=timeout)
+        return rc_run("restart", timeout=timeout)
     finally:
         wd_hold(60, why, reset=True)  # 命令返回后只再给 60 秒加载时间
         try:
@@ -7840,7 +7873,7 @@ from .core_update import (
     CORE_CHANNELS, CORE_UPD, LGBM_FILE, bin_version, core_check, core_job_start, core_rollback_job, core_upd_status, core_update_job,
     lgbm_fetch, lgbm_fetch_reload
 )
-from .sysopt import delay_test, favicon, nft_ok, opt_apply, opt_status, sh, speed_test, svc_restart
+from .sysopt import delay_test, favicon, nft_ok, opt_apply, opt_status, rc_run, sh, speed_test, svc_restart
 from .notify import WD, core_proc_alive, tg_send
 from .latency import BG_FILE, RETEST, bg_fetch, bg_meta, bg_meta_save, bg_save, bg_type, fix_global, proxies_merged, retest_soon
 from .stats import arp_table
@@ -7989,10 +8022,12 @@ def ad_today():
 
 def _do_service(act):
     """后台执行重启/停止/启动，返回 (ok, msg)。原 api_service_post 的同步逻辑搬到这里。
-    stop 保留 v7.9.5 的 pid 二次确认（rc-service 返回 0 不代表进程真退了）。"""
+    stop 保留 v7.9.5 的 pid 二次确认（rc-service 返回 0 不代表进程真退了）。
+    v8.3.1：合并用户补丁的 6 项修复——看门狗标志恢复、启动 pid 确认、重启走 svc_restart、清 _SVC_CACHE。"""
     if act == "stop":
-        code, out = sh(SVC + " stop", timeout=30)
-        if "timed out" in out:
+        code, out = rc_run("stop", timeout=30)
+        if code == 124:
+            WD["manual_stop"] = False  # 没停下来：交还给看门狗，避免核心卡死后再也没人拉起
             return False, "核心停止超时（30 秒），请 SSH 检查 `rc-service shunt-core status`"
         # 验证内核真的停了：rc-service 返回 0 不代表进程已退出
         # （stop 脚本可能只发了信号），用 pid 文件二次确认
@@ -8004,15 +8039,31 @@ def _do_service(act):
                 if core_proc_alive():
                     log_err("api/service stop",
                             Exception("rc-service 返回 0 但核心进程仍在：%s" % out[-200:]))
+                    WD["manual_stop"] = False  # 没停下来：交还给看门狗
                     return False, "停止命令已执行，但核心进程仍在运行，请 SSH 手动检查"
         else:
             log_err("api/service stop", Exception("rc-service stop 失败：%s" % out[-200:]))
-    else:  # 启动 / 重启：同样让看门狗等内核加载完
-        wd_hold(150, "手动" + act)
-        code, out = sh(SVC + " " + act, timeout=30)
-        wd_hold(60, "手动" + act, reset=True)
-        if "timed out" in out:
-            return False, "核心%s超时（30 秒），请 SSH 检查 `rc-service shunt-core status`" % ("重启" if act == "restart" else "启动")
+            WD["manual_stop"] = core_proc_alive() is False  # 进程确实不在了就当已停止，否则恢复看门狗
+            return False, out[-500:] if out else "停止失败"
+    elif act == "restart":
+        # 与看门狗、切换内核同一入口：含看门狗暂停、IP 信息重查（svc_restart）
+        code, out = svc_restart(timeout=30, why="手动重启")
+        if code == 124:
+            return False, "核心重启超时（30 秒），请 SSH 检查 `rc-service shunt-core status`"
+        if code == 0:
+            time.sleep(2)
+            if not core_proc_alive():  # 后台启动的服务 rc 总是返回 0，进程秒退要靠 pid 再确认
+                return False, "核心启动后立即退出，请查看核心日志"
+    else:  # start
+        wd_hold(150, "手动启动")
+        code, out = rc_run("start", timeout=30)
+        wd_hold(60, "手动启动", reset=True)
+        if code == 124:
+            return False, "核心启动超时（30 秒），请 SSH 检查 `rc-service shunt-core status`"
+        if code == 0:
+            time.sleep(2)
+            if not core_proc_alive():  # 后台启动的服务 rc 总是返回 0，进程秒退要靠 pid 再确认
+                return False, "核心启动后立即退出，请查看核心日志"
     if act != "stop":
         retest_soon()
     return code == 0, out
@@ -8025,6 +8076,8 @@ def _service_job(act):
     except Exception as e:
         log_err("api/service " + act, e)
         ok, msg = False, str(e)
+    finally:
+        _SVC_CACHE.pop("v", None)  # 状态缓存作废，前端马上拿到真实运行状态
     SERVICE_STATE.update({"running": False, "ok": ok, "message": msg, "t": int(time.time())})
 
 

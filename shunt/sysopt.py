@@ -419,13 +419,46 @@ def sh(cmd, timeout=60):
         return 1, str(e)
 
 
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+_RC_BUSY = re.compile(r"already (?:starting|stopping)|is (?:starting|stopping)|has started, but is inactive", re.I)
+
+
+def _rc_once(cmd, timeout):
+    import tempfile
+    with tempfile.TemporaryFile() as f:
+        try:
+            # 输出写临时文件而不是管道：核心 / start_post 拉起的子进程会继承管道，用 capture_output 时
+            # 调用方要一直等到这些子进程退出（或超时），按钮看起来就像「没反应」
+            pr = subprocess.Popen(cmd, shell=True, stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.STDOUT)
+            try:
+                code = pr.wait(timeout)
+            except subprocess.TimeoutExpired:
+                pr.kill()
+                code = 124
+        except OSError as e:
+            return 1, str(e)
+        f.seek(0)
+        out = _ANSI.sub("", f.read(64 << 10).decode("utf-8", "ignore")).strip()
+    return code, (out + ("\n（命令超时）" if code == 124 else "")).strip()
+
+
+def rc_run(act, timeout=90):
+    """rc-service <核心> start|stop|restart。OpenRC 卡在 starting / stopping 时先 zap 再重试一次"""
+    code, out = _rc_once(f"{SVC} {act}", timeout)
+    if code != 0 and _RC_BUSY.search(out):
+        _rc_once(f"{SVC} zap", 15)
+        code, out = _rc_once(f"{SVC} {act}", timeout)
+        out = "（服务状态卡住，已自动 zap 后重试）\n" + out
+    return code, out
+
+
 def svc_restart(timeout=30, why="面板重启核心"):
     """重启核心服务。重启及启动后的加载期（大规则集、Fake-IP 缓存）内看门狗暂停判定，
     否则启动慢一点就会被看门狗当成「无响应」再重启一次，形成连环重启。
     v8.3：rc-service 超时从 90 秒缩到 30 秒（正常应在 10 秒内返回），超时由调用方提示用户 SSH 检查。"""
     wd_hold(timeout + 60, why)
     try:
-        return sh(SVC + " restart", timeout=timeout)
+        return rc_run("restart", timeout=timeout)
     finally:
         wd_hold(60, why, reset=True)  # 命令返回后只再给 60 秒加载时间
         try:

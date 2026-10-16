@@ -1,5 +1,11 @@
 # 更新记录与详细说明
 
+## v8.3.2
+- 服务控制根因修复：`rc-service` 输出改走临时文件而非管道（OpenRC 子进程继承管道导致 90 秒卡死）
+- 新增 `sysopt.rc_run()`：超时返回 124，`already starting/stopping` 时自动 zap 重试
+- `svc_restart()` 及启停操作改用 `rc_run()`
+## v8.3.1
+- 合并启停按钮补丁（v8.2.2 问题修复）：停止失败时恢复看门狗标志；启动/重启加 pid 确认（防谎报成功）；重启改走 `svc_restart()`（含 IP 重查）；操作后清空状态缓存；按钮文案「mihomo」→「核心」
 ## v8.3
 - 重启/停止/启动按钮异步化：`/api/service` 立即返回，后台线程执行 `rc-service`，前端轮询 `/api/service/status` 显示进度（之前同步阻塞最长 95 秒，前端感知为"没有反应"）
 - 服务控制超时从 90 秒缩短到 30 秒，超时返回明确提示（请 SSH 检查 `rc-service shunt-core status`）

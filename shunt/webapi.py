@@ -26,7 +26,7 @@ from .core_update import (
     CORE_CHANNELS, CORE_UPD, LGBM_FILE, bin_version, core_check, core_job_start, core_rollback_job, core_upd_status, core_update_job,
     lgbm_fetch, lgbm_fetch_reload
 )
-from .sysopt import delay_test, favicon, nft_ok, opt_apply, opt_status, sh, speed_test, svc_restart
+from .sysopt import delay_test, favicon, nft_ok, opt_apply, opt_status, rc_run, sh, speed_test, svc_restart
 from .notify import WD, core_proc_alive, tg_send
 from .latency import BG_FILE, RETEST, bg_fetch, bg_meta, bg_meta_save, bg_save, bg_type, fix_global, proxies_merged, retest_soon
 from .stats import arp_table
@@ -175,10 +175,12 @@ def ad_today():
 
 def _do_service(act):
     """后台执行重启/停止/启动，返回 (ok, msg)。原 api_service_post 的同步逻辑搬到这里。
-    stop 保留 v7.9.5 的 pid 二次确认（rc-service 返回 0 不代表进程真退了）。"""
+    stop 保留 v7.9.5 的 pid 二次确认（rc-service 返回 0 不代表进程真退了）。
+    v8.3.1：合并用户补丁的 6 项修复——看门狗标志恢复、启动 pid 确认、重启走 svc_restart、清 _SVC_CACHE。"""
     if act == "stop":
-        code, out = sh(SVC + " stop", timeout=30)
-        if "timed out" in out:
+        code, out = rc_run("stop", timeout=30)
+        if code == 124:
+            WD["manual_stop"] = False  # 没停下来：交还给看门狗，避免核心卡死后再也没人拉起
             return False, "核心停止超时（30 秒），请 SSH 检查 `rc-service shunt-core status`"
         # 验证内核真的停了：rc-service 返回 0 不代表进程已退出
         # （stop 脚本可能只发了信号），用 pid 文件二次确认
@@ -190,15 +192,31 @@ def _do_service(act):
                 if core_proc_alive():
                     log_err("api/service stop",
                             Exception("rc-service 返回 0 但核心进程仍在：%s" % out[-200:]))
+                    WD["manual_stop"] = False  # 没停下来：交还给看门狗
                     return False, "停止命令已执行，但核心进程仍在运行，请 SSH 手动检查"
         else:
             log_err("api/service stop", Exception("rc-service stop 失败：%s" % out[-200:]))
-    else:  # 启动 / 重启：同样让看门狗等内核加载完
-        wd_hold(150, "手动" + act)
-        code, out = sh(SVC + " " + act, timeout=30)
-        wd_hold(60, "手动" + act, reset=True)
-        if "timed out" in out:
-            return False, "核心%s超时（30 秒），请 SSH 检查 `rc-service shunt-core status`" % ("重启" if act == "restart" else "启动")
+            WD["manual_stop"] = core_proc_alive() is False  # 进程确实不在了就当已停止，否则恢复看门狗
+            return False, out[-500:] if out else "停止失败"
+    elif act == "restart":
+        # 与看门狗、切换内核同一入口：含看门狗暂停、IP 信息重查（svc_restart）
+        code, out = svc_restart(timeout=30, why="手动重启")
+        if code == 124:
+            return False, "核心重启超时（30 秒），请 SSH 检查 `rc-service shunt-core status`"
+        if code == 0:
+            time.sleep(2)
+            if not core_proc_alive():  # 后台启动的服务 rc 总是返回 0，进程秒退要靠 pid 再确认
+                return False, "核心启动后立即退出，请查看核心日志"
+    else:  # start
+        wd_hold(150, "手动启动")
+        code, out = rc_run("start", timeout=30)
+        wd_hold(60, "手动启动", reset=True)
+        if code == 124:
+            return False, "核心启动超时（30 秒），请 SSH 检查 `rc-service shunt-core status`"
+        if code == 0:
+            time.sleep(2)
+            if not core_proc_alive():  # 后台启动的服务 rc 总是返回 0，进程秒退要靠 pid 再确认
+                return False, "核心启动后立即退出，请查看核心日志"
     if act != "stop":
         retest_soon()
     return code == 0, out
@@ -211,6 +229,8 @@ def _service_job(act):
     except Exception as e:
         log_err("api/service " + act, e)
         ok, msg = False, str(e)
+    finally:
+        _SVC_CACHE.pop("v", None)  # 状态缓存作废，前端马上拿到真实运行状态
     SERVICE_STATE.update({"running": False, "ok": ok, "message": msg, "t": int(time.time())})
 
 

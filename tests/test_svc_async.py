@@ -16,7 +16,7 @@ W = sys.modules["shunt.webapi"]
 
 class TestDoService(unittest.TestCase):
     def test_stop_timeout_message(self):
-        with mock.patch.object(W, "sh", return_value=(1, "Command 'rc-service shunt-core stop' timed out after 30 seconds")), \
+        with mock.patch.object(W, "rc_run", return_value=(124, "（命令超时）")), \
              mock.patch("time.sleep"):
             ok, msg = W._do_service("stop")
         self.assertFalse(ok)
@@ -24,7 +24,7 @@ class TestDoService(unittest.TestCase):
         self.assertIn("rc-service shunt-core status", msg)
 
     def test_stop_success_proc_gone(self):
-        with mock.patch.object(W, "sh", return_value=(0, "ok")), \
+        with mock.patch.object(W, "rc_run", return_value=(0, "ok")), \
              mock.patch.object(W, "core_proc_alive", return_value=False), \
              mock.patch("time.sleep"):
             ok, msg = W._do_service("stop")
@@ -33,7 +33,7 @@ class TestDoService(unittest.TestCase):
 
     def test_stop_fail_proc_alive(self):
         # v7.9.5 的 pid 二次确认：rc-service 返回 0 但进程仍在 → 真实失败
-        with mock.patch.object(W, "sh", return_value=(0, "ok")), \
+        with mock.patch.object(W, "rc_run", return_value=(0, "ok")), \
              mock.patch.object(W, "core_proc_alive", return_value=True), \
              mock.patch("time.sleep"), \
              mock.patch.object(W, "log_err"):
@@ -42,15 +42,14 @@ class TestDoService(unittest.TestCase):
         self.assertIn("仍在运行", msg)
 
     def test_stop_rc_failure(self):
-        with mock.patch.object(W, "sh", return_value=(1, "service not found")), \
+        with mock.patch.object(W, "rc_run", return_value=(1, "service not found")), \
              mock.patch.object(W, "log_err"):
             ok, msg = W._do_service("stop")
         self.assertFalse(ok)
         self.assertEqual(msg, "service not found")
 
     def test_restart_timeout_message(self):
-        with mock.patch.object(W, "sh", return_value=(1, "timed out after 30 seconds")), \
-             mock.patch.object(W, "wd_hold"), \
+        with mock.patch.object(W, "svc_restart", return_value=(124, "（命令超时）")), \
              mock.patch.object(W, "retest_soon"):
             ok, msg = W._do_service("restart")
         self.assertFalse(ok)
@@ -58,17 +57,49 @@ class TestDoService(unittest.TestCase):
         self.assertIn("30 秒", msg)
 
     def test_restart_success_calls_retest(self):
-        with mock.patch.object(W, "sh", return_value=(0, "ok")), \
-             mock.patch.object(W, "wd_hold") as wh, \
+        # v8.3.1：restart 改走 svc_restart()（含看门狗暂停 + IP 重查），成功后 pid 确认进程还在
+        with mock.patch.object(W, "svc_restart", return_value=(0, "ok")), \
+             mock.patch.object(W, "core_proc_alive", return_value=True), \
+             mock.patch("time.sleep"), \
              mock.patch.object(W, "retest_soon") as rs:
             ok, msg = W._do_service("restart")
         self.assertTrue(ok)
         self.assertEqual(msg, "ok")
         rs.assert_called_once_with()
-        self.assertEqual(wh.call_count, 2)  # wd_hold(150) + wd_hold(60, reset=True)
+
+    def test_restart_immediate_exit(self):
+        # v8.3.1：重启后 pid 确认进程秒退 → 返回真实失败
+        with mock.patch.object(W, "svc_restart", return_value=(0, "ok")), \
+             mock.patch.object(W, "core_proc_alive", return_value=False), \
+             mock.patch("time.sleep"), \
+             mock.patch.object(W, "retest_soon"):
+            ok, msg = W._do_service("restart")
+        self.assertFalse(ok)
+        self.assertIn("立即退出", msg)
+
+    def test_start_immediate_exit(self):
+        # v8.3.1：启动后 pid 确认进程秒退 → 返回真实失败
+        with mock.patch.object(W, "rc_run", return_value=(0, "ok")), \
+             mock.patch.object(W, "wd_hold"), \
+             mock.patch.object(W, "core_proc_alive", return_value=False), \
+             mock.patch("time.sleep"), \
+             mock.patch.object(W, "retest_soon"):
+            ok, msg = W._do_service("start")
+        self.assertFalse(ok)
+        self.assertIn("立即退出", msg)
+
+    def test_stop_failure_restores_watchdog(self):
+        # v8.3.1：停止失败时恢复看门狗标志，避免永久失效
+        with mock.patch.object(W, "rc_run", return_value=(1, "rc failed")), \
+             mock.patch.object(W, "core_proc_alive", return_value=True), \
+             mock.patch.object(W, "log_err"):
+            W.WD["manual_stop"] = True  # 模拟请求线程已置位
+            ok, msg = W._do_service("stop")
+        self.assertFalse(ok)
+        self.assertFalse(W.WD["manual_stop"])  # 失败后交还给看门狗
 
     def test_start_uses_start_label(self):
-        with mock.patch.object(W, "sh", return_value=(1, "timed out")), \
+        with mock.patch.object(W, "rc_run", return_value=(124, "（命令超时）")), \
              mock.patch.object(W, "wd_hold"), \
              mock.patch.object(W, "retest_soon"):
             ok, msg = W._do_service("start")
