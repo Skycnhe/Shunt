@@ -13,6 +13,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 from .base import CORE_SVC
+from .notify import WD
 from .sysopt import sh
 
 WARP_DIR = "/etc/mihomo-panel/warp"
@@ -432,6 +433,7 @@ def connect():
     _ensure_lan_bypass()  # 保住局域网/面板访问，不让回包进隧道
     msg = "WARP 已连接"
     if get_mutex():
+        WD["manual_stop"] = True  # 告诉看门狗这是人为停止，不要自动重启
         c2, o2 = _stop_core()
         if c2 == 0:
             msg += "，内核已停止"

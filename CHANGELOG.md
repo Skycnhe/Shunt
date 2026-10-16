@@ -1,5 +1,9 @@
 # 更新记录与详细说明
 
+## v7.9.6 修复 WARP 互斥停内核后看门狗误重启
+- **Bug**：WARP 连接时互斥停内核（`warp.connect()` → `_stop_core()`）没设置 `WD["manual_stop"]`，看门狗以为内核崩溃自动重启 → WARP 和内核同时运行 → 路由冲突
+- **修复**：停内核前置 `WD["manual_stop"] = True`（`from .notify import WD`，notify 只依赖 base，无循环导入）；用户后续手动启动内核时 `core.py`/`sb_switch.py`/`schedule.py` 会自动把标志清回 False
+
 ## v7.9.5 修复停止按钮无效 + WARP 导致面板假死
 - **停止按钮**：`POST /api/service` 的 stop 动作现在停止后用 pid 文件二次确认核心进程真的退出了；若 rc-service 返回 0 但进程仍在，API 返回 500 真实失败（之前可能谎报成功），并写服务端日志
 - **WARP 面板假死**：`connect()` 在 `wg-quick up` 成功后自动加一条局域网直连路由（`ip route add <lan_subnet> dev <iface> metric 5`），`AllowedIPs=0.0.0.0/0` 接管默认路由后浏览器访问面板的回包不再进隧道；`disconnect()` 时删除该路由。加路由失败不阻断连接
