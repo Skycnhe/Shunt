@@ -50,7 +50,6 @@ MODULES = [
     "update_guard",
     "svcmigrate",
     "static",
-    "warp",
     "webapi",
     "cli",
 ]

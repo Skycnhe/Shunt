@@ -4,5 +4,5 @@ function placeNav(){const n=$('#nav');if(MQ.matches){if(n.parentNode!==document.
   else{if(n.parentNode===document.body)$('header').appendChild(n);n.classList.remove('bottom');document.body.classList.remove('hasbn')}}
 MQ.addEventListener?MQ.addEventListener('change',placeNav):MQ.addListener(placeNav);
 function go(t){if(TAB==='日志'&&t!=='日志')stopLive();TAB=t;nav();scrollTo({top:0});
-  ({节点:loadProxies,策略组:loadGroupsPage,订阅:loadSubs,规则:loadRules,DNS:loadDNSPage,广告拦截:loadAB,WARP:loadWarpPage,统计:loadStats,日志:openLogs,设置:renderSettings,概览:renderOverview,连接:loadDevs})[t]?.()}
+  ({节点:loadProxies,策略组:loadGroupsPage,订阅:loadSubs,规则:loadRules,DNS:loadDNSPage,广告拦截:loadAB,统计:loadStats,日志:openLogs,设置:renderSettings,概览:renderOverview,连接:loadDevs})[t]?.()}
 

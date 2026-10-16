@@ -1,6 +1,6 @@
 const $=s=>document.querySelector(s);
 let STATE={},TAB='概览',ACTIVE_RULES=[],timers=[],DEVS={},LIVE={},CONNS=[];
-const TABS=['概览','节点','策略组','订阅','规则','DNS','广告拦截','WARP','连接','统计','日志','设置'];
+const TABS=['概览','节点','策略组','订阅','规则','DNS','广告拦截','连接','统计','日志','设置'];
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=b=>{b=+b||0;const u=['B','KB','MB','GB','TB'];let i=0;while(b>=1024&&i<4){b/=1024;i++}return b.toFixed(i?(b<10?2:1):0)+' '+u[i]};
 const dcls=ms=>ms===undefined?'mut':ms<=0?'bad':ms<300?'ok':ms<800?'warn':'bad';

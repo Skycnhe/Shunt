@@ -49,7 +49,7 @@ async function api(path,method='GET',body){
   if(!r.ok)throw new Error(j.message||('HTTP '+r.status));return j}
 const core=(p,m,b)=>api('/api/core'+p,m,b);
 
-const NAV_ICO={"概览": "<path d=\"M3 13h8V3H3zM13 21h8V11h-8zM3 21h8v-6H3zM13 3v6h8V3z\"/>", "节点": "<circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M3 12h18M12 3c2.8 3.2 2.8 14.8 0 18M12 3c-2.8 3.2-2.8 14.8 0 18\"/>", "连接": "<path d=\"M7 7h11l-3-3M17 17H6l3 3\"/>", "日志": "<path d=\"M6 3h9l4 4v14H6z\"/><path d=\"M9 11h7M9 15h7\"/>", "更多": "<circle cx=\"5\" cy=\"12\" r=\"1.6\"/><circle cx=\"12\" cy=\"12\" r=\"1.6\"/><circle cx=\"19\" cy=\"12\" r=\"1.6\"/>", "WARP": "<path d=\"M13 2L3 14h7l-1 8 10-12h-7l1-8z\"/>"};
+const NAV_ICO={"概览": "<path d=\"M3 13h8V3H3zM13 21h8V11h-8zM3 21h8v-6H3zM13 3v6h8V3z\"/>", "节点": "<circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M3 12h18M12 3c2.8 3.2 2.8 14.8 0 18M12 3c-2.8 3.2-2.8 14.8 0 18\"/>", "连接": "<path d=\"M7 7h11l-3-3M17 17H6l3 3\"/>", "日志": "<path d=\"M6 3h9l4 4v14H6z\"/><path d=\"M9 11h7M9 15h7\"/>", "更多": "<circle cx=\"5\" cy=\"12\" r=\"1.6\"/><circle cx=\"12\" cy=\"12\" r=\"1.6\"/><circle cx=\"19\" cy=\"12\" r=\"1.6\"/>"};
 const PRIMARY=['概览','节点','连接','日志'];
 const svgI=t=>`<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${NAV_ICO[t]||''}</svg>`;
 function nav(){const np=!PRIMARY.includes(TAB);

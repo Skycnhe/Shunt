@@ -1,46 +1,7 @@
 # 更新记录与详细说明
 
-## v7.9.8 WARP 连接前清理残留接口
-- **修复**：`connect()` 在 `wg-quick up` 之前先 `ip link delete` 删掉可能残留的同名接口，解决异常断开后残留接口导致 `wg-quick: 'warp-sanitized' already exists` 报错（残留时 `is_connected()` 查 `wg show wgcf` 无输出，检测不到）
-
-## v7.9.7 WARP 停止按钮可靠化 + 状态显示强化
-- **停止更可靠**：`disconnect()` 改为三级兜底——① `ip link delete` 直接删接口（最可靠，放第一位）、② `wg-quick down <接口名>`、③ `wg-quick down /tmp/warp-sanitized.conf`（文件存在时）。之前只用 `wg-quick down` 会因找不到配置文件（实际在 /tmp 不在 /etc/wireguard）而失败，用户被迫手动删接口
-- **文案统一**：按钮"断开"改为"停止"，与内核的停止按钮一致；状态标签改为"● 运行中"/"○ 已停止"
-
-## v7.9.6 修复 WARP 互斥停内核后看门狗误重启
-- **Bug**：WARP 连接时互斥停内核（`warp.connect()` → `_stop_core()`）没设置 `WD["manual_stop"]`，看门狗以为内核崩溃自动重启 → WARP 和内核同时运行 → 路由冲突
-- **修复**：停内核前置 `WD["manual_stop"] = True`（`from .notify import WD`，notify 只依赖 base，无循环导入）；用户后续手动启动内核时 `core.py`/`sb_switch.py`/`schedule.py` 会自动把标志清回 False
-
-## v7.9.5 修复停止按钮无效 + WARP 导致面板假死
-- **停止按钮**：`POST /api/service` 的 stop 动作现在停止后用 pid 文件二次确认核心进程真的退出了；若 rc-service 返回 0 但进程仍在，API 返回 500 真实失败（之前可能谎报成功），并写服务端日志
-- **WARP 面板假死**：`connect()` 在 `wg-quick up` 成功后自动加一条局域网直连路由（`ip route add <lan_subnet> dev <iface> metric 5`），`AllowedIPs=0.0.0.0/0` 接管默认路由后浏览器访问面板的回包不再进隧道；`disconnect()` 时删除该路由。加路由失败不阻断连接
-
-## v7.9.4 WARP 优选 IP 增加 Cloudflare 全套端口
-- 优选 IP 测试端口从 4 个扩展到 17 个：WARP 组（2408/500/1701/4500）+ HTTPS 组（443/2053/2083/2087/2096/8443）+ HTTP 组（80/8080/8880/2052/2082/2086/2095）
-- 端口选择区按三组显示；默认只勾选 2408（WARP 默认端口），其他按需勾选，避免一次测太多
-- 测试逻辑不变（TCP connect，IP × 端口组合）；端口全选时约 400+ 组合、需 1-2 分钟，页面有耗时提示
-
-## v7.9.3 顶栏增加代理/直连模式徽标
-- 顶栏内核重启/停止按钮旁新增模式徽标：内核运行中显示绿色「● 代理」，已停止显示灰色「● 直连」
-- 徽标跟随现有状态轮询自动刷新（`renderCore`），WARP/内核切换时一眼看出当前流量模式
-
-## v7.9.2 WARP 页面增加 CF 优选 IP
-- 新增「CF 优选 IP」卡片：对候选池 IP × 端口（2408/500/1701/4500，可多选）测 TCP 延迟（每个组合 3 次取平均），按延迟排序展示
-- 候选池 = 内置 24 个 Cloudflare WARP 入口 IP（162.159.192/193/195/204.0/24、188.114.96-99.0/24）+ 用户自定义 IP；WARP 入口 IP 均为 anycast，不再按地区分组
-- 新增「自定义 IP」卡片：每行一个 IP，无效行自动跳过并提示，保存后加入优选候选池
-- 测速时附带一条当前网络到 Cloudflare 的参考下载速度（官方 speed.cloudflare.com 测速端点，供参考，非 per-IP 速度）
-- 每行结果有点「使用」按钮，自动把该 IP+端口填入 WireGuard 配置的 Endpoint，原配置自动备份；连接中应用需断开重连生效
-
-## v7.9.1 修复 WARP 连接失败（resolvconf）
-- 原因：wgcf 生成的配置里带 `DNS = 1.1.1.1`，`wg-quick up` 会调用 resolvconf 改系统 DNS，在 Alpine 上报 `signature mismatch` 导致连接回滚；而且 WARP 的 DNS 会跟面板自己的 DNS（1053 端口）冲突，本来就不该让它碰
-- 现在 `connect()` 在执行 `wg-quick up` 之前先消毒配置文件：去掉 `DNS = ...` 行，用临时文件启动；原文件不动
-- 断开时顺手删除临时文件
-
-## v7.9.0 Cloudflare WARP 代理
-- 新增「WARP」标签页：一键连接/断开 Cloudflare 免费 VPN（WireGuard 协议），替代之前的 OpenVPN 方案
-- 依赖：`apk add wireguard-tools` + wgcf（https://github.com/ViRb3/wgcf/releases）；面板提供"初始化 WARP"按钮自动注册并生成配置
-- WARP 与内核双向互斥（默认开）：WARP 连接时自动停止内核，内核启动时自动断开 WARP；断开 WARP 后内核需手动启动
-- 状态显示：wireguard-tools/wgcf 安装状态、WARP 连接状态、连接后出口 IP、内核运行状态
+## v7.9.9 移除 WARP 功能
+- **移除**：应用户要求彻底移除 Cloudflare WARP 功能——删除 `shunt/warp.py`、`web/js/27-warp.js`、WARP 标签页（含导航入口）、全部 `/api/warp/*` 接口（status/setup/connect/disconnect/mutex/config/preferred/apply_ip/custom_ips）、WARP↔内核互斥逻辑；其他功能不变
 
 ## v7.8.0 代理出口归属地补全
 - 原因：归属地以前只直连 ip-api.com 查一次。路由器本机 DNS 指向内核时 ip-api.com 可能被解析成 Fake-IP 直连不通，或撞上 ip-api 免费版每分钟 45 次的限额，代理出口就只有 IP 没有归属地（本地公网的归属地来自 myip.ipip.net，所以不受影响）
