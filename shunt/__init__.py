@@ -11,6 +11,7 @@ import os
 # 加载顺序：模块顶层代码只用到排在前面的模块
 MODULES = [
     "base",
+    "wgcrypto",
     "errlog",
     "data",
     "links",
@@ -33,6 +34,7 @@ MODULES = [
     "core_update",
     "sysopt",
     "notify",
+    "warp",
     "latency",
     "stats",
     "unlock",

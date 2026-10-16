@@ -21,6 +21,7 @@ from .migrate import snapshot_selections, startup_migrate
 from .https import Server, gen_cert, https_ready
 from .update_guard import ROLLBACK_NOTE
 from .webapi import H
+from . import warp
 def tp_env():
     """供 tproxy.sh eval：绕过列表、IPv6 开关、本机 IPv6 网段（值均经过正则过滤）"""
     d = load()
@@ -108,7 +109,7 @@ def main():
     STATS = stats.STATS = Stats()
     AD_STATS = adblock.AD_STATS = AdStats()
     for target, args in ((STATS.loop, ()), (monitor_loop, ()), (AD_STATS.loop, ()), (AD_STATS.dns_loop, ()), (live_loop, ("/traffic",)),
-                         (live_loop, ("/memory",)), (log_loop, ()), (sched_loop, ()), (rdns_loop, ()), (startup_migrate, ())):
+                         (live_loop, ("/memory",)), (log_loop, ()), (sched_loop, ()), (rdns_loop, ()), (startup_migrate, ()), (warp.loop, ())):
         threading.Thread(target=target, args=args, daemon=True).start()
     try:
         opt_fix_ulimit()

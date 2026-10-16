@@ -3,7 +3,7 @@ import http.client, json, os, re, ssl, subprocess, threading, time, urllib.reque
 from collections import deque
 from urllib.parse import urlsplit
 
-from .base import MIHOMO_BIN, MIXED, PANEL_DIR, SMART_BIN, SVC, TESTS, UA, SafeRedirectHandler, dl_check, wd_hold
+from .base import MIHOMO_BIN, MIXED, PANEL_DIR, SMART_BIN, SVC, TESTS, UA, WARP_DIR, SafeRedirectHandler, dl_check, wd_hold
 from .data import load, update
 PROC_SYS = os.environ.get("PANEL_PROC_SYS", "/proc/sys")
 SYS_ROOT = os.environ.get("PANEL_SYS_ROOT", "/sys")
@@ -423,6 +423,7 @@ _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _RC_BUSY = re.compile(r"already (?:starting|stopping)|is (?:starting|stopping)|has started, but is inactive", re.I)
 
 
+PRE_START = []  # 核心启动 / 重启前调用的钩子 fn(act)：warp.py 注册，让 WARP 实例先退出，避免两者抢 7893 / 1053 端口
 SVC_OP = threading.RLock()  # 核心服务控制（启动 / 停止 / 重启）全局互斥：面板按钮、看门狗、定时任务、切换 / 更新内核共用，避免两个 rc-service 并发互相打断
 
 
@@ -460,6 +461,8 @@ def core_procs():
         if os.path.realpath(exe) not in want and exe not in want:
             continue
         if any(a.decode("utf-8", "ignore") in _CHECK_ARGS for a in args[1:]):
+            continue
+        if any(WARP_DIR.encode() in a for a in args[1:]):  # WARP 实例（warp.py 用同一个程序另起的进程），不是核心
             continue
         out.append(int(n))
     return out
@@ -528,6 +531,12 @@ def rc_run(act, timeout=90):
     """rc-service <核心> start|stop|restart。OpenRC 卡在 starting / stopping 时先 zap 再重试一次；
     超时（124）时先 zap，避免 OpenRC 一直停在 starting / stopping，下次操作直接报 already stopping"""
     with SVC_OP:
+        if act in ("start", "restart"):
+            for fn in PRE_START:
+                try:
+                    fn(act)
+                except Exception as e:
+                    print("pre-start hook", e, flush=True)
         code, out = _rc_once(f"{SVC} {act}", timeout)
         if code != 0 and code != 124 and _RC_BUSY.search(out):
             # zap 只清 OpenRC 的状态，不碰进程：先把核心进程结束掉，否则旧核心变成没人管的孤儿，

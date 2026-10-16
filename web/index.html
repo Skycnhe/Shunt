@@ -299,6 +299,40 @@
       <pre id="livelog"></pre>
       <div id="filelog" class="hide"><div class="row" style="margin-bottom:10px"><span class="sp mut">核心日志文件最近 300 行</span><button class="btn g" onclick="loadLogs()">刷新</button></div><pre id="logs"></pre></div></div>
   </section>
+  <!-- WARP -->
+  <section data-tab="WARP">
+    <div class="card"><div class="row"><h3 class="sp" style="margin:0">WARP 透明代理</h3>
+        <span class="pill"><i class="dot" id="w-dot"></i><span id="w-run">-</span></span>
+        <button class="btn sm" id="w-start" onclick="warpAct('start')">启动</button>
+        <button class="btn g sm hide" id="w-restart" onclick="warpAct('restart')">重启</button>
+        <button class="btn r sm hide" id="w-stop" onclick="warpAct('stop')">停止</button></div>
+      <div class="mut small" style="margin-top:4px">WARP 与 mihomo / sing-box 核心二选一接管局域网流量：启动 WARP 会先停止核心；停止 WARP 后局域网直连；在顶栏启动核心时 WARP 自动停止。</div>
+      <div class="opt mt"><div class="sp"><div class="t">代理核心（mihomo / sing-box）</div><div class="dsc" id="w-core-dsc">-</div></div><span id="w-core" class="tag">-</span></div>
+      <div class="opt"><div class="sp"><div class="t">当前 Endpoint</div><div class="dsc" id="w-addr">-</div></div><b id="w-ep">-</b></div>
+      <div class="opt"><div class="sp"><div class="t">运行程序</div><div class="dsc">用已安装的内核程序单独起一个 WARP 实例（优先 mihomo），本地端口 127.0.0.1:40000</div></div><span id="w-eng" class="tag">-</span></div>
+      <div class="opt"><div class="sp"><div class="t">出口检测</div><div class="dsc" id="w-trace">经 WARP 访问 Cloudflare，查看出口 IP 与地区</div></div><button class="btn g sm" onclick="warpTrace()">检测</button></div>
+      <div class="opt"><div class="sp"><div class="t">国内直连</div><div class="dsc" id="w-cn-dsc">国内域名 / IP 不走 WARP（使用主核心已下载的 geosite / geoip 数据）</div></div><label class="sw sm"><input type="checkbox" id="w-cn" onchange="warpCn(this.checked)"><span></span></label></div>
+    </div>
+    <div class="card"><div class="row"><h3 class="sp" style="margin:0">优选 IP</h3><span id="w-scan-st" class="mut small"></span>
+        <button class="btn g sm" onclick="warpSpeedTop()">测速前 5 个</button><button class="btn sm" id="w-scan-btn" onclick="warpScan()">开始测试</button></div>
+      <div class="mut small" style="margin:4px 0 8px">用当前账户密钥向候选 IP 发 WireGuard 握手包测延迟和丢包；网速经该 IP 下载 Cloudflare 测速文件（每个约 10 秒）。点「使用」自动改写配置文件里的 Endpoint，WARP 在运行时立即重启生效。</div>
+      <div class="g2" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px">
+        <div><div class="lbl" style="margin-top:0">IP 段（每行一个）</div><textarea id="w-ranges" rows="5"></textarea></div>
+        <div><div class="lbl" style="margin-top:0">端口（逗号分隔）</div><input id="w-ports" style="width:100%">
+          <div class="row mt" style="gap:6px;flex-wrap:wrap"><button class="btn g sm" onclick="warpPorts('common')">常用端口</button><button class="btn g sm" onclick="warpPorts('all')">全部 54 个端口</button><button class="btn g sm" onclick="warpPorts('2408')">只测 2408</button></div>
+          <div class="row mt" style="gap:8px;flex-wrap:wrap"><label class="mut small">每段抽样 <input id="w-per" type="number" min="1" max="256" value="20" style="width:72px"></label>
+            <label class="mut small">轮数 <input id="w-rounds" type="number" min="1" max="5" value="3" style="width:60px"></label></div></div></div>
+      <div class="tw mt"><table><thead><tr><th>IP:端口</th><th>延迟</th><th>丢包</th><th>网速</th><th></th></tr></thead><tbody id="w-scan"></tbody></table></div></div>
+    <div class="card"><div class="row"><h3 class="sp" style="margin:0">配置文件</h3><span id="w-acc" class="tag"></span></div>
+      <div class="mut small" style="margin:4px 0 8px">标准 WireGuard 格式，wgcf / warp-go 导出的配置可直接粘贴；Reserved 写 3 个数字（如 12,34,56）。</div>
+      <textarea id="w-conf" rows="12" spellcheck="false" placeholder="[Interface]&#10;PrivateKey = ...&#10;Address = 172.16.0.2/32, 2606:4700:.../128&#10;MTU = 1280&#10;&#10;[Peer]&#10;PublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=&#10;AllowedIPs = 0.0.0.0/0, ::/0&#10;Endpoint = 162.159.192.1:2408&#10;Reserved = 0,0,0"></textarea>
+      <div class="mut small bad" id="w-conf-err"></div>
+      <div class="row mt" style="gap:8px;flex-wrap:wrap"><button class="btn g" onclick="warpReg()">注册新账户</button>
+        <input id="w-lic" placeholder="WARP+ 许可证（可选）" style="width:230px"><button class="btn g" onclick="warpLic()">应用许可证</button>
+        <span class="sp"></span><button class="btn g" onclick="warpSave(false)">保存</button><button class="btn" onclick="warpSave(true)">保存并重启</button></div></div>
+    <div class="card"><div class="row" style="margin-bottom:8px"><h3 class="sp" style="margin:0">WARP 日志</h3><button class="btn g sm" onclick="loadWarp()">刷新</button></div>
+      <div id="w-events" class="small"></div><pre id="w-log" class="mt" style="max-height:40vh"></pre></div>
+  </section>
   <!-- 设置 -->
   <section data-tab="设置">
     <div class="snav" id="snav"><button data-g="net">网络</button><button data-g="core">核心</button><button data-g="sec">通知与安全</button><button data-g="bak">备份与更新</button><button data-g="look">外观</button></div>
@@ -450,6 +484,7 @@
 //@include js/23-traffic.js
 //@include js/24-rulesets.js
 //@include js/25-settings2.js
+//@include js/26-warp.js
 //@include js/28-backup.js
 </script>
 </body>

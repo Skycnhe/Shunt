@@ -44,10 +44,11 @@ from .https import gen_cert, restart_self
 from .access import acl_cfg, host_name, host_ok, ip_is_lan
 from .update_guard import group_meta, rename_policy
 from .static import MANIFEST, STATIC_TYPES, static_file
+from . import warp
 ROUTES = {}  # (方法, 路径) → H 的处理函数；api() 先处理前缀 / 条件路由，再查这张表
 
 # GET 也要求 X-Shunt 头的机密接口：返回内容含订阅 URL / 节点密码 / TG token 等机密，局域网零凭证可拖库
-SENSITIVE_GET = ("/api/backup", "/api/backup/list", "/api/config", "/api/history")
+SENSITIVE_GET = ("/api/backup", "/api/backup/list", "/api/config", "/api/history", "/api/warp")  # /api/warp 含 WireGuard 私钥
 
 _SVC_CACHE = {}  # {"v": (t, st, code, version)}：rc-service 状态 + 核心 /version 缓存 10 秒
 _SVC_LOCK = threading.Lock()  # 启动 / 停止 / 重启同一时间只允许一个
@@ -805,13 +806,15 @@ class H(BaseHTTPRequestHandler):
                                "sched_events": list(SCHED["events"])[:20], "group_meta": gmeta,
                                "sniffer": d["sniffer"],
                                "gh_proxy": d["gh_proxy"], "panel_version": PANEL_VERSION, "core": active_core(d),
+                               "warp": warp.warp_running(),
                                "wd": {"status": WD["status"], "last_check": WD["last_check"],
                                       "events": list(WD["events"])[:20]}})
 
     @api_route("/api/ping", "GET")
     def api_ping_get(self, m, p, b, q):
         """轻量心跳：前端 15 秒轮询，version（data.json 每次 save 自增）变化时才拉全量 /api/state"""
-        return self.send(200, {"ok": True, "core": active_core(), "version": config_version(), "ad_today": ad_today()})
+        return self.send(200, {"ok": True, "core": active_core(), "version": config_version(), "ad_today": ad_today(),
+                               "warp": warp.warp_running()})
 
     @api_route("/api/groups", "GET")
     def api_groups_get(self, m, p, b, q):
@@ -1257,6 +1260,77 @@ class H(BaseHTTPRequestHandler):
         ok, msg = run_task(k)
         sched_event(f"手动执行 {TASK_NAMES[k]}：{'✓' if ok else '✗'} {msg}")
         return self.reply(ok, msg)
+
+    # ---------------- WARP ----------------
+    @api_route("/api/warp", "GET")
+    def api_warp_get(self, m, p, b, q):
+        return self.send(200, warp.status())
+
+    @api_route("/api/warp", "POST")
+    def api_warp_post(self, m, p, b, q):
+        act = b.get("action")
+        if act not in ("start", "stop", "restart"):
+            return self.send(400, {"message": "未知操作"})
+        if not warp.job(act):
+            return self.send(409, {"message": "WARP 正在执行上一个操作，请稍候", "job": warp.WARP})
+        _SVC_CACHE.pop("v", None)
+        return self.send(202, {"message": {"start": "正在启动 WARP…", "stop": "正在停止 WARP…", "restart": "正在重启 WARP…"}[act]})
+
+    @api_route("/api/warp/conf", "PUT")
+    def api_warp_conf_put(self, m, p, b, q):
+        text = str(b.get("conf") or "")
+        if len(text) > 8192:
+            return self.send(400, {"message": "配置太长"})
+        try:
+            warp.parse_conf(text)
+        except ValueError as e:
+            return self.send(400, {"message": "配置有误：" + str(e)})
+        warp.write_conf(text)
+        if warp.warp_running() and b.get("restart"):
+            ok, msg = warp.warp_restart()
+            return self.reply(ok, "配置已保存，" + msg)
+        return self.reply(True, "配置已保存" + ("，重启 WARP 后生效" if warp.warp_running() else ""))
+
+    @api_route("/api/warp/register", "POST")
+    def api_warp_register(self, m, p, b, q):
+        return self.reply(*warp.register())
+
+    @api_route("/api/warp/license", "POST")
+    def api_warp_license(self, m, p, b, q):
+        return self.reply(*warp.set_license(b.get("license")))
+
+    @api_route("/api/warp/opts", "PUT")
+    def api_warp_opts(self, m, p, b, q):
+        warp._save_state(cn_direct=bool(b.get("cn_direct")))
+        return self.reply(True, "已保存" + ("，重启 WARP 后生效" if warp.warp_running() else ""))
+
+    @api_route("/api/warp/trace", "GET")
+    def api_warp_trace(self, m, p, b, q):
+        return self.send(200, warp.trace())
+
+    @api_route("/api/warp/scan", "POST")
+    def api_warp_scan(self, m, p, b, q):
+        try:
+            ranges = [x.strip() for x in b.get("ranges") or [] if str(x).strip()]
+            ports = [int(x) for x in b.get("ports") or []]
+            ok, msg = warp.scan(ranges or None, ports or None, int(b.get("per") or 20), int(b.get("rounds") or 3))
+        except (TypeError, ValueError):
+            return self.send(400, {"message": "参数不合法"})
+        return self.send(202 if ok else 400, {"message": msg})
+
+    @api_route("/api/warp/speed", "POST")
+    def api_warp_speed(self, m, p, b, q):
+        try:
+            import ipaddress as _ip
+            _ip.ip_address(str(b.get("ip")))
+            port = int(b.get("port"))
+        except (TypeError, ValueError):
+            return self.send(400, {"message": "IP 或端口不合法"})
+        return self.send(200, warp.speed(str(b.get("ip")), port))
+
+    @api_route("/api/warp/use", "POST")
+    def api_warp_use(self, m, p, b, q):
+        return self.reply(*warp.use_endpoint(str(b.get("ip") or ""), b.get("port")))
 
     @api_route("/api/service", "GET")
     def api_service_get(self, m, p, b, q):

@@ -10,6 +10,7 @@ from .sb_common import SB_CONF, active_core
 from .sb_config import build_singbox, check_sb_config, sb_hot_reload, sb_log_error, sb_rule_need, sb_sync_assets, write_sb_config
 from .sysopt import svc_restart
 from .notify import core_alive, set_manual_stop
+from .warp import warp_running
 
 
 _CONN_SNAP = {}
@@ -59,6 +60,8 @@ def reload_core(prev=None):
                 save(prev)
             return False, "配置校验失败，已撤销本次修改：" + err
         os.replace(tmp, final)
+    if warp_running():  # WARP 正在接管流量、核心已停止：只保存配置，不把核心拉起来抢端口
+        return True, "配置已保存；WARP 运行中，核心已停止，启动核心后生效"
     set_manual_stop(False)
     retest_soon()
     if sb:
