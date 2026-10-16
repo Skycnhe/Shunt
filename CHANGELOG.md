@@ -1,5 +1,9 @@
 # 更新记录与详细说明
 
+## v7.9.7 WARP 停止按钮可靠化 + 状态显示强化
+- **停止更可靠**：`disconnect()` 改为三级兜底——① `ip link delete` 直接删接口（最可靠，放第一位）、② `wg-quick down <接口名>`、③ `wg-quick down /tmp/warp-sanitized.conf`（文件存在时）。之前只用 `wg-quick down` 会因找不到配置文件（实际在 /tmp 不在 /etc/wireguard）而失败，用户被迫手动删接口
+- **文案统一**：按钮"断开"改为"停止"，与内核的停止按钮一致；状态标签改为"● 运行中"/"○ 已停止"
+
 ## v7.9.6 修复 WARP 互斥停内核后看门狗误重启
 - **Bug**：WARP 连接时互斥停内核（`warp.connect()` → `_stop_core()`）没设置 `WD["manual_stop"]`，看门狗以为内核崩溃自动重启 → WARP 和内核同时运行 → 路由冲突
 - **修复**：停内核前置 `WD["manual_stop"] = True`（`from .notify import WD`，notify 只依赖 base，无循环导入）；用户后续手动启动内核时 `core.py`/`sb_switch.py`/`schedule.py` 会自动把标志清回 False

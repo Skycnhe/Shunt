@@ -444,20 +444,22 @@ def connect():
 
 
 def disconnect():
-    """断开 WARP（不动内核）。返回 (ok, message, st)。"""
+    """停止 WARP（不动内核）。三级兜底确保任何状态下都能停掉。返回 (ok, message, st)。"""
     if not is_connected():
         return True, "WARP 未连接", status()
-    code, out = sh("wg-quick down %s" % IFACE, timeout=30)
-    if code != 0:
-        # 兜底：直接删接口
-        sh("ip link del %s 2>/dev/null" % IFACE, timeout=10)
+    # 三级兜底：直接删接口最可靠，放第一位
+    sh("ip link delete %s 2>/dev/null" % IFACE, timeout=10)
+    if is_connected():
+        sh("wg-quick down %s 2>/dev/null" % IFACE, timeout=15)
+    if is_connected() and os.path.isfile(SANITIZED_CONF):
+        sh("wg-quick down %s 2>/dev/null" % SANITIZED_CONF, timeout=15)
     _remove_lan_bypass()  # 清掉我们加的局域网直连路由
-    st = status()
-    if st["connected"]:
-        return False, "WARP 断开失败：%s" % (out[-300:] if out else "未知错误"), st
     try:
         if os.path.isfile(SANITIZED_CONF):
             os.unlink(SANITIZED_CONF)
     except Exception:
         pass
-    return True, "WARP 已断开（内核未动，需手动启动）", st
+    st = status()
+    if st["connected"]:
+        return False, "WARP 停止失败，请 SSH 执行 ip link delete %s" % IFACE, st
+    return True, "WARP 已停止（内核未动，需手动启动）", st

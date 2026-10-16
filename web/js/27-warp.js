@@ -11,7 +11,7 @@ function renderWarp(){const st=WARP.status||{};
     (st.installed_wg?'<span class="ok">● wireguard-tools</span>':'<span class="bad">● 未装 wireguard-tools</span>')+' '+
     (st.installed_wgcf?'<span class="ok">● wgcf</span>':'<span class="bad">● 未装 wgcf</span>');
   $('#warp-inst-hint').classList.toggle('hide',!!(st.installed_wg&&st.installed_wgcf));
-  $('#warp-conn').innerHTML=st.connected?'<span class="ok">● 已连接'+(st.ip?`（${esc(st.ip)}）`:'')+'</span>':'<span class="mut">○ 未连接</span>';
+  $('#warp-conn').innerHTML=st.connected?'<span class="ok">● 运行中'+(st.ip?`（${esc(st.ip)}）`:'')+'</span>':'<span class="mut">○ 已停止</span>';
   $('#warp-disc').classList.toggle('hide',!st.connected);
   $('#warp-conn-btn').classList.toggle('hide',!!st.connected);
   $('#warp-setup-btn').classList.toggle('hide',!!st.registered||!st.installed_wgcf);
@@ -27,7 +27,7 @@ async function warpConnect(){if(!confirm('连接 Cloudflare WARP？\n（互斥�
   try{const j=await api('/api/warp/connect','POST');WARP.status=j;renderWarp();
     $('#warp-r').innerHTML=`<span class="${j.ok?'ok':'bad'}">${esc(j.message)}</span>`}
   catch(e){$('#warp-r').innerHTML=`<span class="bad">${esc(e.message)}</span>`}}
-async function warpDisconnect(){if(!confirm('断开 WARP？\n（内核不会自动重启，需手动启动）'))return;
+async function warpDisconnect(){if(!confirm('停止 WARP？\n（内核不会自动重启，需手动启动）'))return;
   try{const j=await api('/api/warp/disconnect','POST');WARP.status=j;renderWarp();
     $('#warp-r').innerHTML=`<span class="${j.ok?'ok':'mut'}">${esc(j.message)}</span>`}
   catch(e){toast(e.message)}}
