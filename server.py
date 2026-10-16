@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "8.3.3"
+PANEL_VERSION = "8.3.4"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -250,7 +250,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "8.3.3"
+PANEL_VERSION = "8.3.4"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -4391,7 +4391,7 @@ import http.client, json, os, re, ssl, subprocess, threading, time, urllib.reque
 from collections import deque
 from urllib.parse import urlsplit
 
-from .base import MIXED, PANEL_DIR, SVC, TESTS, UA, SafeRedirectHandler, dl_check, wd_hold
+from .base import MIHOMO_BIN, MIXED, PANEL_DIR, SMART_BIN, SVC, TESTS, UA, SafeRedirectHandler, dl_check, wd_hold
 from .data import load, update
 PROC_SYS = os.environ.get("PANEL_PROC_SYS", "/proc/sys")
 SYS_ROOT = os.environ.get("PANEL_SYS_ROOT", "/sys")
@@ -4814,6 +4814,78 @@ _RC_BUSY = re.compile(r"already (?:starting|stopping)|is (?:starting|stopping)|h
 SVC_OP = threading.RLock()  # 核心服务控制（启动 / 停止 / 重启）全局互斥：面板按钮、看门狗、定时任务、切换 / 更新内核共用，避免两个 rc-service 并发互相打断
 
 
+PROC = os.environ.get("PANEL_PROC", "/proc")
+CORE_BINS = None  # 核心可执行文件路径；None 时取 mihomo / mihomo Smart / sing-box 的默认路径（测试可覆盖）
+_CHECK_ARGS = {"-t", "check", "version", "-v", "format", "rule-set", "generate", "merge"}  # selftest / 校验 / 查版本，不是常驻核心
+
+
+def core_procs():
+    """所有正在运行的核心进程 pid（按可执行文件识别，不依赖 pid 文件）。
+    OpenRC 被 zap、服务迁移或手动在 SSH 里运行过的核心不在 pid 文件里：rc-service stop 停不掉它，
+    它占着 9090 / 7890 端口，面板就一直显示「运行中」，新启动的核心也会因端口被占立即退出"""
+    bins = CORE_BINS
+    if bins is None:
+        from .sb_common import SB_BIN
+        bins = (MIHOMO_BIN, SMART_BIN, SB_BIN)
+    want = {os.path.realpath(b) for b in bins if b}
+    out = []
+    try:
+        names = os.listdir(PROC)
+    except OSError:
+        return out
+    me = os.getpid()
+    for n in names:
+        if not n.isdigit() or int(n) == me:
+            continue
+        try:
+            exe = os.readlink(os.path.join(PROC, n, "exe"))
+            with open(os.path.join(PROC, n, "cmdline"), "rb") as f:
+                args = f.read().split(b"\\0")
+        except OSError:
+            continue
+        if exe.endswith(" (deleted)"):  # 内核更新替换了二进制，旧进程还在跑
+            exe = exe[:-10]
+        if os.path.realpath(exe) not in want and exe not in want:
+            continue
+        if any(a.decode("utf-8", "ignore") in _CHECK_ARGS for a in args[1:]):
+            continue
+        out.append(int(n))
+    return out
+
+
+def kill_core_procs(grace=15):
+    """结束全部核心进程：先 TERM（sing-box 正常退出时才把 Fake-IP 映射写进 cache.db），grace 秒后还在就 KILL。返回结束的个数"""
+    import signal
+    pids = core_procs()
+    for p in pids:
+        try:
+            os.kill(p, signal.SIGTERM)
+        except OSError:
+            pass
+    end = time.time() + grace
+    while time.time() < end and any(_alive(p) for p in pids):
+        time.sleep(0.2)
+    for p in pids:
+        if _alive(p):
+            try:
+                os.kill(p, signal.SIGKILL)
+            except OSError:
+                pass
+    return len(pids)
+
+
+def _alive(pid):
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    try:  # 已退出但还没被回收的僵尸进程不算
+        with open(os.path.join(PROC, str(pid), "stat")) as f:
+            return f.read().rsplit(")", 1)[-1].split()[0] != "Z"
+    except (OSError, IndexError):
+        return True
+
+
 def _rc_once(cmd, timeout):
     import signal, tempfile
     with tempfile.TemporaryFile() as f:
@@ -4846,10 +4918,15 @@ def rc_run(act, timeout=90):
     with SVC_OP:
         code, out = _rc_once(f"{SVC} {act}", timeout)
         if code != 0 and code != 124 and _RC_BUSY.search(out):
+            # zap 只清 OpenRC 的状态，不碰进程：先把核心进程结束掉，否则旧核心变成没人管的孤儿，
+            # 之后 stop 停不掉它、新核心又抢不到端口
+            kill_core_procs()
             _rc_once(f"{SVC} zap", 15)
             code, out = _rc_once(f"{SVC} {act}", timeout)
             out = "（服务状态卡住，已自动 zap 后重试）\\n" + out
         elif code == 124:
+            if act == "stop":
+                kill_core_procs()
             _rc_once(f"{SVC} zap", 15)
         return code, out
 
@@ -7917,7 +7994,7 @@ from .core_update import (
     CORE_CHANNELS, CORE_UPD, LGBM_FILE, bin_version, core_check, core_job_start, core_rollback_job, core_upd_status, core_update_job,
     lgbm_fetch, lgbm_fetch_reload
 )
-from .sysopt import SVC_OP, delay_test, favicon, nft_ok, opt_apply, opt_status, rc_run, sh, speed_test, svc_restart
+from .sysopt import SVC_OP, core_procs, delay_test, favicon, kill_core_procs, nft_ok, opt_apply, opt_status, rc_run, sh, speed_test, svc_restart
 from .notify import WD, core_alive, core_proc_alive, set_manual_stop, tg_send
 from .latency import BG_FILE, RETEST, bg_fetch, bg_meta, bg_meta_save, bg_save, bg_type, fix_global, proxies_merged, retest_soon
 from .stats import arp_table
@@ -7956,14 +8033,25 @@ def _svc_do(act):
                 code, out = rc_run("stop", timeout=90)
                 for _ in range(40):  # rc-service 的返回值不可靠，以 pid 为准，每 0.2 秒查一次，最多等 8 秒
                     if not core_proc_alive():
-                        return True, "核心已停止"
+                        break
                     time.sleep(0.2)
+                # pid 文件之外还有核心进程（OpenRC 被 zap 过、旧服务名留下的、SSH 手动运行的）：rc-service 管不到，
+                # 以前这里直接报「已停止」，实际核心还占着端口在跑，顶栏一直显示运行中
+                stray = kill_core_procs() if not core_proc_alive() else 0
+                if not core_proc_alive() and not core_procs():
+                    if stray:
+                        log_err("api/service stop", Exception(f"结束了 {stray} 个不在 pid 文件里的残留核心进程"))
+                    return True, "核心已停止" + (f"（另外结束了 {stray} 个不受服务管理的残留核心进程）" if stray else "")
             finally:
                 wd_hold(0, "手动停止", reset=True)
         set_manual_stop(False)  # 没停下来：交还给看门狗，避免核心卡死后再也没人拉起
         log_err("api/service stop", Exception(f"停止后核心进程仍在（rc 返回 {code}）：{out[-200:]}"))
         return False, "核心进程仍在运行，停止失败：" + (out[-200:] or "无输出")
     set_manual_stop(False)
+    with SVC_OP:
+        if not core_proc_alive() and core_procs():  # 服务没在跑却有核心进程：残留孤儿占着端口，新核心会起不来
+            n = kill_core_procs()
+            log_err("api/service " + act, Exception(f"启动前结束了 {n} 个不受服务管理的残留核心进程"))
     if act == "restart":
         code, out = svc_restart(timeout=90, why="手动重启")  # 与看门狗、切换内核同一入口：含看门狗暂停和 IP 信息重查
     else:

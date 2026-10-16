@@ -168,5 +168,53 @@ class Svc(unittest.TestCase):
         self.assertIn("跳过", msg)
 
 
+class Strays(unittest.TestCase):
+    """不在 pid 文件里的核心进程（OpenRC 被 zap 过 / SSH 手动运行）：停止要能结束它们"""
+    def setUp(self):
+        import shutil, subprocess
+        self.d = tempfile.mkdtemp(prefix="shunt-stray-")
+        self.bin = os.path.join(self.d, "mihomo")
+        shutil.copy(shutil.which("sh"), self.bin)  # 拷一份 sh 冒充核心二进制（按可执行文件识别）
+        self.rc = os.path.join(self.d, "rc")
+        with open(self.rc, "w") as f:
+            f.write(RC)
+        os.chmod(self.rc, 0o755)
+        self.pid = os.path.join(self.d, "core.pid")
+        self.patches = [mock.patch.object(S, "SVC", self.rc), mock.patch.object(N, "CORE_PID", self.pid),
+                        mock.patch.object(S, "CORE_BINS", (self.bin,)),
+                        mock.patch.object(N, "STOP_FLAG", os.path.join(self.d, "core_stopped"))]
+        for p in self.patches:
+            p.start()
+        N.WD.update(status="ok", fails=0, tp_off=False, manual_stop=False)
+        self.orphan = subprocess.Popen([self.bin, "-c", "sleep 1000; :"])
+        self.check = subprocess.Popen([self.bin, "-c", "sleep 1000; :", "-t"])  # 像 selftest 的 mihomo -t：不是常驻核心，不能误杀
+
+    def tearDown(self):
+        for p in (self.orphan, self.check):
+            p.kill()
+            p.wait()
+        for p in self.patches:
+            p.stop()
+
+    def test_detect(self):
+        self.assertEqual(S.core_procs(), [self.orphan.pid])
+
+    def test_stop_kills_orphan(self):
+        ok, msg = W._svc_do("stop")
+        self.orphan.wait(5)
+        self.assertTrue(ok, msg)
+        self.assertIn("残留", msg)
+        self.assertEqual(S.core_procs(), [])
+        self.assertIsNone(self.check.poll())
+
+    def test_start_clears_orphan_first(self):
+        with mock.patch.object(W, "core_alive", return_value=True), mock.patch.object(W, "retest_soon"):
+            ok, msg = W._svc_do("start")
+        self.orphan.wait(5)
+        self.assertTrue(ok, msg)
+        self.assertTrue(N.core_proc_alive())
+        S._rc_once(self.rc + " stop", 5)
+
+
 if __name__ == "__main__":
     unittest.main()

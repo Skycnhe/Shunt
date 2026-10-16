@@ -26,7 +26,7 @@ from .core_update import (
     CORE_CHANNELS, CORE_UPD, LGBM_FILE, bin_version, core_check, core_job_start, core_rollback_job, core_upd_status, core_update_job,
     lgbm_fetch, lgbm_fetch_reload
 )
-from .sysopt import SVC_OP, delay_test, favicon, nft_ok, opt_apply, opt_status, rc_run, sh, speed_test, svc_restart
+from .sysopt import SVC_OP, core_procs, delay_test, favicon, kill_core_procs, nft_ok, opt_apply, opt_status, rc_run, sh, speed_test, svc_restart
 from .notify import WD, core_alive, core_proc_alive, set_manual_stop, tg_send
 from .latency import BG_FILE, RETEST, bg_fetch, bg_meta, bg_meta_save, bg_save, bg_type, fix_global, proxies_merged, retest_soon
 from .stats import arp_table
@@ -65,14 +65,25 @@ def _svc_do(act):
                 code, out = rc_run("stop", timeout=90)
                 for _ in range(40):  # rc-service 的返回值不可靠，以 pid 为准，每 0.2 秒查一次，最多等 8 秒
                     if not core_proc_alive():
-                        return True, "核心已停止"
+                        break
                     time.sleep(0.2)
+                # pid 文件之外还有核心进程（OpenRC 被 zap 过、旧服务名留下的、SSH 手动运行的）：rc-service 管不到，
+                # 以前这里直接报「已停止」，实际核心还占着端口在跑，顶栏一直显示运行中
+                stray = kill_core_procs() if not core_proc_alive() else 0
+                if not core_proc_alive() and not core_procs():
+                    if stray:
+                        log_err("api/service stop", Exception(f"结束了 {stray} 个不在 pid 文件里的残留核心进程"))
+                    return True, "核心已停止" + (f"（另外结束了 {stray} 个不受服务管理的残留核心进程）" if stray else "")
             finally:
                 wd_hold(0, "手动停止", reset=True)
         set_manual_stop(False)  # 没停下来：交还给看门狗，避免核心卡死后再也没人拉起
         log_err("api/service stop", Exception(f"停止后核心进程仍在（rc 返回 {code}）：{out[-200:]}"))
         return False, "核心进程仍在运行，停止失败：" + (out[-200:] or "无输出")
     set_manual_stop(False)
+    with SVC_OP:
+        if not core_proc_alive() and core_procs():  # 服务没在跑却有核心进程：残留孤儿占着端口，新核心会起不来
+            n = kill_core_procs()
+            log_err("api/service " + act, Exception(f"启动前结束了 {n} 个不受服务管理的残留核心进程"))
     if act == "restart":
         code, out = svc_restart(timeout=90, why="手动重启")  # 与看门狗、切换内核同一入口：含看门狗暂停和 IP 信息重查
     else:
