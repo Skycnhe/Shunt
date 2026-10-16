@@ -3,7 +3,7 @@ name: Check
 
 on:
   push:
-    branches: [Hk001]
+    branches: [Hk002]
   pull_request:
   workflow_dispatch:
 

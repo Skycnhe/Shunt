@@ -3799,7 +3799,7 @@ from .core_update import gh_api
 from .sysopt import proxy_opener, sh
 from .https import restart_self
 from .update_guard import start_update_guard
-PANEL_RAW = os.environ.get("PANEL_RAW", "https://raw.githubusercontent.com/Skycnhe/Shunt/Hk001")
+PANEL_RAW = os.environ.get("PANEL_RAW", "https://raw.githubusercontent.com/Skycnhe/Shunt/Hk002")
 UPD_FILES = ["server.py", "index.html", "tproxy.sh", "selftest.sh", "init.d/shunt", "init.d/shunt-core"]
 UPD_LIST = "update-files.txt"  # 仓库里的部署文件清单：以后增减文件只改清单，不用再改更新程序
 
@@ -5551,7 +5551,7 @@ WARP 实例不是 OpenRC 服务，由面板直接管理：pid 文件 /run/shunt-
 
 优选 IP：用当前 WARP 账户的密钥向候选 Endpoint 发 WireGuard 握手包（wgcrypto），收到握手应答即可用，
 往返时间即延迟；网速用临时 WARP 实例（只开本地 mixed 端口）经该 Endpoint 下载 Cloudflare 测速文件。"""
-import base64, ipaddress, json, os, random, re, shlex, signal, socket, subprocess, threading, time, urllib.request
+import base64, ipaddress, json, os, random, re, shlex, signal, socket, ssl, subprocess, threading, time, urllib.request
 from collections import deque
 
 from . import wgcrypto as wg
@@ -5793,7 +5793,8 @@ def build_mihomo(c, d, cn, tproxy=True, mixed=WARP_MIXED):
         px["ipv6"] = c["v6"]
     cfg = {"mixed-port": mixed, "allow-lan": False, "bind-address": "127.0.0.1", "mode": "rule", "log-level": "warning",
            "ipv6": v6, "unified-delay": True, "proxies": [px], "rules": []}
-    if not tproxy:  # 测速实例：只有本地 mixed 端口
+    if not tproxy:  # 测速实例：只有本地 mixed 端口；域名经隧道里的 1.1.1.1 解析，不依赖路由器自己的 DNS
+        px.update({"remote-dns-resolve": True, "dns": ["1.1.1.1", "1.0.0.1"]})
         cfg["rules"] = ["MATCH,WARP"]
         return cfg
     cfg.update({"tproxy-port": 7893, "allow-lan": True, "bind-address": "*",
@@ -6272,6 +6273,22 @@ def scan(ranges=None, ports=None, per=20, rounds=3):
     return True, f"开始测试 {len(targets)} 个 IP:端口 × {rounds} 轮"
 
 
+def _speed_log_hint():
+    """测速失败时附上实例日志里最后一条错误，方便看出是握手、DNS 还是被拦截"""
+    try:
+        with open(os.path.join(WARP_DIR, "speed.log"), errors="replace") as f:
+            bad = [x.strip() for x in f.read().splitlines()[-200:] if re.search(r"error|ERROR|FATAL|fail|timeout", x)]
+    except OSError:
+        return ""
+    if not bad:
+        return ""
+    m = re.search(r'msg="(.*)"', bad[-1])
+    msg = m.group(1) if m else bad[-1]
+    if "dns resolve failed" in msg or "handshake" in msg.lower():
+        return "；隧道不通：这个 IP:端口现在握手不成功，换一个再试"
+    return "；实例日志：" + msg[-200:]
+
+
 def speed(ep_host, port, sec=8):
     """临时起一个只开本地端口的 WARP 实例，经指定 Endpoint 下载 Cloudflare 测速文件；返回 Mbps"""
     if not _SPEED.acquire(blocking=False):
@@ -6288,9 +6305,17 @@ def speed(ep_host, port, sec=8):
                 break
         op = urllib.request.build_opener(urllib.request.ProxyHandler({"http": f"http://127.0.0.1:{SPEED_PORT}",
                                                                       "https": f"http://127.0.0.1:{SPEED_PORT}"}))
-        t0, n = time.time(), 0
         req = urllib.request.Request("https://speed.cloudflare.com/__down?bytes=50000000", headers={"User-Agent": UA})
-        with op.open(req, timeout=10) as r:
+        for i in range(3):  # 刚起的实例第一次握手可能没完成，代理会直接断开连接（SSL EOF），稍等重试
+            t0, n = time.time(), 0
+            try:
+                r = op.open(req, timeout=10)
+                break
+            except (OSError, ssl.SSLError) as e:
+                if i == 2:
+                    raise RuntimeError(f"{e}{_speed_log_hint()}") from None
+                time.sleep(1.5)
+        with r:
             ttfb = time.time() - t0
             t1 = time.time()
             while time.time() - t1 < sec:

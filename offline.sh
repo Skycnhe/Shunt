@@ -1,10 +1,10 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Shunt 分流 —— 一键下载离线安装包（面板 + mihomo / mihomo Smart / sing-box 内核 + geo 数据 + apk 依赖）并安装
-#   国外: wget -qO- https://raw.githubusercontent.com/Skycnhe/Shunt/Hk001/offline.sh | sh
-#   国内: wget -qO- https://ghfast.top/https://raw.githubusercontent.com/Skycnhe/Shunt/Hk001/offline.sh | sh -s -- --cn
+#   国外: wget -qO- https://raw.githubusercontent.com/Skycnhe/Shunt/Hk002/offline.sh | sh
+#   国内: wget -qO- https://ghfast.top/https://raw.githubusercontent.com/Skycnhe/Shunt/Hk002/offline.sh | sh -s -- --cn
 #   其余参数（--https、--update-core、--selftest）原样传给 install.sh
-# 不联网的设备：在电脑上从 https://github.com/Skycnhe/Shunt/releases/tag/offline 下载对应的
+# 不联网的设备：在电脑上从 https://github.com/Skycnhe/Shunt/releases/tag/offline-Hk002 下载对应的
 #   shunt-offline-<架构>-alpine<版本>.tar.gz，传到设备后执行：
 #   tar xzf shunt-offline-*.tar.gz && sh shunt-offline/install.sh
 set -e
@@ -20,7 +20,7 @@ LIST="${OFFLINE_ALPINE:-3.24 3.23 3.22}"
 PICK=""; for v in $LIST; do [ "$v" = "$REL" ] && PICK=$v; done
 [ -n "$PICK" ] || { PICK=${LIST%% *}; echo "!! 没有 Alpine $REL 的离线包，改用 Alpine $PICK 的"; }
 NAME="shunt-offline-$M-alpine$PICK.tar.gz"
-URL="https://github.com/$REPO/releases/download/offline/$NAME"
+URL="https://github.com/$REPO/releases/download/offline-Hk002/$NAME"
 DIR=$(mktemp -d)
 echo ">> 下载 $NAME"
 dl() { if command -v curl >/dev/null; then curl -fL --retry 3 -o "$2" "$1"; else wget -O "$2" "$1"; fi; }

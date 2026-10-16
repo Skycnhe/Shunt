@@ -1,10 +1,10 @@
 # 离线安装包：面板 + mihomo / mihomo Smart / sing-box 内核 + geo 数据 + sing-box 规则集 + apk 依赖
-# 推送面板文件、每周一次（拉取最新内核和数据）或手动触发时，重新打包并发布到 Releases 的 offline 标签
+# 推送面板文件、每周一次（拉取最新内核和数据）或手动触发时，重新打包并发布到 Releases 的 offline-Hk002 标签
 name: Offline bundle
 
 on:
   push:
-    branches: [Hk001]
+    branches: [Hk002]
     paths:
       - server.py
       - shunt/**
@@ -26,7 +26,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: offline-bundle
+  group: offline-bundle-Hk002
   cancel-in-progress: true
 
 jobs:
@@ -60,7 +60,7 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: 发布到 Releases「offline」
+      - name: 发布到 Releases「offline-Hk002」
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -78,9 +78,9 @@ jobs:
             echo
             echo "**一键安装（设备能联网）**"
             echo '```sh'
-            echo "wget -qO- https://raw.githubusercontent.com/${{ github.repository }}/Hk001/offline.sh | sh"
+            echo "wget -qO- https://raw.githubusercontent.com/${{ github.repository }}/Hk002/offline.sh | sh"
             echo "# 国内"
-            echo "wget -qO- https://ghfast.top/https://raw.githubusercontent.com/${{ github.repository }}/Hk001/offline.sh | sh -s -- --cn"
+            echo "wget -qO- https://ghfast.top/https://raw.githubusercontent.com/${{ github.repository }}/Hk002/offline.sh | sh -s -- --cn"
             echo '```'
             echo
             echo "**本地安装（设备不联网）**：按 \`uname -m\` 和 \`cat /etc/alpine-release\` 下载对应的包，传到设备后："
@@ -96,13 +96,13 @@ jobs:
               awk -v v="## v$PANEL " 'index($0, v)==1{p=1; next} /^## v/{p=0} p' ../CHANGELOG.md
             fi
           } > notes.md
-          if gh release view offline >/dev/null 2>&1; then
-            gh release edit offline --title "离线安装包 · 面板 v$PANEL" --notes-file notes.md
-            for a in $(gh release view offline --json assets -q '.assets[].name'); do
-              case " $(ls | tr '\n' ' ') " in *" $a "*) ;; *) gh release delete-asset offline "$a" -y ;; esac
+          if gh release view offline-Hk002 >/dev/null 2>&1; then
+            gh release edit offline-Hk002 --title "离线安装包 Hk002 · 面板 v$PANEL" --notes-file notes.md
+            for a in $(gh release view offline-Hk002 --json assets -q '.assets[].name'); do
+              case " $(ls | tr '\n' ' ') " in *" $a "*) ;; *) gh release delete-asset offline-Hk002 "$a" -y ;; esac
             done
           else
-            gh release create offline --title "离线安装包 · 面板 v$PANEL" --notes-file notes.md --target "${{ github.sha }}"
+            gh release create offline-Hk002 --title "离线安装包 Hk002 · 面板 v$PANEL" --notes-file notes.md --target "${{ github.sha }}"
           fi
-          git tag -f offline "${{ github.sha }}" && git push -f origin refs/tags/offline
-          gh release upload offline *.tar.gz SHA256SUMS offline.sh --clobber
+          git tag -f offline-Hk002 "${{ github.sha }}" && git push -f origin refs/tags/offline-Hk002
+          gh release upload offline-Hk002 *.tar.gz SHA256SUMS offline.sh --clobber

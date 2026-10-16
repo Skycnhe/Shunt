@@ -25,22 +25,22 @@
 
 ```sh
 # 国内网络
-wget -qO- https://ghfast.top/https://raw.githubusercontent.com/Skycnhe/Shunt/Hk002/install.sh | PANEL_BRANCH=Hk002 sh -s -- --cn
+wget -qO- https://ghfast.top/https://raw.githubusercontent.com/Skycnhe/Shunt/Hk002/install.sh | sh -s -- --cn
 
 # 国外网络
-wget -qO- https://raw.githubusercontent.com/Skycnhe/Shunt/Hk002/install.sh | PANEL_BRANCH=Hk002 sh
+wget -qO- https://raw.githubusercontent.com/Skycnhe/Shunt/Hk002/install.sh | sh
 ```
 
 装完会显示面板地址（默认 `http://旁路由IP:8080`）。面板不需要密码，默认只允许局域网访问；要用域名（DDNS / 反向代理）访问，先在路由器上执行 `python3 /opt/mihomo-panel/server.py --allow-host 你的域名`，确需外网直连时执行 `--allow-public on`。脚本调用改动类接口需加请求头 `X-Shunt: 1`。
 
 ### 离线安装包
 
-[Releases · offline](https://github.com/Skycnhe/Shunt/releases/tag/offline) 里有打包好的离线安装包：面板 + mihomo / mihomo Smart / sing-box 三个内核 + geo 数据 + sing-box 规则集 + 全部 apk 依赖，装的时候不用联网。每次面板更新和每周一自动重新打包，内核始终是最新版。
+[Releases · offline-Hk002](https://github.com/Skycnhe/Shunt/releases/tag/offline-Hk002) 里有打包好的离线安装包：面板 + mihomo / mihomo Smart / sing-box 三个内核 + geo 数据 + sing-box 规则集 + 全部 apk 依赖，装的时候不用联网。每次面板更新和每周一自动重新打包，内核始终是最新版。
 
 ```sh
 # 一键：自动选对应架构和 Alpine 版本的包，下载后安装
-wget -qO- https://ghfast.top/https://raw.githubusercontent.com/Skycnhe/Shunt/Hk001/offline.sh | sh -s -- --cn   # 国内
-wget -qO- https://raw.githubusercontent.com/Skycnhe/Shunt/Hk001/offline.sh | sh                                  # 国外
+wget -qO- https://ghfast.top/https://raw.githubusercontent.com/Skycnhe/Shunt/Hk002/offline.sh | sh -s -- --cn   # 国内
+wget -qO- https://raw.githubusercontent.com/Skycnhe/Shunt/Hk002/offline.sh | sh                                  # 国外
 
 # 设备不联网：在电脑上下载 shunt-offline-<aarch64|x86_64>-alpine<3.22|3.23|3.24>.tar.gz，传到设备后
 tar xzf shunt-offline-aarch64-alpine3.24.tar.gz && sh shunt-offline/install.sh
