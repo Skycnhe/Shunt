@@ -27,6 +27,7 @@ from .core_update import (
     lgbm_fetch, lgbm_fetch_reload
 )
 from .sysopt import delay_test, favicon, nft_ok, opt_apply, opt_status, sh, speed_test, svc_restart
+from . import warp as warp_mod
 from .notify import WD, tg_send
 from .latency import BG_FILE, RETEST, bg_fetch, bg_meta, bg_meta_save, bg_save, bg_type, fix_global, proxies_merged, retest_soon
 from .stats import arp_table
@@ -875,6 +876,8 @@ class H(BaseHTTPRequestHandler):
             return self.send(400, {"message": "未知的内核"})
         if kind == active_core():
             return self.send(400, {"message": f"当前已经是 {CORES[kind]}"})
+        if warp_mod.get_mutex() and warp_mod.is_connected():
+            warp_mod.disconnect()  # 切内核前先断 WARP（双向互斥）
         ok, msg = core_job_start(core_switch_job, kind, load().get("gh_proxy") or "")
         return self.send(200 if ok else 409, {"message": msg})
 
@@ -1188,6 +1191,40 @@ class H(BaseHTTPRequestHandler):
         sched_event(f"手动执行 {TASK_NAMES[k]}：{'✓' if ok else '✗'} {msg}")
         return self.reply(ok, msg)
 
+    # ---------- Cloudflare WARP ----------
+    @api_route("/api/warp/status", "GET")
+    def api_warp_status_get(self, m, p, b, q):
+        try:
+            return self.send(200, warp_mod.status())
+        except Exception as e:
+            return self.send(200, {"message": str(e), "connected": False})
+
+    @api_route("/api/warp/setup", "POST")
+    def api_warp_setup_post(self, m, p, b, q):
+        ok, msg = warp_mod.setup()
+        return self.send(200 if ok else 500, {"ok": ok, "message": msg})
+
+    @api_route("/api/warp/connect", "POST")
+    def api_warp_connect_post(self, m, p, b, q):
+        ok, msg, st = warp_mod.connect()
+        st["ok"] = ok
+        st["message"] = msg
+        return self.send(200, st)
+
+    @api_route("/api/warp/disconnect", "POST")
+    def api_warp_disconnect_post(self, m, p, b, q):
+        ok, msg, st = warp_mod.disconnect()
+        st["ok"] = ok
+        st["message"] = msg
+        return self.send(200, st)
+
+    @api_route("/api/warp/mutex", "POST")
+    def api_warp_mutex_post(self, m, p, b, q):
+        v = b.get("on")
+        on = v is True or v == 1 or str(v).lower() in ("true", "1", "on")
+        ok = warp_mod.set_mutex(on)
+        return self.send(200 if ok else 500, {"ok": ok, "mutex": warp_mod.get_mutex()})
+
     @api_route("/api/service", "POST")
     def api_service_post(self, m, p, b, q):
         act = b.get("action")
@@ -1195,6 +1232,8 @@ class H(BaseHTTPRequestHandler):
             return self.reply(*reload_core())
         if act in ("restart", "stop", "start"):
             WD["manual_stop"] = act == "stop"
+            if act in ("restart", "start") and warp_mod.get_mutex() and warp_mod.is_connected():
+                warp_mod.disconnect()  # 内核启动前先断 WARP（双向互斥）
             if act == "stop":
                 code, out = sh(SVC + " stop", timeout=90)
             else:  # 启动 / 重启：同样让看门狗等内核加载完

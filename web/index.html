@@ -225,6 +225,19 @@
       </div>
     </div>
   </section>
+  <!-- WARP -->
+  <section data-tab="WARP">
+    <div class="card"><div class="row"><h3 class="sp" style="margin:0">Cloudflare WARP</h3>
+      <span class="tag" id="warp-inst"></span><span class="tag" id="warp-conn"></span><span class="tag" id="warp-core"></span>
+      <button class="btn g sm" id="warp-conn-btn" onclick="warpConnect()">连接</button>
+      <button class="btn g sm hide" id="warp-setup-btn" onclick="warpSetup()">初始化 WARP</button>
+      <button class="btn g sm" onclick="warpRefresh()">刷新状态</button>
+      <button class="btn r sm hide" id="warp-disc" onclick="warpDisconnect()">断开</button></div>
+      <div class="mut small hide" id="warp-inst-hint" style="margin-top:6px">路由器上执行 <code>apk add wireguard-tools</code>；wgcf 从 <code>https://github.com/ViRb3/wgcf/releases</code> 下载对应架构版本放到 <code>/usr/bin/wgcf</code> 并 <code>chmod +x</code></div>
+      <div class="opt mt"><div class="sp"><div class="t">WARP 与内核双向互斥</div><div class="dsc">WARP 连接时自动停止内核；内核启动时自动断开 WARP</div></div><label class="sw sm"><input type="checkbox" id="warp-mutex" onchange="warpSetMutex(this.checked)"><span></span></label></div>
+      <div class="mut small" style="margin-top:6px">WARP 是 Cloudflare 提供的免费 VPN（WireGuard 协议）。连接后流量走 WARP 隧道，与 mihomo/sing-box 内核二选一。</div>
+      <div id="warp-r" class="small mt"></div></div>
+  </section>
   <!-- DNS -->
   <section data-tab="DNS">
     <div class="card dnsmain"><div class="row"><h3 class="sp" style="margin:0">DNS 设置</h3><span id="dns-dirty" class="tag hide" style="color:var(--warn)">● 有未保存的修改</span>
@@ -439,6 +452,7 @@
 //@include js/23-traffic.js
 //@include js/24-rulesets.js
 //@include js/25-settings2.js
+//@include js/27-warp.js
 </script>
 </body>
 </html>

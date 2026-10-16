@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "7.8.0"
+PANEL_VERSION = "7.9.0"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -60,6 +60,7 @@ MODULES = [
     "update_guard",
     "svcmigrate",
     "static",
+    "warp",
     "webapi",
     "cli",
 ]
@@ -248,7 +249,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "7.8.0"
+PANEL_VERSION = "7.9.0"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -7400,6 +7401,163 @@ def static_file(name):
     STATIC[name] = (key, val)
     return val
 '''
+_SRC['shunt.warp'] = '''"""Cloudflare WARP 代理（WireGuard 协议）。
+
+与 mihomo/sing-box 内核二选一：WARP 连接时可自动停止内核，
+内核启动时可自动断开 WARP（互斥开关控制，默认开）。
+"""
+import json
+import os
+import urllib.request
+
+from .base import CORE_SVC
+from .sysopt import sh
+
+WARP_DIR = "/etc/mihomo-panel/warp"
+WARP_CONF = os.path.join(WARP_DIR, "wgcf-profile.conf")
+MUTEX_FILE = os.path.join(WARP_DIR, "mutex.json")
+IFACE = "wgcf"
+
+
+def _ensure_dir():
+    try:
+        os.makedirs(WARP_DIR, mode=0o700, exist_ok=True)
+    except Exception:
+        pass
+
+
+def get_mutex():
+    """互斥开关，默认开。"""
+    try:
+        with open(MUTEX_FILE) as f:
+            return bool(json.load(f).get("mutex", True))
+    except Exception:
+        return True
+
+
+def set_mutex(on):
+    _ensure_dir()
+    try:
+        with open(MUTEX_FILE, "w") as f:
+            json.dump({"mutex": bool(on)}, f)
+        os.chmod(MUTEX_FILE, 0o600)
+        return True
+    except Exception:
+        return False
+
+
+def _which(cmd):
+    code, _ = sh("command -v %s" % cmd, timeout=10)
+    return code == 0
+
+
+def _core_running():
+    code, out = sh("rc-service %s status" % CORE_SVC, timeout=10)
+    return code == 0 and "started" in out.lower()
+
+
+def _stop_core():
+    return sh("rc-service %s stop" % CORE_SVC, timeout=30)
+
+
+def is_registered():
+    return os.path.isfile(WARP_CONF)
+
+
+def is_connected():
+    code, out = sh("wg show %s 2>/dev/null | head -1" % IFACE, timeout=10)
+    return code == 0 and ("interface" in out.lower() or IFACE in out)
+
+
+def _egress_ip(timeout=15):
+    """WARP 连接后的出口 IP（经 Cloudflare trace）。"""
+    try:
+        req = urllib.request.Request("https://www.cloudflare.com/cdn-cgi/trace",
+                                     headers={"User-Agent": "curl"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            for line in r.read().decode(errors="ignore").splitlines():
+                if line.startswith("ip="):
+                    return line[3:].strip()
+    except Exception:
+        pass
+    return ""
+
+
+def status():
+    installed_wg = _which("wg") and _which("wg-quick")
+    installed_wgcf = _which("wgcf")
+    registered = is_registered()
+    connected = is_connected() if (installed_wg and registered) else False
+    ip = _egress_ip() if connected else ""
+    return {
+        "installed_wg": installed_wg,
+        "installed_wgcf": installed_wgcf,
+        "registered": registered,
+        "connected": connected,
+        "ip": ip,
+        "mutex": get_mutex(),
+        "core_running": _core_running(),
+    }
+
+
+def setup():
+    """wgcf 注册并生成 WireGuard 配置。返回 (ok, message)。"""
+    if not _which("wgcf"):
+        return False, "未安装 wgcf：请先下载（https://github.com/ViRb3/wgcf/releases）放到 /usr/bin/wgcf 并 chmod +x"
+    _ensure_dir()
+    code, out = sh("cd %s && wgcf register --accept-tos" % WARP_DIR, timeout=60)
+    if code != 0:
+        return False, "wgcf 注册失败：%s" % (out[-500:] if out else "未知错误")
+    code, out = sh("cd %s && wgcf generate" % WARP_DIR, timeout=60)
+    if code != 0 or not os.path.isfile(WARP_CONF):
+        return False, "wgcf 生成配置失败：%s" % (out[-500:] if out else "未知错误")
+    try:
+        os.chmod(WARP_CONF, 0o600)
+    except Exception:
+        pass
+    return True, "WARP 配置已生成"
+
+
+def connect():
+    """连接 WARP。返回 (ok, message, st)。"""
+    if not (_which("wg") and _which("wg-quick")):
+        return False, "未安装 wireguard-tools：路由器上执行 apk add wireguard-tools", status()
+    if not _which("wgcf"):
+        return False, "未安装 wgcf：https://github.com/ViRb3/wgcf/releases 下载对应架构版本", status()
+    if not is_registered():
+        ok, msg = setup()
+        if not ok:
+            return False, msg, status()
+    if is_connected():
+        st = status()
+        return True, "WARP 已在连接中", st
+    code, out = sh("wg-quick up %s" % WARP_CONF, timeout=30)
+    if code != 0:
+        return False, "WARP 连接失败：%s" % (out[-500:] if out else "未知错误"), status()
+    msg = "WARP 已连接"
+    if get_mutex():
+        c2, o2 = _stop_core()
+        if c2 == 0:
+            msg += "，内核已停止"
+        else:
+            msg += "（停止内核失败，请手动执行 rc-service %s stop）" % CORE_SVC
+    st = status()
+    return True, msg, st
+
+
+def disconnect():
+    """断开 WARP（不动内核）。返回 (ok, message, st)。"""
+    if not is_connected():
+        return True, "WARP 未连接", status()
+    code, out = sh("wg-quick down %s" % IFACE, timeout=30)
+    if code != 0:
+        # 兜底：直接删接口
+        sh("ip link del %s 2>/dev/null" % IFACE, timeout=10)
+    st = status()
+    if st["connected"]:
+        return False, "WARP 断开失败：%s" % (out[-300:] if out else "未知错误"), st
+    return True, "WARP 已断开（内核未动，需手动启动）", st
+'''
 _SRC['shunt.webapi'] = '''"""HTTP"""
 import copy, gzip, json, os, re, shutil, socket, ssl, threading, time
 from http.server import BaseHTTPRequestHandler
@@ -7429,6 +7587,7 @@ from .core_update import (
     lgbm_fetch, lgbm_fetch_reload
 )
 from .sysopt import delay_test, favicon, nft_ok, opt_apply, opt_status, sh, speed_test, svc_restart
+from . import warp as warp_mod
 from .notify import WD, tg_send
 from .latency import BG_FILE, RETEST, bg_fetch, bg_meta, bg_meta_save, bg_save, bg_type, fix_global, proxies_merged, retest_soon
 from .stats import arp_table
@@ -8277,6 +8436,8 @@ class H(BaseHTTPRequestHandler):
             return self.send(400, {"message": "未知的内核"})
         if kind == active_core():
             return self.send(400, {"message": f"当前已经是 {CORES[kind]}"})
+        if warp_mod.get_mutex() and warp_mod.is_connected():
+            warp_mod.disconnect()  # 切内核前先断 WARP（双向互斥）
         ok, msg = core_job_start(core_switch_job, kind, load().get("gh_proxy") or "")
         return self.send(200 if ok else 409, {"message": msg})
 
@@ -8590,6 +8751,40 @@ class H(BaseHTTPRequestHandler):
         sched_event(f"手动执行 {TASK_NAMES[k]}：{'✓' if ok else '✗'} {msg}")
         return self.reply(ok, msg)
 
+    # ---------- Cloudflare WARP ----------
+    @api_route("/api/warp/status", "GET")
+    def api_warp_status_get(self, m, p, b, q):
+        try:
+            return self.send(200, warp_mod.status())
+        except Exception as e:
+            return self.send(200, {"message": str(e), "connected": False})
+
+    @api_route("/api/warp/setup", "POST")
+    def api_warp_setup_post(self, m, p, b, q):
+        ok, msg = warp_mod.setup()
+        return self.send(200 if ok else 500, {"ok": ok, "message": msg})
+
+    @api_route("/api/warp/connect", "POST")
+    def api_warp_connect_post(self, m, p, b, q):
+        ok, msg, st = warp_mod.connect()
+        st["ok"] = ok
+        st["message"] = msg
+        return self.send(200, st)
+
+    @api_route("/api/warp/disconnect", "POST")
+    def api_warp_disconnect_post(self, m, p, b, q):
+        ok, msg, st = warp_mod.disconnect()
+        st["ok"] = ok
+        st["message"] = msg
+        return self.send(200, st)
+
+    @api_route("/api/warp/mutex", "POST")
+    def api_warp_mutex_post(self, m, p, b, q):
+        v = b.get("on")
+        on = v is True or v == 1 or str(v).lower() in ("true", "1", "on")
+        ok = warp_mod.set_mutex(on)
+        return self.send(200 if ok else 500, {"ok": ok, "mutex": warp_mod.get_mutex()})
+
     @api_route("/api/service", "POST")
     def api_service_post(self, m, p, b, q):
         act = b.get("action")
@@ -8597,6 +8792,8 @@ class H(BaseHTTPRequestHandler):
             return self.reply(*reload_core())
         if act in ("restart", "stop", "start"):
             WD["manual_stop"] = act == "stop"
+            if act in ("restart", "start") and warp_mod.get_mutex() and warp_mod.is_connected():
+                warp_mod.disconnect()  # 内核启动前先断 WARP（双向互斥）
             if act == "stop":
                 code, out = sh(SVC + " stop", timeout=90)
             else:  # 启动 / 重启：同样让看门狗等内核加载完

@@ -553,6 +553,19 @@ nav button{font-size:15.5px;font-weight:600;opacity:.85}nav button.on{font-weigh
       </div>
     </div>
   </section>
+  <!-- WARP -->
+  <section data-tab="WARP">
+    <div class="card"><div class="row"><h3 class="sp" style="margin:0">Cloudflare WARP</h3>
+      <span class="tag" id="warp-inst"></span><span class="tag" id="warp-conn"></span><span class="tag" id="warp-core"></span>
+      <button class="btn g sm" id="warp-conn-btn" onclick="warpConnect()">连接</button>
+      <button class="btn g sm hide" id="warp-setup-btn" onclick="warpSetup()">初始化 WARP</button>
+      <button class="btn g sm" onclick="warpRefresh()">刷新状态</button>
+      <button class="btn r sm hide" id="warp-disc" onclick="warpDisconnect()">断开</button></div>
+      <div class="mut small hide" id="warp-inst-hint" style="margin-top:6px">路由器上执行 <code>apk add wireguard-tools</code>；wgcf 从 <code>https://github.com/ViRb3/wgcf/releases</code> 下载对应架构版本放到 <code>/usr/bin/wgcf</code> 并 <code>chmod +x</code></div>
+      <div class="opt mt"><div class="sp"><div class="t">WARP 与内核双向互斥</div><div class="dsc">WARP 连接时自动停止内核；内核启动时自动断开 WARP</div></div><label class="sw sm"><input type="checkbox" id="warp-mutex" onchange="warpSetMutex(this.checked)"><span></span></label></div>
+      <div class="mut small" style="margin-top:6px">WARP 是 Cloudflare 提供的免费 VPN（WireGuard 协议）。连接后流量走 WARP 隧道，与 mihomo/sing-box 内核二选一。</div>
+      <div id="warp-r" class="small mt"></div></div>
+  </section>
   <!-- DNS -->
   <section data-tab="DNS">
     <div class="card dnsmain"><div class="row"><h3 class="sp" style="margin:0">DNS 设置</h3><span id="dns-dirty" class="tag hide" style="color:var(--warn)">● 有未保存的修改</span>
@@ -743,7 +756,7 @@ nav button{font-size:15.5px;font-weight:600;opacity:.85}nav button.on{font-weigh
 <script>
 const $=s=>document.querySelector(s);
 let STATE={},TAB='概览',ACTIVE_RULES=[],timers=[],DEVS={},LIVE={},CONNS=[];
-const TABS=['概览','节点','策略组','订阅','规则','DNS','广告拦截','连接','统计','日志','设置'];
+const TABS=['概览','节点','策略组','订阅','规则','DNS','广告拦截','WARP','连接','统计','日志','设置'];
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=b=>{b=+b||0;const u=['B','KB','MB','GB','TB'];let i=0;while(b>=1024&&i<4){b/=1024;i++}return b.toFixed(i?(b<10?2:1):0)+' '+u[i]};
 const dcls=ms=>ms===undefined?'mut':ms<=0?'bad':ms<300?'ok':ms<800?'warn':'bad';
@@ -804,7 +817,7 @@ async function api(path,method='GET',body){
   if(!r.ok)throw new Error(j.message||('HTTP '+r.status));return j}
 const core=(p,m,b)=>api('/api/core'+p,m,b);
 
-const NAV_ICO={"概览": "<path d=\"M3 13h8V3H3zM13 21h8V11h-8zM3 21h8v-6H3zM13 3v6h8V3z\"/>", "节点": "<circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M3 12h18M12 3c2.8 3.2 2.8 14.8 0 18M12 3c-2.8 3.2-2.8 14.8 0 18\"/>", "连接": "<path d=\"M7 7h11l-3-3M17 17H6l3 3\"/>", "日志": "<path d=\"M6 3h9l4 4v14H6z\"/><path d=\"M9 11h7M9 15h7\"/>", "更多": "<circle cx=\"5\" cy=\"12\" r=\"1.6\"/><circle cx=\"12\" cy=\"12\" r=\"1.6\"/><circle cx=\"19\" cy=\"12\" r=\"1.6\"/>"};
+const NAV_ICO={"概览": "<path d=\"M3 13h8V3H3zM13 21h8V11h-8zM3 21h8v-6H3zM13 3v6h8V3z\"/>", "节点": "<circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M3 12h18M12 3c2.8 3.2 2.8 14.8 0 18M12 3c-2.8 3.2-2.8 14.8 0 18\"/>", "连接": "<path d=\"M7 7h11l-3-3M17 17H6l3 3\"/>", "日志": "<path d=\"M6 3h9l4 4v14H6z\"/><path d=\"M9 11h7M9 15h7\"/>", "更多": "<circle cx=\"5\" cy=\"12\" r=\"1.6\"/><circle cx=\"12\" cy=\"12\" r=\"1.6\"/><circle cx=\"19\" cy=\"12\" r=\"1.6\"/>", "WARP": "<path d=\"M13 2L3 14h7l-1 8 10-12h-7l1-8z\"/>"};
 const PRIMARY=['概览','节点','连接','日志'];
 const svgI=t=>`<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${NAV_ICO[t]||''}</svg>`;
 function nav(){const np=!PRIMARY.includes(TAB);
@@ -818,7 +831,7 @@ function placeNav(){const n=$('#nav');if(MQ.matches){if(n.parentNode!==document.
   else{if(n.parentNode===document.body)$('header').appendChild(n);n.classList.remove('bottom');document.body.classList.remove('hasbn')}}
 MQ.addEventListener?MQ.addEventListener('change',placeNav):MQ.addListener(placeNav);
 function go(t){if(TAB==='日志'&&t!=='日志')stopLive();TAB=t;nav();scrollTo({top:0});
-  ({节点:loadProxies,策略组:loadGroupsPage,订阅:loadSubs,规则:loadRules,DNS:loadDNSPage,广告拦截:loadAB,统计:loadStats,日志:openLogs,设置:renderSettings,概览:renderOverview,连接:loadDevs})[t]?.()}
+  ({节点:loadProxies,策略组:loadGroupsPage,订阅:loadSubs,规则:loadRules,DNS:loadDNSPage,广告拦截:loadAB,WARP:loadWarpPage,统计:loadStats,日志:openLogs,设置:renderSettings,概览:renderOverview,连接:loadDevs})[t]?.()}
 
 // 顶栏：核心状态 + 启停 + 实时数据
 const PM_TXT={tproxy:'TProxy',tun:'TUN',off:'已关闭'};
@@ -1589,6 +1602,40 @@ async function start(){
 document.addEventListener('visibilitychange',()=>{if(document.hidden||$('#app').classList.contains('hide'))return;_skip=0;tick();loadState().catch(()=>{});if(TAB==='节点')loadProxies()});
 placeNav();
 start();  // 不再需要登录
+// Cloudflare WARP 代理（WireGuard）
+let WARP={status:null};
+async function loadWarpPage(){try{
+    WARP.status=await api('/api/warp/status');
+    renderWarp();
+  }catch(e){$('#warp').innerHTML=`<span class="bad small">${esc(e.message)}</span>`}}
+function renderWarp(){const st=WARP.status||{};
+  $('#warp-inst').innerHTML=
+    (st.installed_wg?'<span class="ok">● wireguard-tools</span>':'<span class="bad">● 未装 wireguard-tools</span>')+' '+
+    (st.installed_wgcf?'<span class="ok">● wgcf</span>':'<span class="bad">● 未装 wgcf</span>');
+  $('#warp-inst-hint').classList.toggle('hide',!!(st.installed_wg&&st.installed_wgcf));
+  $('#warp-conn').innerHTML=st.connected?'<span class="ok">● 已连接'+(st.ip?`（${esc(st.ip)}）`:'')+'</span>':'<span class="mut">○ 未连接</span>';
+  $('#warp-disc').classList.toggle('hide',!st.connected);
+  $('#warp-conn-btn').classList.toggle('hide',!!st.connected);
+  $('#warp-setup-btn').classList.toggle('hide',!!st.registered||!st.installed_wgcf);
+  $('#warp-mutex').checked=!!st.mutex;
+  $('#warp-core').innerHTML=st.core_running?'<span class="ok">● 内核运行中</span>':'<span class="mut">○ 内核已停止</span>'}
+async function warpSetup(){if(!confirm('初始化 WARP？\n（wgcf 会向 Cloudflare 注册一个免费账号并生成 WireGuard 配置）'))return;
+  $('#warp-r').innerHTML='<span class="mut">正在注册…</span>';
+  try{const j=await api('/api/warp/setup','POST');
+    $('#warp-r').innerHTML=`<span class="${j.ok?'ok':'bad'}">${esc(j.message)}</span>`;
+    await warpRefresh()}catch(e){$('#warp-r').innerHTML=`<span class="bad">${esc(e.message)}</span>`}}
+async function warpConnect(){if(!confirm('连接 Cloudflare WARP？\n（互斥开关开着时会自动停止内核）'))return;
+  $('#warp-r').innerHTML='<span class="mut">正在连接…</span>';
+  try{const j=await api('/api/warp/connect','POST');WARP.status=j;renderWarp();
+    $('#warp-r').innerHTML=`<span class="${j.ok?'ok':'bad'}">${esc(j.message)}</span>`}
+  catch(e){$('#warp-r').innerHTML=`<span class="bad">${esc(e.message)}</span>`}}
+async function warpDisconnect(){if(!confirm('断开 WARP？\n（内核不会自动重启，需手动启动）'))return;
+  try{const j=await api('/api/warp/disconnect','POST');WARP.status=j;renderWarp();
+    $('#warp-r').innerHTML=`<span class="${j.ok?'ok':'mut'}">${esc(j.message)}</span>`}
+  catch(e){toast(e.message)}}
+async function warpSetMutex(on){try{const j=await api('/api/warp/mutex','POST',{on});WARP.status.mutex=j.mutex}
+  catch(e){toast(e.message);await warpRefresh()}}
+async function warpRefresh(){try{WARP.status=await api('/api/warp/status');renderWarp()}catch(e){}}
 </script>
 </body>
 </html>

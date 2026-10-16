@@ -1,5 +1,11 @@
 # 更新记录与详细说明
 
+## v7.9.0 Cloudflare WARP 代理
+- 新增「WARP」标签页：一键连接/断开 Cloudflare 免费 VPN（WireGuard 协议），替代之前的 OpenVPN 方案
+- 依赖：`apk add wireguard-tools` + wgcf（https://github.com/ViRb3/wgcf/releases）；面板提供"初始化 WARP"按钮自动注册并生成配置
+- WARP 与内核双向互斥（默认开）：WARP 连接时自动停止内核，内核启动时自动断开 WARP；断开 WARP 后内核需手动启动
+- 状态显示：wireguard-tools/wgcf 安装状态、WARP 连接状态、连接后出口 IP、内核运行状态
+
 ## v7.8.0 代理出口归属地补全
 - 原因：归属地以前只直连 ip-api.com 查一次。路由器本机 DNS 指向内核时 ip-api.com 可能被解析成 Fake-IP 直连不通，或撞上 ip-api 免费版每分钟 45 次的限额，代理出口就只有 IP 没有归属地（本地公网的归属地来自 myip.ipip.net，所以不受影响）
 - 现在依次尝试：ip-api.com 直连 → 经内核 mixed 端口 → 备用 ipwho.is；都失败才留空并记入错误日志
