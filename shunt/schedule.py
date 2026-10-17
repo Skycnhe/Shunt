@@ -75,30 +75,39 @@ def sched_event(msg):
     print(time.strftime("%F %T"), "[schedule]", msg, flush=True)
 
 
+def subs_update(names=None, d=None, where=None):
+    """更新订阅（names 为空 = 全部）并刷新地区组：sing-box 由面板下载，mihomo 让核心重新拉取。
+    返回 (成功列表, 失败列表「名称：原因」, 刷新地区组的提示)；给了 where 时刷新地区组出错只记日志不抛出"""
+    d = d or load()
+    if active_core(d) == "singbox":
+        okl, bad = sb_update_subs(names, d)
+    else:
+        okl, bad = [], []
+        for nm in names or [s["name"] for s in d["subs"]]:
+            code, raw = core("PUT", "/providers/proxies/" + quote(nm), timeout=120)
+            if code >= 300:
+                bad.append(nm + "：" + raw.decode(errors="ignore")[:100])
+            else:
+                okl.append(nm)
+    try:
+        _, msg = refresh_regions()
+    except Exception as e:
+        if where is None:
+            raise
+        log_err(where, e)
+        msg = ""
+    return okl, bad, msg
+
+
 def run_task(name):
     d = load()
-    if name == "sub_update" and active_core(d) == "singbox":
-        ok, bad = sb_update_subs(d=d)
-        try:
-            refresh_regions()
-        except Exception as e:
-            log_err("定时任务：刷新地区分组", e)
+    if name == "sub_update":
+        _, bad, _ = subs_update(d=d, where="定时任务：刷新地区分组")
         return not bad, "订阅已更新" if not bad else "以下订阅更新失败：" + "；".join(bad)
     if name == "geo_update" and active_core(d) == "singbox":
         bad = sb_sync_assets(d, force=True)
         ok, msg = reload_core()
         return not bad and ok, "GEO / 规则集已更新" if not bad else "部分规则集更新失败：" + "；".join(bad)[:200]
-    if name == "sub_update":
-        bad = []
-        for s in d["subs"]:
-            code, _ = core("PUT", "/providers/proxies/" + quote(s["name"]), timeout=120)
-            if code >= 300:
-                bad.append(s["name"])
-        try:
-            refresh_regions()
-        except Exception as e:
-            log_err("定时任务：刷新地区分组", e)
-        return not bad, "订阅已更新" if not bad else "以下订阅更新失败：" + "、".join(bad)
     if name == "core_restart":
         if WD["manual_stop"]:  # 用户手动停止了核心：定时重启不能替用户把它拉起来
             return True, "核心已手动停止，跳过定时重启"
@@ -153,8 +162,7 @@ def sched_loop():
                 last = min([sb_sub_cache(s["name"]).get("updated", 0) for s in d["subs"]] or [0])
                 if time.time() - max(last, SCHED["done"].get("sb_subs", 0)) >= iv:
                     SCHED["done"]["sb_subs"] = time.time()
-                    ok_, bad_ = sb_update_subs(d=d)
-                    refresh_regions()
+                    _, bad_, _ = subs_update(d=d)
                     if bad_:
                         sched_event("订阅自动更新：✗ " + "；".join(bad_)[:200])
             bm = bg_meta()

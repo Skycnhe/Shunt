@@ -3,6 +3,7 @@ import ipaddress, json, os, re, shlex, signal, threading, time, urllib.request, 
 
 from .base import (
     AB_DIR, BUILTIN_POLICIES, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, UA, dl_check, wd_hold)
+from .errlog import log_tail
 from .data import auto_name, lb_dropped_names, lb_names, lb_old_name, load, safe, write_json
 from .groups import PROV, gcfg, rx
 from .mihomo import BUILTIN_GEO, build_config, build_rule_providers, dns_cfg, policy_parts, tun_params, write_config
@@ -460,14 +461,7 @@ def core_pid():
 
 def sb_log_error():
     """sing-box 日志里最后一条 FATAL / ERROR"""
-    try:
-        with open(MIHOMO_LOG, "rb") as f:
-            f.seek(0, 2)
-            f.seek(max(0, f.tell() - 16 * 1024))
-            lines = f.read().decode("utf-8", "ignore").splitlines()
-    except OSError:
-        return ""
-    for line in reversed(lines):
+    for line in reversed(log_tail(MIHOMO_LOG) or []):
         if "FATAL" in line or " ERROR " in line:
             return re.sub(r"^(\S+\s+){0,3}(FATAL|ERROR)(\[\d+\])?\s*", "", line.strip())[-200:]
     return ""

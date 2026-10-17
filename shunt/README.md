@@ -21,7 +21,7 @@ python3 tools/build.py --split  # 直接改了 server.py 时，把内嵌源码�
 | 模块 | 内容 |
 |---|---|
 | base | 路径、常量、预设、通用工具 |
-| errlog | 错误记录（log_err，进日志和诊断页） |
+| errlog | 错误记录（log_err，进日志和诊断页）、读日志末尾（log_tail） |
 | data | 数据读写、迁移、组名 |
 | links | 节点链接解析 |
 | groups | 策略组 |

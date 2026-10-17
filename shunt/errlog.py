@@ -22,3 +22,14 @@ def log_err(where, e, tb=False):
         import traceback
         extra = "\n" + "".join(traceback.format_exception(type(e), e, e.__traceback__))[-1500:]
     print(f"[error] {where}: {msg}{extra}", flush=True)
+
+
+def log_tail(path, nbytes=16 * 1024):
+    """读文件末尾 nbytes 字节，按行返回（用于从核心日志里找最近的错误）；读不了返回 None"""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - nbytes))
+            return f.read().decode("utf-8", "ignore").splitlines()
+    except OSError:
+        return None

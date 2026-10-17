@@ -20,8 +20,7 @@ WD_HOLD = {"until": 0.0, "why": ""}  # 面板自己在重启 / 重载核心：�
 
 def wd_hold(sec, why="", reset=False):
     """reset=True：直接改成「从现在起 sec 秒」，用于重启命令返回后缩短暂停期"""
-    import time as _t
-    t = _t.time() + sec
+    t = time.time() + sec
     WD_HOLD["until"] = t if reset else max(WD_HOLD["until"], t)
     WD_HOLD["why"] = why
 
@@ -51,10 +50,9 @@ MASS_MAX_AGE = 300  # 单次测速登记超过 5 分钟视为失效（异常路�
 
 def mass_begin():
     """登记一次全节点测速，返回凭据交给 mass_end。锁内增删，计数不会因并发丢失"""
-    import time as _t
     tok = object()
     with _MASS_LOCK:
-        MASS_TEST["active"][tok] = _t.time()
+        MASS_TEST["active"][tok] = time.time()
         MASS_TEST["n"] = len(MASS_TEST["active"])
     return tok
 
@@ -67,8 +65,7 @@ def mass_end(tok):
 
 def mass_testing(max_age=MASS_MAX_AGE):
     """是否有全节点测速在进行；顺带清掉超时的登记（自愈）"""
-    import time as _t
-    now = _t.time()
+    now = time.time()
     with _MASS_LOCK:
         act = MASS_TEST["active"]
         for tok in [k for k, t0 in act.items() if now - t0 > max_age]:
@@ -85,28 +82,6 @@ def local_file(f):
     return os.path.join(BASE, f)
 
 
-def udp_dns_query(name, port=1053, host="127.0.0.1", timeout=8):
-    """向本机 DNS 端口发一个 A 记录查询；收到同 ID 的应答（含 NXDOMAIN）即视为成功"""
-    qid = secrets.randbits(16)
-    pkt = qid.to_bytes(2, "big") + b"\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
-    for lab in name.strip(".").split("."):
-        b = lab.encode("idna") if lab else b""
-        pkt += bytes([len(b)]) + b
-    pkt += b"\x00\x00\x01\x00\x01"
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.settimeout(timeout)
-    try:
-        s.sendto(pkt, (host, port))
-        end = time.time() + timeout
-        while time.time() < end:
-            data = s.recv(1500)
-            if len(data) >= 12 and int.from_bytes(data[:2], "big") == qid and data[2] & 0x80:
-                return True
-    except Exception:
-        return False
-    finally:
-        s.close()
-    return False
 PANEL_DIR = os.path.dirname(DATA_FILE)
 STATS_FILE = os.path.join(PANEL_DIR, "stats.json")
 NOTIFY_FILE = os.path.join(PANEL_DIR, "notify.json")
@@ -205,7 +180,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "10.2.1"
+PANEL_VERSION = "10.2.2"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -300,3 +275,27 @@ class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
         if url_host_forbidden(newurl, via_proxy=self._via_proxy):
             raise urllib.error.HTTPError(newurl, 403, "重定向目标非公网地址，已拦截（SSRF 防护）", headers, fp)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def udp_dns_query(name, port=1053, host="127.0.0.1", timeout=8):
+    """向本机 DNS 端口发一个 A 记录查询；收到同 ID 的应答（含 NXDOMAIN）即视为成功"""
+    qid = secrets.randbits(16)
+    pkt = qid.to_bytes(2, "big") + b"\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
+    for lab in name.strip(".").split("."):
+        b = lab.encode("idna") if lab else b""
+        pkt += bytes([len(b)]) + b
+    pkt += b"\x00\x00\x01\x00\x01"
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.settimeout(timeout)
+    try:
+        s.sendto(pkt, (host, port))
+        end = time.time() + timeout
+        while time.time() < end:
+            data = s.recv(1500)
+            if len(data) >= 12 and int.from_bytes(data[:2], "big") == qid and data[2] & 0x80:
+                return True
+    except Exception:
+        return False
+    finally:
+        s.close()
+    return False

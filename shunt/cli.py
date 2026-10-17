@@ -41,7 +41,7 @@ def tp_env():
         except ValueError:
             pass
     return (f"B_IP='{','.join(ips)}'\nB_MAC='{','.join(macs)}'\nB_IP6='{','.join(ip6s)}'\n"
-            f"LOCAL6='{','.join(sorted(set(local6)))}'\nIPV6={1 if d.get('ipv6') else 0}\nTPROXY={1 if d.get('tproxy') else 0}\n"
+            f"LOCAL6='{','.join(sorted(set(local6)))}'\nIPV6={1 if d.get('ipv6') else 0}\n"
             f"MODE={d['proxy_mode']}\nDNS_ALL={1 if dns_cfg(d)['block_bypass'] else 0}")
 
 

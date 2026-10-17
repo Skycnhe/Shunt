@@ -52,21 +52,6 @@ def record_one(rec, ok, latency=0):
     return rec
 
 
-def node_level(rec, cfg=None):
-    """节点健康等级：ok / warn / bad / hidden"""
-    cfg = cfg or DEFAULT_CFG
-    if rec.get("hidden"):
-        return "hidden"
-    fail_days = rec.get("fail_days", 0)
-    if fail_days >= cfg.get("hide_days", 7):
-        return "hidden"
-    if fail_days >= cfg.get("warn_days", 3):
-        return "bad"
-    if fail_days > 0:
-        return "warn"
-    return "ok"
-
-
 def apply_results(results, d=None, universe=None):
     """合并一次全量测速结果：{node_name: latency_ms(0=失败)}。
     universe：当前全部节点名；给出时只删除不在其中的节点记录（失败节点保留并计数），

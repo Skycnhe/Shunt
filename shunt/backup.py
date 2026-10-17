@@ -51,11 +51,10 @@ def _parse_name(name):
     return m.group(1) if m else None
 
 
-def create(version=None, auto=False):
-    """创建备份。返回 (ok, name_or_message)。
+def create(version=None):
+    """创建备份，失败不抛异常。返回 (ok, name_or_message)。
 
     version: 打上的版本号，默认当前 PANEL_VERSION。
-    auto: 是否自动备份（更新前调用），失败不抛异常。
     """
     version = version or PANEL_VERSION
     try:
@@ -116,15 +115,23 @@ def list():
     return out
 
 
-def delete(name):
-    """删除指定备份。返回 (ok, message)。"""
+def _backup_path(name):
+    """校验备份文件名并返回 (路径, 错误)：拒绝路径穿越、不是备份格式的名字和不存在的文件"""
     if not name or "/" in name or "\\" in name or ".." in name:
-        return False, "非法文件名"
+        return None, "非法文件名"
     if not _parse_name(name):
-        return False, "不是有效的备份文件"
+        return None, "不是有效的备份文件"
     fp = os.path.join(BACKUP_DIR, name)
     if not os.path.isfile(fp):
-        return False, "备份不存在"
+        return None, "备份不存在"
+    return fp, ""
+
+
+def delete(name):
+    """删除指定备份。返回 (ok, message)。"""
+    fp, err = _backup_path(name)
+    if err:
+        return False, err
     try:
         os.unlink(fp)
         return True, "已删除"
@@ -148,13 +155,9 @@ def restore(name):
     流程：先自动备份当前版本（防呆）→ 解压覆盖 server.py/index.html/data.json。
     恢复 server.py 后需重启面板进程才生效。
     """
-    if not name or "/" in name or "\\" in name or ".." in name:
-        return False, "非法文件名"
-    if not _parse_name(name):
-        return False, "不是有效的备份文件"
-    fp = os.path.join(BACKUP_DIR, name)
-    if not os.path.isfile(fp):
-        return False, "备份不存在"
+    fp, err = _backup_path(name)
+    if err:
+        return False, err
     # 防呆：先备份当前
     ok, cur = create()
     if not ok:

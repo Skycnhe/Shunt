@@ -3,6 +3,7 @@ import ipaddress, os, re, socket, threading, time
 from collections import deque
 
 from .base import LEASE_FILES, MIHOMO_LOG
+from .errlog import log_tail
 from .data import load
 from .stats import arp_table
 from .ruletest import is_ip
@@ -90,15 +91,8 @@ def tun_runtime_error(dev, wait=4):
         if os.path.exists(f"/sys/class/net/{dev}/tun_flags"):  # 必须是 TUN 网卡，避免与 eth0 等同名网卡误判
             return ""
         time.sleep(0.5)
-    try:
-        with open(MIHOMO_LOG, "rb") as f:
-            f.seek(0, 2)
-            f.seek(max(0, f.tell() - 64 * 1024))
-            lines = f.read().decode("utf-8", "ignore").splitlines()
-        for line in reversed(lines):
-            if "TUN" in line and ("error" in line.lower() or "fatal" in line.lower()):
-                m = re.search(r'msg="(.*)"', line)
-                return (m.group(1) if m else line)[-240:]
-    except OSError:
-        pass
+    for line in reversed(log_tail(MIHOMO_LOG, 64 * 1024) or []):
+        if "TUN" in line and ("error" in line.lower() or "fatal" in line.lower()):
+            m = re.search(r'msg="(.*)"', line)
+            return (m.group(1) if m else line)[-240:]
     return f"未检测到网卡 {dev}"

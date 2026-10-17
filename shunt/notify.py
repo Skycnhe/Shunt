@@ -4,6 +4,7 @@ from collections import deque
 from urllib.parse import quote
 
 from .base import CORE_UPD, G_MANUAL, HC, MIHOMO_LOG, NOTIFY_FILE, PANEL_DIR, TPROXY_SH, WD_HOLD, mass_testing
+from .errlog import log_tail
 from .data import load, read_json, write_json
 from .corehttp import core, core_json
 from .sb_common import CORE_PID, CORES, active_core
@@ -94,14 +95,7 @@ def core_proc_alive():
 
 def core_last_error():
     """核心日志末尾 16KB 里最后一条 FATAL / ERROR / panic，写进看门狗事件，便于事后查原因"""
-    try:
-        with open(MIHOMO_LOG, "rb") as f:
-            f.seek(0, 2)
-            f.seek(max(0, f.tell() - 16 * 1024))
-            lines = f.read().decode("utf-8", "ignore").splitlines()
-    except OSError:
-        return ""
-    for line in reversed(lines):
+    for line in reversed(log_tail(MIHOMO_LOG) or []):
         if ("FATAL" in line or " ERROR " in line or "panic:" in line or "level=error" in line or "level=fatal" in line) \
                 and "missing fakeip record" not in line:
             return line.strip()[-160:]

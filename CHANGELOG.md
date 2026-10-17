@@ -1,5 +1,12 @@
 # 更新记录与详细说明
 
+## v10.2.2 代码整理
+- 纯代码整理，**无功能变化**，接口和 data.json 格式不变
+- 合并重复逻辑：sing-box 策略组视图（`sb_group_view`）、读核心日志末尾找错误（`errlog.log_tail`）、更新订阅并刷新地区组（`schedule.subs_update`，手动更新和定时任务共用）、备份文件名校验
+- 删除死代码：`health.node_level`、`devroute.route_targets`、`--tpenv` 里没用到的 `TPROXY=`、`legacy_map` / `migrate_names` 不再使用的参数、`backup.create` 的 `auto` 参数
+- `base` 里去掉多余的 `import time as _t`，`udp_dns_query` 移到常量定义之后
+- 定时更新订阅（mihomo）失败时的提示与手动更新一致，附带失败原因
+
 ## v10.2.1 按设备分流只用 ARP 表
 - 按 MAC 分流不再读取 DHCP 租约：旁路由一般不开 DHCP，设备以旁路由为网关就一定在 ARP 表里，只按 ARP 表（开启 IPv6 时加 IPv6 邻居表）换算 IP
 

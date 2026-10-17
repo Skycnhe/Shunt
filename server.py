@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "10.2.1"
+PANEL_VERSION = "10.2.2"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -115,8 +115,7 @@ WD_HOLD = {"until": 0.0, "why": ""}  # 面板自己在重启 / 重载核心：�
 
 def wd_hold(sec, why="", reset=False):
     """reset=True：直接改成「从现在起 sec 秒」，用于重启命令返回后缩短暂停期"""
-    import time as _t
-    t = _t.time() + sec
+    t = time.time() + sec
     WD_HOLD["until"] = t if reset else max(WD_HOLD["until"], t)
     WD_HOLD["why"] = why
 
@@ -146,10 +145,9 @@ MASS_MAX_AGE = 300  # 单次测速登记超过 5 分钟视为失效（异常路�
 
 def mass_begin():
     """登记一次全节点测速，返回凭据交给 mass_end。锁内增删，计数不会因并发丢失"""
-    import time as _t
     tok = object()
     with _MASS_LOCK:
-        MASS_TEST["active"][tok] = _t.time()
+        MASS_TEST["active"][tok] = time.time()
         MASS_TEST["n"] = len(MASS_TEST["active"])
     return tok
 
@@ -162,8 +160,7 @@ def mass_end(tok):
 
 def mass_testing(max_age=MASS_MAX_AGE):
     """是否有全节点测速在进行；顺带清掉超时的登记（自愈）"""
-    import time as _t
-    now = _t.time()
+    now = time.time()
     with _MASS_LOCK:
         act = MASS_TEST["active"]
         for tok in [k for k, t0 in act.items() if now - t0 > max_age]:
@@ -180,28 +177,6 @@ def local_file(f):
     return os.path.join(BASE, f)
 
 
-def udp_dns_query(name, port=1053, host="127.0.0.1", timeout=8):
-    """向本机 DNS 端口发一个 A 记录查询；收到同 ID 的应答（含 NXDOMAIN）即视为成功"""
-    qid = secrets.randbits(16)
-    pkt = qid.to_bytes(2, "big") + b"\\x01\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00"
-    for lab in name.strip(".").split("."):
-        b = lab.encode("idna") if lab else b""
-        pkt += bytes([len(b)]) + b
-    pkt += b"\\x00\\x00\\x01\\x00\\x01"
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.settimeout(timeout)
-    try:
-        s.sendto(pkt, (host, port))
-        end = time.time() + timeout
-        while time.time() < end:
-            data = s.recv(1500)
-            if len(data) >= 12 and int.from_bytes(data[:2], "big") == qid and data[2] & 0x80:
-                return True
-    except Exception:
-        return False
-    finally:
-        s.close()
-    return False
 PANEL_DIR = os.path.dirname(DATA_FILE)
 STATS_FILE = os.path.join(PANEL_DIR, "stats.json")
 NOTIFY_FILE = os.path.join(PANEL_DIR, "notify.json")
@@ -300,7 +275,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "10.2.1"
+PANEL_VERSION = "10.2.2"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -395,6 +370,30 @@ class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
         if url_host_forbidden(newurl, via_proxy=self._via_proxy):
             raise urllib.error.HTTPError(newurl, 403, "重定向目标非公网地址，已拦截（SSRF 防护）", headers, fp)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def udp_dns_query(name, port=1053, host="127.0.0.1", timeout=8):
+    """向本机 DNS 端口发一个 A 记录查询；收到同 ID 的应答（含 NXDOMAIN）即视为成功"""
+    qid = secrets.randbits(16)
+    pkt = qid.to_bytes(2, "big") + b"\\x01\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00"
+    for lab in name.strip(".").split("."):
+        b = lab.encode("idna") if lab else b""
+        pkt += bytes([len(b)]) + b
+    pkt += b"\\x00\\x00\\x01\\x00\\x01"
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.settimeout(timeout)
+    try:
+        s.sendto(pkt, (host, port))
+        end = time.time() + timeout
+        while time.time() < end:
+            data = s.recv(1500)
+            if len(data) >= 12 and int.from_bytes(data[:2], "big") == qid and data[2] & 0x80:
+                return True
+    except Exception:
+        return False
+    finally:
+        s.close()
+    return False
 '''
 _SRC['shunt.errlog'] = '''"""错误记录：原本被吞掉的异常记到面板日志和「诊断」页"""
 import time
@@ -420,6 +419,17 @@ def log_err(where, e, tb=False):
         import traceback
         extra = "\\n" + "".join(traceback.format_exception(type(e), e, e.__traceback__))[-1500:]
     print(f"[error] {where}: {msg}{extra}", flush=True)
+
+
+def log_tail(path, nbytes=16 * 1024):
+    """读文件末尾 nbytes 字节，按行返回（用于从核心日志里找最近的错误）；读不了返回 None"""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - nbytes))
+            return f.read().decode("utf-8", "ignore").splitlines()
+    except OSError:
+        return None
 '''
 _SRC['shunt.data'] = '''"""数据"""
 import copy, json, os, re, secrets, threading, time
@@ -580,9 +590,8 @@ def region_lb_set():
     return {n for r, _ in REGIONS + [(G_OTHER, None)] for n in lb_names(r)}
 
 
-def legacy_map(st=None):
-    """旧版策略组名 → 新名称。st：旧版「⚖️ X负载均衡」实际用的策略（存在 groups_cfg.strategy，没保存过就是当时的默认一致性哈希），
-    迁移到同策略的组，行为与升级前一致"""
+def legacy_map():
+    """旧版策略组名 → 新名称（地区负载均衡只剩一致性哈希，旧的各种负载均衡组名都迁移到「⚖️ X哈希」）"""
     m = {LEGACY_AUTO: G_AUTO}
     for rname in [r[0] for r in REGIONS] + [G_OTHER]:
         m[rname] = m[rname + AUTO_SUFFIX] = m[auto_name(rname, AUTO_TAIL_OLD)] = auto_name(rname)
@@ -648,8 +657,8 @@ def map_refs(d, mp, drop=()):
     return n
 
 
-def migrate_names(d, st=None):
-    mp = legacy_map(st if st else (d.get("groups_cfg") or {}).get("strategy"))
+def migrate_names(d):
+    mp = legacy_map()
     return map_refs(d, {k: v for k, v in mp.items() if k != v})
 
 
@@ -1285,7 +1294,6 @@ from .groups import NAME_BAD
 
 ROUTES_MAX = 500
 MAC_RX = re.compile(r"([0-9a-f]{2}:){5}[0-9a-f]{2}")
-TARGET_DIRECT, TARGET_REJECT = "DIRECT", "REJECT"
 APPLIED_FILE = os.path.join(PANEL_DIR, "devroute_applied.json")
 SEEN = {}  # mac -> 上次解析到的 IP 列表：设备暂时不在 ARP 表里（休眠）时沿用，不让规则时有时无、核心反复重载
 STATE = {"last": None, "applied": None, "loaded": False}  # last：最近一次生成配置时的 MAC 解析结果；applied：写入正式配置时的
@@ -1445,10 +1453,6 @@ def device_route_rules(d, policies, tables=None):
             used.add(n)
             rules.append(f"SRC-IP-CIDR,{n},{tgt}")
     return rules
-
-
-def route_targets(d):
-    return [e["target"] for e in _entries(d)]
 
 
 def _sig(mapping):
@@ -3436,6 +3440,7 @@ import ipaddress, json, os, re, shlex, signal, threading, time, urllib.request, 
 
 from .base import (
     AB_DIR, BUILTIN_POLICIES, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, UA, dl_check, wd_hold)
+from .errlog import log_tail
 from .data import auto_name, lb_dropped_names, lb_names, lb_old_name, load, safe, write_json
 from .groups import PROV, gcfg, rx
 from .mihomo import BUILTIN_GEO, build_config, build_rule_providers, dns_cfg, policy_parts, tun_params, write_config
@@ -3893,14 +3898,7 @@ def core_pid():
 
 def sb_log_error():
     """sing-box 日志里最后一条 FATAL / ERROR"""
-    try:
-        with open(MIHOMO_LOG, "rb") as f:
-            f.seek(0, 2)
-            f.seek(max(0, f.tell() - 16 * 1024))
-            lines = f.read().decode("utf-8", "ignore").splitlines()
-    except OSError:
-        return ""
-    for line in reversed(lines):
+    for line in reversed(log_tail(MIHOMO_LOG) or []):
         if "FATAL" in line or " ERROR " in line:
             return re.sub(r"^(\\S+\\s+){0,3}(FATAL|ERROR)(\\[\\d+\\])?\\s*", "", line.strip())[-200:]
     return ""
@@ -4489,11 +4487,10 @@ def _parse_name(name):
     return m.group(1) if m else None
 
 
-def create(version=None, auto=False):
-    """创建备份。返回 (ok, name_or_message)。
+def create(version=None):
+    """创建备份，失败不抛异常。返回 (ok, name_or_message)。
 
     version: 打上的版本号，默认当前 PANEL_VERSION。
-    auto: 是否自动备份（更新前调用），失败不抛异常。
     """
     version = version or PANEL_VERSION
     try:
@@ -4554,15 +4551,23 @@ def list():
     return out
 
 
-def delete(name):
-    """删除指定备份。返回 (ok, message)。"""
+def _backup_path(name):
+    """校验备份文件名并返回 (路径, 错误)：拒绝路径穿越、不是备份格式的名字和不存在的文件"""
     if not name or "/" in name or "\\\\" in name or ".." in name:
-        return False, "非法文件名"
+        return None, "非法文件名"
     if not _parse_name(name):
-        return False, "不是有效的备份文件"
+        return None, "不是有效的备份文件"
     fp = os.path.join(BACKUP_DIR, name)
     if not os.path.isfile(fp):
-        return False, "备份不存在"
+        return None, "备份不存在"
+    return fp, ""
+
+
+def delete(name):
+    """删除指定备份。返回 (ok, message)。"""
+    fp, err = _backup_path(name)
+    if err:
+        return False, err
     try:
         os.unlink(fp)
         return True, "已删除"
@@ -4586,13 +4591,9 @@ def restore(name):
     流程：先自动备份当前版本（防呆）→ 解压覆盖 server.py/index.html/data.json。
     恢复 server.py 后需重启面板进程才生效。
     """
-    if not name or "/" in name or "\\\\" in name or ".." in name:
-        return False, "非法文件名"
-    if not _parse_name(name):
-        return False, "不是有效的备份文件"
-    fp = os.path.join(BACKUP_DIR, name)
-    if not os.path.isfile(fp):
-        return False, "备份不存在"
+    fp, err = _backup_path(name)
+    if err:
+        return False, err
     # 防呆：先备份当前
     ok, cur = create()
     if not ok:
@@ -4681,21 +4682,6 @@ def record_one(rec, ok, latency=0):
         rec["fail_days"] = len(dates)
         rec["last_fail"] = int(time.time())
     return rec
-
-
-def node_level(rec, cfg=None):
-    """节点健康等级：ok / warn / bad / hidden"""
-    cfg = cfg or DEFAULT_CFG
-    if rec.get("hidden"):
-        return "hidden"
-    fail_days = rec.get("fail_days", 0)
-    if fail_days >= cfg.get("hide_days", 7):
-        return "hidden"
-    if fail_days >= cfg.get("warn_days", 3):
-        return "bad"
-    if fail_days > 0:
-        return "warn"
-    return "ok"
 
 
 def apply_results(results, d=None, universe=None):
@@ -5906,6 +5892,7 @@ from collections import deque
 from urllib.parse import quote
 
 from .base import CORE_UPD, G_MANUAL, HC, MIHOMO_LOG, NOTIFY_FILE, PANEL_DIR, TPROXY_SH, WD_HOLD, mass_testing
+from .errlog import log_tail
 from .data import load, read_json, write_json
 from .corehttp import core, core_json
 from .sb_common import CORE_PID, CORES, active_core
@@ -5996,14 +5983,7 @@ def core_proc_alive():
 
 def core_last_error():
     """核心日志末尾 16KB 里最后一条 FATAL / ERROR / panic，写进看门狗事件，便于事后查原因"""
-    try:
-        with open(MIHOMO_LOG, "rb") as f:
-            f.seek(0, 2)
-            f.seek(max(0, f.tell() - 16 * 1024))
-            lines = f.read().decode("utf-8", "ignore").splitlines()
-    except OSError:
-        return ""
-    for line in reversed(lines):
+    for line in reversed(log_tail(MIHOMO_LOG) or []):
         if ("FATAL" in line or " ERROR " in line or "panic:" in line or "level=error" in line or "level=fatal" in line) \\
                 and "missing fakeip record" not in line:
             return line.strip()[-160:]
@@ -7613,30 +7593,39 @@ def sched_event(msg):
     print(time.strftime("%F %T"), "[schedule]", msg, flush=True)
 
 
+def subs_update(names=None, d=None, where=None):
+    """更新订阅（names 为空 = 全部）并刷新地区组：sing-box 由面板下载，mihomo 让核心重新拉取。
+    返回 (成功列表, 失败列表「名称：原因」, 刷新地区组的提示)；给了 where 时刷新地区组出错只记日志不抛出"""
+    d = d or load()
+    if active_core(d) == "singbox":
+        okl, bad = sb_update_subs(names, d)
+    else:
+        okl, bad = [], []
+        for nm in names or [s["name"] for s in d["subs"]]:
+            code, raw = core("PUT", "/providers/proxies/" + quote(nm), timeout=120)
+            if code >= 300:
+                bad.append(nm + "：" + raw.decode(errors="ignore")[:100])
+            else:
+                okl.append(nm)
+    try:
+        _, msg = refresh_regions()
+    except Exception as e:
+        if where is None:
+            raise
+        log_err(where, e)
+        msg = ""
+    return okl, bad, msg
+
+
 def run_task(name):
     d = load()
-    if name == "sub_update" and active_core(d) == "singbox":
-        ok, bad = sb_update_subs(d=d)
-        try:
-            refresh_regions()
-        except Exception as e:
-            log_err("定时任务：刷新地区分组", e)
+    if name == "sub_update":
+        _, bad, _ = subs_update(d=d, where="定时任务：刷新地区分组")
         return not bad, "订阅已更新" if not bad else "以下订阅更新失败：" + "；".join(bad)
     if name == "geo_update" and active_core(d) == "singbox":
         bad = sb_sync_assets(d, force=True)
         ok, msg = reload_core()
         return not bad and ok, "GEO / 规则集已更新" if not bad else "部分规则集更新失败：" + "；".join(bad)[:200]
-    if name == "sub_update":
-        bad = []
-        for s in d["subs"]:
-            code, _ = core("PUT", "/providers/proxies/" + quote(s["name"]), timeout=120)
-            if code >= 300:
-                bad.append(s["name"])
-        try:
-            refresh_regions()
-        except Exception as e:
-            log_err("定时任务：刷新地区分组", e)
-        return not bad, "订阅已更新" if not bad else "以下订阅更新失败：" + "、".join(bad)
     if name == "core_restart":
         if WD["manual_stop"]:  # 用户手动停止了核心：定时重启不能替用户把它拉起来
             return True, "核心已手动停止，跳过定时重启"
@@ -7691,8 +7680,7 @@ def sched_loop():
                 last = min([sb_sub_cache(s["name"]).get("updated", 0) for s in d["subs"]] or [0])
                 if time.time() - max(last, SCHED["done"].get("sb_subs", 0)) >= iv:
                     SCHED["done"]["sb_subs"] = time.time()
-                    ok_, bad_ = sb_update_subs(d=d)
-                    refresh_regions()
+                    _, bad_, _ = subs_update(d=d)
                     if bad_:
                         sched_event("订阅自动更新：✗ " + "；".join(bad_)[:200])
             bm = bg_meta()
@@ -7744,6 +7732,7 @@ import ipaddress, os, re, socket, threading, time
 from collections import deque
 
 from .base import LEASE_FILES, MIHOMO_LOG
+from .errlog import log_tail
 from .data import load
 from .stats import arp_table
 from .ruletest import is_ip
@@ -7831,17 +7820,10 @@ def tun_runtime_error(dev, wait=4):
         if os.path.exists(f"/sys/class/net/{dev}/tun_flags"):  # 必须是 TUN 网卡，避免与 eth0 等同名网卡误判
             return ""
         time.sleep(0.5)
-    try:
-        with open(MIHOMO_LOG, "rb") as f:
-            f.seek(0, 2)
-            f.seek(max(0, f.tell() - 64 * 1024))
-            lines = f.read().decode("utf-8", "ignore").splitlines()
-        for line in reversed(lines):
-            if "TUN" in line and ("error" in line.lower() or "fatal" in line.lower()):
-                m = re.search(r'msg="(.*)"', line)
-                return (m.group(1) if m else line)[-240:]
-    except OSError:
-        pass
+    for line in reversed(log_tail(MIHOMO_LOG, 64 * 1024) or []):
+        if "TUN" in line and ("error" in line.lower() or "fatal" in line.lower()):
+            m = re.search(r'msg="(.*)"', line)
+            return (m.group(1) if m else line)[-240:]
     return f"未检测到网卡 {dev}"
 '''
 _SRC['shunt.diag'] = '''"""网络诊断"""
@@ -8485,7 +8467,7 @@ import os, time
 from urllib.parse import quote
 
 from .base import CONF_DIR, PANEL_DIR
-from .data import legacy_map, load, read_json, write_json
+from .data import legacy_map, read_json, write_json
 from .core import reload_core
 from .corehttp import core, core_json
 from .sb_common import active_core
@@ -8510,7 +8492,7 @@ def restore_selections():
     sel = read_json(SEL_FILE, None)
     if not sel:
         return 0
-    mp = legacy_map(load()["groups_cfg"].get("strategy"))
+    mp = legacy_map()
     proxies = (core_json("/proxies", timeout=5) or {}).get("proxies") or {}
     n = 0
     for g, now in sel.items():
@@ -8886,7 +8868,7 @@ from .logstream import core_stream, ticket_new, ticket_use
 from .adblock import AB_CACHE, AB_STATE, ab_check, ab_compose, ab_meta, adblock_update, fmt_size, list_id, parse_filter
 from .live import LIVE, memory_once
 from .logclean import LOG_STATE, log_clean, log_sizes
-from .schedule import SCHED, TASK_NAMES, run_task, sched_event
+from .schedule import SCHED, TASK_NAMES, run_task, sched_event, subs_update
 from .devices import device_map, read_leases, tun_runtime_error
 from .diag import diagnose
 from .dnsleak import antileak_dns, dns_route, leak_check
@@ -9133,6 +9115,18 @@ def ad_today():
     return adblock.AD_STATS.today() if adblock.AD_STATS else 0
 
 
+def sb_group_view(groups, meta):
+    """sing-box 下的策略组视图：地区负载均衡并入自动优选（从名单和 meta 里去掉），
+    负载均衡 / 故障转移按自动测速运行（meta 改标 url-test，sb_from 记原类型）。原地修改 meta，返回过滤后的组名单"""
+    lbs = region_lb_set()
+    for n in list(meta):
+        if n in lbs:
+            meta.pop(n)
+        elif meta[n]["type"] in ("load-balance", "fallback"):
+            meta[n].update(sb_from=meta[n]["type"], type="url-test")
+    return [g for g in groups if g not in lbs]
+
+
 def state_groups(d):
     """/api/state 的策略组名单与元数据。按（配置版本, 订阅节点名单版本）缓存：订阅下载完成、节点增删后地区组会变，
     只按配置版本缓存会让「目标策略」下拉框一直缺新地区组。生成失败时返回空名单（记日志），不让整个面板 500"""
@@ -9145,14 +9139,8 @@ def state_groups(d):
         cfg = build_config(d)
         groups = [g["name"] for g in cfg["proxy-groups"]]
         gmeta = group_meta(d, cfg)
-        if active_core(d) == "singbox":  # 地区负载均衡并入自动优选；负载均衡 / 故障转移按自动测速运行
-            lbs = region_lb_set()
-            groups = [g for g in groups if g not in lbs]
-            for n, mt in list(gmeta.items()):
-                if n in lbs:
-                    gmeta.pop(n)
-                elif mt["type"] in ("load-balance", "fallback"):
-                    mt.update(sb_from=mt["type"], type="url-test")
+        if active_core(d) == "singbox":
+            groups = sb_group_view(groups, gmeta)
     except Exception as e:
         log_err("/api/state：生成策略组", e, tb=True)
         return [], {}
@@ -9599,14 +9587,8 @@ class H(BaseHTTPRequestHandler):
         gnames = [g["name"] for g in cfg["proxy-groups"]]
         meta = group_meta(d, cfg)
         sb = active_core(d) == "singbox"
-        if sb:  # sing-box：地区负载均衡并入自动优选，自定义负载均衡 / 故障转移按自动测速运行
-            lbs = region_lb_set()
-            gnames = [g for g in gnames if g not in lbs]
-            for n in list(meta):
-                if n in lbs:
-                    meta.pop(n)
-                elif meta[n]["type"] in ("load-balance", "fallback"):
-                    meta[n].update(sb_from=meta[n]["type"], type="url-test")
+        if sb:
+            gnames = sb_group_view(gnames, meta)
         regions = [{"name": r[0], "total": r[4], "manual": len(r[3]), "unknown": r[5],
                     "groups": [g for g in gnames if g in [auto_name(r[0])] + lb_names(r[0])]} for r in plan]
         sel = next((g.get("proxies") or [] for g in cfg["proxy-groups"] if g["name"] == G_SEL), [])
@@ -10010,19 +9992,11 @@ class H(BaseHTTPRequestHandler):
     @api_route("/api/subs/update", "POST")
     def api_subs_update_post(self, m, p, b, q):
         name = b.get("name") or ""
-        names = [s["name"] for s in load()["subs"]] if not name else [name]
-        if active_core() == "singbox":
-            okl, bad = sb_update_subs(names)
-            ok2, msg2 = refresh_regions()
-            msg = ("已更新：" + "；".join(okl) if not bad else "更新失败：" + "；".join(bad)) + ("；" + msg2 if msg2 and "无变化" not in msg2 else "")
-            return self.reply(not bad, msg)
-        bad = []
-        for nm in names:
-            code, raw = core("PUT", "/providers/proxies/" + quote(nm), timeout=120)
-            if code >= 300:
-                bad.append(nm + "：" + raw.decode(errors="ignore")[:100])
-        ok2, msg2 = refresh_regions()
-        msg = ("已更新" if not bad else "更新失败：" + "；".join(bad)) + ("；" + msg2 if msg2 and "无变化" not in msg2 else "")
+        d = load()
+        sb = active_core(d) == "singbox"
+        okl, bad, msg2 = subs_update([name] if name else None, d)
+        msg = ("更新失败：" + "；".join(bad) if bad else "已更新：" + "；".join(okl) if sb else "已更新") \\
+            + ("；" + msg2 if msg2 and "无变化" not in msg2 else "")
         return self.reply(not bad, msg)
 
     @api_route("/api/stats", "GET")
@@ -10532,7 +10506,7 @@ def tp_env():
         except ValueError:
             pass
     return (f"B_IP='{','.join(ips)}'\\nB_MAC='{','.join(macs)}'\\nB_IP6='{','.join(ip6s)}'\\n"
-            f"LOCAL6='{','.join(sorted(set(local6)))}'\\nIPV6={1 if d.get('ipv6') else 0}\\nTPROXY={1 if d.get('tproxy') else 0}\\n"
+            f"LOCAL6='{','.join(sorted(set(local6)))}'\\nIPV6={1 if d.get('ipv6') else 0}\\n"
             f"MODE={d['proxy_mode']}\\nDNS_ALL={1 if dns_cfg(d)['block_bypass'] else 0}")
 
 

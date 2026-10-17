@@ -157,9 +157,8 @@ def region_lb_set():
     return {n for r, _ in REGIONS + [(G_OTHER, None)] for n in lb_names(r)}
 
 
-def legacy_map(st=None):
-    """旧版策略组名 → 新名称。st：旧版「⚖️ X负载均衡」实际用的策略（存在 groups_cfg.strategy，没保存过就是当时的默认一致性哈希），
-    迁移到同策略的组，行为与升级前一致"""
+def legacy_map():
+    """旧版策略组名 → 新名称（地区负载均衡只剩一致性哈希，旧的各种负载均衡组名都迁移到「⚖️ X哈希」）"""
     m = {LEGACY_AUTO: G_AUTO}
     for rname in [r[0] for r in REGIONS] + [G_OTHER]:
         m[rname] = m[rname + AUTO_SUFFIX] = m[auto_name(rname, AUTO_TAIL_OLD)] = auto_name(rname)
@@ -225,8 +224,8 @@ def map_refs(d, mp, drop=()):
     return n
 
 
-def migrate_names(d, st=None):
-    mp = legacy_map(st if st else (d.get("groups_cfg") or {}).get("strategy"))
+def migrate_names(d):
+    mp = legacy_map()
     return map_refs(d, {k: v for k, v in mp.items() if k != v})
 
 

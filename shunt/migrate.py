@@ -3,7 +3,7 @@ import os, time
 from urllib.parse import quote
 
 from .base import CONF_DIR, PANEL_DIR
-from .data import legacy_map, load, read_json, write_json
+from .data import legacy_map, read_json, write_json
 from .core import reload_core
 from .corehttp import core, core_json
 from .sb_common import active_core
@@ -28,7 +28,7 @@ def restore_selections():
     sel = read_json(SEL_FILE, None)
     if not sel:
         return 0
-    mp = legacy_map(load()["groups_cfg"].get("strategy"))
+    mp = legacy_map()
     proxies = (core_json("/proxies", timeout=5) or {}).get("proxies") or {}
     n = 0
     for g, now in sel.items():

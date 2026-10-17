@@ -11,7 +11,6 @@ from .groups import NAME_BAD
 
 ROUTES_MAX = 500
 MAC_RX = re.compile(r"([0-9a-f]{2}:){5}[0-9a-f]{2}")
-TARGET_DIRECT, TARGET_REJECT = "DIRECT", "REJECT"
 APPLIED_FILE = os.path.join(PANEL_DIR, "devroute_applied.json")
 SEEN = {}  # mac -> 上次解析到的 IP 列表：设备暂时不在 ARP 表里（休眠）时沿用，不让规则时有时无、核心反复重载
 STATE = {"last": None, "applied": None, "loaded": False}  # last：最近一次生成配置时的 MAC 解析结果；applied：写入正式配置时的
@@ -171,10 +170,6 @@ def device_route_rules(d, policies, tables=None):
             used.add(n)
             rules.append(f"SRC-IP-CIDR,{n},{tgt}")
     return rules
-
-
-def route_targets(d):
-    return [e["target"] for e in _entries(d)]
 
 
 def _sig(mapping):

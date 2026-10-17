@@ -36,7 +36,7 @@ from .logstream import core_stream, ticket_new, ticket_use
 from .adblock import AB_CACHE, AB_STATE, ab_check, ab_compose, ab_meta, adblock_update, fmt_size, list_id, parse_filter
 from .live import LIVE, memory_once
 from .logclean import LOG_STATE, log_clean, log_sizes
-from .schedule import SCHED, TASK_NAMES, run_task, sched_event
+from .schedule import SCHED, TASK_NAMES, run_task, sched_event, subs_update
 from .devices import device_map, read_leases, tun_runtime_error
 from .diag import diagnose
 from .dnsleak import antileak_dns, dns_route, leak_check
@@ -283,6 +283,18 @@ def ad_today():
     return adblock.AD_STATS.today() if adblock.AD_STATS else 0
 
 
+def sb_group_view(groups, meta):
+    """sing-box 下的策略组视图：地区负载均衡并入自动优选（从名单和 meta 里去掉），
+    负载均衡 / 故障转移按自动测速运行（meta 改标 url-test，sb_from 记原类型）。原地修改 meta，返回过滤后的组名单"""
+    lbs = region_lb_set()
+    for n in list(meta):
+        if n in lbs:
+            meta.pop(n)
+        elif meta[n]["type"] in ("load-balance", "fallback"):
+            meta[n].update(sb_from=meta[n]["type"], type="url-test")
+    return [g for g in groups if g not in lbs]
+
+
 def state_groups(d):
     """/api/state 的策略组名单与元数据。按（配置版本, 订阅节点名单版本）缓存：订阅下载完成、节点增删后地区组会变，
     只按配置版本缓存会让「目标策略」下拉框一直缺新地区组。生成失败时返回空名单（记日志），不让整个面板 500"""
@@ -295,14 +307,8 @@ def state_groups(d):
         cfg = build_config(d)
         groups = [g["name"] for g in cfg["proxy-groups"]]
         gmeta = group_meta(d, cfg)
-        if active_core(d) == "singbox":  # 地区负载均衡并入自动优选；负载均衡 / 故障转移按自动测速运行
-            lbs = region_lb_set()
-            groups = [g for g in groups if g not in lbs]
-            for n, mt in list(gmeta.items()):
-                if n in lbs:
-                    gmeta.pop(n)
-                elif mt["type"] in ("load-balance", "fallback"):
-                    mt.update(sb_from=mt["type"], type="url-test")
+        if active_core(d) == "singbox":
+            groups = sb_group_view(groups, gmeta)
     except Exception as e:
         log_err("/api/state：生成策略组", e, tb=True)
         return [], {}
@@ -749,14 +755,8 @@ class H(BaseHTTPRequestHandler):
         gnames = [g["name"] for g in cfg["proxy-groups"]]
         meta = group_meta(d, cfg)
         sb = active_core(d) == "singbox"
-        if sb:  # sing-box：地区负载均衡并入自动优选，自定义负载均衡 / 故障转移按自动测速运行
-            lbs = region_lb_set()
-            gnames = [g for g in gnames if g not in lbs]
-            for n in list(meta):
-                if n in lbs:
-                    meta.pop(n)
-                elif meta[n]["type"] in ("load-balance", "fallback"):
-                    meta[n].update(sb_from=meta[n]["type"], type="url-test")
+        if sb:
+            gnames = sb_group_view(gnames, meta)
         regions = [{"name": r[0], "total": r[4], "manual": len(r[3]), "unknown": r[5],
                     "groups": [g for g in gnames if g in [auto_name(r[0])] + lb_names(r[0])]} for r in plan]
         sel = next((g.get("proxies") or [] for g in cfg["proxy-groups"] if g["name"] == G_SEL), [])
@@ -1160,19 +1160,11 @@ class H(BaseHTTPRequestHandler):
     @api_route("/api/subs/update", "POST")
     def api_subs_update_post(self, m, p, b, q):
         name = b.get("name") or ""
-        names = [s["name"] for s in load()["subs"]] if not name else [name]
-        if active_core() == "singbox":
-            okl, bad = sb_update_subs(names)
-            ok2, msg2 = refresh_regions()
-            msg = ("已更新：" + "；".join(okl) if not bad else "更新失败：" + "；".join(bad)) + ("；" + msg2 if msg2 and "无变化" not in msg2 else "")
-            return self.reply(not bad, msg)
-        bad = []
-        for nm in names:
-            code, raw = core("PUT", "/providers/proxies/" + quote(nm), timeout=120)
-            if code >= 300:
-                bad.append(nm + "：" + raw.decode(errors="ignore")[:100])
-        ok2, msg2 = refresh_regions()
-        msg = ("已更新" if not bad else "更新失败：" + "；".join(bad)) + ("；" + msg2 if msg2 and "无变化" not in msg2 else "")
+        d = load()
+        sb = active_core(d) == "singbox"
+        okl, bad, msg2 = subs_update([name] if name else None, d)
+        msg = ("更新失败：" + "；".join(bad) if bad else "已更新：" + "；".join(okl) if sb else "已更新") \
+            + ("；" + msg2 if msg2 and "无变化" not in msg2 else "")
         return self.reply(not bad, msg)
 
     @api_route("/api/stats", "GET")
