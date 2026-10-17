@@ -2,6 +2,7 @@
 import os, threading, time
 
 from .base import CONF_DIR, LOCK, wd_hold
+from .errlog import log_err
 from .corehttp import core, core_json
 from .data import load, read_json, save
 from .groups import provider_nodes
@@ -35,7 +36,41 @@ def conns_snapshot(timeout=5, ttl=2):
 
 
 def reload_core(prev=None):
-    """写配置 → mihomo -t 校验 → 热重载；校验失败时回滚 data.json"""
+    """写配置 → mihomo -t / sing-box check 校验 → 热重载。
+
+    prev（修改前的 data.json）给出时，任何一步失败都回滚到它：校验失败、生成配置抛异常（如残缺的规则集）、
+    mihomo 热重载被拒、sing-box 重载后起不来。坏数据不会留在 data.json 里让 /api/state 一直 500"""
+    try:
+        return _reload_core(prev)
+    except Exception as e:
+        log_err("重载核心配置", e, tb=True)
+        for p in (os.path.join(CONF_DIR, "config.yaml.new"), SB_CONF + ".new"):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        if prev is None:
+            return False, "生成配置失败：" + str(e)[:300]
+        _rollback(prev)
+        return False, "生成配置失败，已撤销本次修改：" + str(e)[:300]
+
+
+def _rollback(prev, sb=None):
+    """data.json 恢复为 prev，并按它重写当前内核的配置文件；返回 (内核是否 sing-box, 配置路径)"""
+    with LOCK:
+        save(prev)
+        d = load()
+        if sb is None:
+            sb = active_core(d) == "singbox"
+        final = SB_CONF if sb else os.path.join(CONF_DIR, "config.yaml")
+        try:
+            (write_sb_config if sb else write_config)(d, final)
+        except Exception as e:  # 旧数据本身也生成不了：保留磁盘上原来的配置文件
+            log_err("回滚后重写配置", e)
+    return sb, final
+
+
+def _reload_core(prev):
     with LOCK:
         d = load()
         sb = active_core(d) == "singbox"
@@ -65,9 +100,7 @@ def reload_core(prev=None):
         ok, msg = sb_hot_reload()
         if not ok and prev is not None:  # 配置能通过 sing-box check 但运行时启动失败（如内核缺少模块）：撤销并恢复
             tail = sb_log_error()
-            with LOCK:
-                save(prev)
-                write_sb_config(load(), SB_CONF)
+            _rollback(prev, sb=True)
             svc_restart(timeout=90)
             return False, "sing-box 启动失败，已撤销本次修改" + ("：" + tail if tail else "")
         return ok, msg
@@ -76,7 +109,15 @@ def reload_core(prev=None):
     if code == 502:  # 核心没在跑，尝试启动
         svc_restart()
         return True, "已写入配置并重启 mihomo"
-    return code < 300, body.decode(errors="ignore") or "配置已重载"
+    text = body.decode(errors="ignore") if isinstance(body, (bytes, bytearray)) else str(body or "")
+    if code >= 300:
+        if prev is None:
+            return False, text or f"mihomo 重载失败（{code}）"
+        # 核心拒绝了新配置、还在跑旧配置：data.json 和 config.yaml 也退回去，界面与实际生效的配置保持一致
+        _, final = _rollback(prev, sb=False)
+        core("PUT", "/configs?force=true", {"path": final}, timeout=30)
+        return False, "mihomo 重载失败，已撤销本次修改：" + (text[:300] or str(code))
+    return True, text or "配置已重载"
 
 
 def group_sig(cfg):

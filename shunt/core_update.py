@@ -4,7 +4,7 @@ from collections import deque
 from urllib.parse import quote
 
 from .errlog import log_err
-from .base import CONF_DIR, CORE_UPD, LGBM_URL, MIHOMO_LOG, UA, UPD_STATE, dl_check
+from .base import CONF_DIR, CORE_UPD, LGBM_URL, MIHOMO_LOG, UA, dl_check, upd_begin, upd_busy_msg
 from .data import load
 from .mihomo import mh_bin, write_config
 from .core import reload_core
@@ -298,9 +298,9 @@ def core_rollback_job(kind="mihomo"):
 
 
 def core_job_start(fn, *args):
-    if CORE_UPD["busy"] or UPD_STATE["busy"]:
-        return False, "正在更新中，请稍候"
-    CORE_UPD.update(busy=True, stage="开始", pct=0, ok=None, message="", t=int(time.time()))
+    if not upd_begin("core"):  # 锁内检查并置忙：与面板更新、其他内核任务互斥
+        return False, upd_busy_msg()
+    CORE_UPD.update(stage="开始", pct=0, ok=None, message="", t=int(time.time()))
     CORE_UPD["log"].clear()
     threading.Thread(target=fn, args=args, daemon=True).start()
     return True, "已开始"

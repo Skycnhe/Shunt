@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "10.1.1"
+PANEL_VERSION = "10.1.2"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -27,6 +27,7 @@ MODULES = [
     "ruleutil",
     "groups",
     "mihomo",
+    "validate",
     "core",
     "corehttp",
     "sb_common",
@@ -119,6 +120,23 @@ def wd_hold(sec, why="", reset=False):
 
 
 CORE_UPD = {"busy": False, "stage": "", "pct": 0, "ok": None, "message": "", "log": deque(maxlen=30), "t": 0}  # 内核更新状态：core_update 与 notify 共用
+_UPD_LOCK = threading.Lock()
+
+
+def upd_begin(kind):
+    """面板更新 / 内核更新（含切换、回滚）互斥：在锁内「检查 + 置忙」一步完成，双击或多标签页同时点也只有一个能进。
+    kind="panel" 置 UPD_STATE，其余置 CORE_UPD；两者任一在忙都返回 False。结束时由调用方把对应的 busy 置回 False"""
+    with _UPD_LOCK:
+        if UPD_STATE["busy"] or CORE_UPD["busy"]:
+            return False
+        (UPD_STATE if kind == "panel" else CORE_UPD)["busy"] = True
+        return True
+
+
+def upd_busy_msg():
+    return "内核正在更新或切换，请稍后再试" if CORE_UPD["busy"] else "面板正在更新，请稍后再试"
+
+
 MASS_TEST = {"n": 0}  # 进行中的全节点测速（/group/*/delay）计数：corehttp 置位，notify 看门狗据此暂停故障判定，避免高负载误判
 
 
@@ -250,7 +268,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "10.1.1"
+PANEL_VERSION = "10.1.2"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -383,13 +401,20 @@ OLD_PW_KEYS = ("password", "pw_hash", "pw_default")
 
 
 def load():
+    """返回 data.json 的一份独立副本（调用方可随意修改）。
+
+    缓存的是规范化后的 JSON 文本，命中时 json.loads 一次（比 deepcopy 整份配置快约 4 倍）。
+    缓存项 (键, 代数, 文本) 用一个元组一次写入，读者不会拿到「新键 + 旧数据」；
+    键在读文件之前取（内容只会比键新，最多多一次未命中），save() 自增代数，同一 mtime 内的进程内写入也会失效"""
     _fix_legacy_perms()
     key = _data_key()
-    if key is not None and _DATA_CACHE.get("key") == key and _DATA_CACHE.get("data") is not None:
-        return copy.deepcopy(_DATA_CACHE["data"])
+    gen = _DATA_GEN[0]
+    v = _DATA_CACHE.get("v")
+    if key is not None and v is not None and v[0] == key and v[1] == gen:
+        return json.loads(v[2])
     d = _load_uncached()
-    _DATA_CACHE["key"] = key
-    _DATA_CACHE["data"] = copy.deepcopy(d)
+    if key is not None:
+        _DATA_CACHE["v"] = (key, gen, json.dumps(d, ensure_ascii=False))
     return d
 
 
@@ -402,7 +427,8 @@ def _data_key():
         return None
 
 
-_DATA_CACHE = {}
+_DATA_CACHE = {}  # {"v": (键, 代数, 规范化 JSON 文本)}
+_DATA_GEN = [0]  # save() 自增：让进程内的写入一定使缓存失效（不依赖 mtime 精度）
 
 
 def _fix_legacy_perms():
@@ -606,6 +632,8 @@ def save(d):
     os.chmod(tmp, 0o600)
     os.replace(tmp, DATA_FILE)
     with LOCK:  # RLock 可重入：调用方可能已持有
+        _DATA_GEN[0] += 1
+        _DATA_CACHE.pop("v", None)
         _CONFIG_VERSION[0] += 1
 
 
@@ -614,7 +642,7 @@ def update(fn):
     history.json 的全量读+写移到 LOCK 外（另用 _HISTORY_LOCK 保证原子），避免大快照拖慢写配置并阻塞其他 API。"""
     with LOCK:
         d = load()
-        prev = copy.deepcopy(d)
+        prev = load()  # load() 每次返回独立副本，比 deepcopy 快
         fn(d)
         save(d)
     try:
@@ -630,7 +658,7 @@ _HISTORY_LOCK = threading.Lock()  # history.json 读-改-写原子性（update �
 
 HISTORY_FILE = os.path.join(PANEL_DIR, "history.json")
 HISTORY_MAX = 10
-HISTORY_SKIP = {"tests_rev", "core", "secret", "devices", "https", "schema", "sysopt", "sysopt_orig", "sysopt_mods"}
+HISTORY_SKIP = {"tests_rev", "core", "secret", "devices", "https", "schema", "sysopt", "sysopt_orig", "sysopt_mods", "health", "health_cfg"}
 KEY_LABEL = {"subs": "订阅", "nodes": "节点", "rules": "自定义规则", "rulesets": "规则集", "dns": "DNS", "adblock": "广告拦截",
              "custom_groups": "自定义策略组", "groups_cfg": "地区分组", "region_groups": "地区分组", "proxy_mode": "代理方式",
              "tun": "TUN", "ipv6": "IPv6", "bypass": "绕过设备", "mode": "代理模式", "sniffer": "域名嗅探", "schedule": "定时任务",
@@ -1031,7 +1059,7 @@ from .data import load, read_json, safe, write_json
 from .links import reserved_names
 from .sb_common import SB_SUB_DIR, active_core
 PROV_FILE = os.path.join(PANEL_DIR, "provider_nodes.json")
-PROV = {"t": 0, "data": None}
+PROV = {"t": 0, "data": None, "rev": 0}  # rev：订阅节点名单每变化一次加一（/api/state 的策略组缓存键、/api/ping 版本号用）
 RX_CACHE = {}
 
 
@@ -1082,7 +1110,7 @@ def provider_nodes(fresh=False):
     data = None
     if active_core() == "singbox":  # sing-box 的订阅由面板下载解析，节点名直接取缓存
         data = sb_provider_nodes(load())
-        PROV.update(t=now, data=data)
+        _prov_set(now, data)
         return data
     j = None if os.environ.get("PANEL_OFFLINE") else core_json("/providers/proxies", timeout=3)
     if j is not None:
@@ -1097,8 +1125,19 @@ def provider_nodes(fresh=False):
                 log_err("保存订阅节点列表", e)
     if data is None:
         data = read_json(PROV_FILE, {})
-    PROV.update(t=now, data=data)
+    _prov_set(now, data)
     return data
+
+
+def _prov_set(now, data):
+    if PROV["data"] is not None and data != PROV["data"]:
+        PROV["rev"] += 1
+    PROV.update(t=now, data=data)
+
+
+def provider_rev():
+    """订阅节点名单的版本：节点增删 / 改名后变化"""
+    return PROV["rev"]
 
 
 def gcfg(d):
@@ -1653,10 +1692,270 @@ def check_config(path, kind=None):
     return False, "\\n".join(lines[-3:]) or out[-400:]
 
 '''
+_SRC['shunt.validate'] = '''"""/api/settings、/api/restore 的数据形状校验：残缺或类型不对的条目返回 400，不写进 data.json。
+
+data.json 里一条坏数据（规则集缺 url、节点缺 proxy、绕过列表混入数字……）会让生成配置抛异常，
+之后每次 /api/state 都 500，面板等于「变砖」。这里只查形状与取值范围，策略组引用等语义检查仍在各接口里做。"""
+import ipaddress, re
+
+from .base import DNS_LISTS, G_SEL, PROXY_MODES
+from .groups import NAME_BAD, clean_custom_group
+
+RS_BEHAVIORS = ("domain", "ipcidr", "classical")
+RS_FORMATS = ("yaml", "text", "mrs")
+MAC_RX = re.compile(r"([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}")
+URL_RX = re.compile(r"^https?://\\S+$")
+LIST_MAX = 20000
+
+
+def _list(v, label):
+    if not isinstance(v, list):
+        raise ValueError(f"{label}应为列表")
+    if len(v) > LIST_MAX:
+        raise ValueError(f"{label}条目过多")
+    return v
+
+
+def _str(v, label, empty=False):
+    if not isinstance(v, str):
+        raise ValueError(f"{label}应为文本")
+    v = v.strip()
+    if not v and not empty:
+        raise ValueError(f"{label}不能为空")
+    return v
+
+
+def _url(v, label):
+    v = _str(v, label)
+    if not URL_RX.match(v):
+        raise ValueError(f"{label}应为 http(s) 地址：{v[:80]}")
+    return v
+
+
+def clean_rulesets(v):
+    out, seen = [], set()
+    for i, r in enumerate(_list(v, "规则集")):
+        if not isinstance(r, dict):
+            raise ValueError(f"规则集第 {i + 1} 项格式不正确")
+        name = _str(r.get("name"), f"规则集第 {i + 1} 项的名称")
+        if NAME_BAD.search(name) or len(name) > 60:
+            raise ValueError(f"规则集名称不能含逗号、# 或引号，且不超过 60 字：{name}")
+        if name in seen:
+            raise ValueError(f"规则集重名：{name}")
+        seen.add(name)
+        rs = {"name": name, "url": _url(r.get("url"), f"规则集「{name}」的地址")}
+        beh, fmt = r.get("behavior", "domain"), r.get("format", "yaml")
+        if beh not in RS_BEHAVIORS:
+            raise ValueError(f"规则集「{name}」的类型只能是 " + " / ".join(RS_BEHAVIORS))
+        if fmt not in RS_FORMATS:
+            raise ValueError(f"规则集「{name}」的格式只能是 " + " / ".join(RS_FORMATS))
+        rs.update(behavior=beh, format=fmt, target=_str(r.get("target") or G_SEL, f"规则集「{name}」的目标策略"))
+        out.append(rs)
+    return out
+
+
+def bypass_ok(x):
+    if MAC_RX.fullmatch(x):
+        return True
+    try:
+        ipaddress.ip_network(x, strict=False)
+        return True
+    except ValueError:
+        return False
+
+
+def clean_bypass(v):
+    out = []
+    for x in _list(v, "绕过设备"):
+        x = _str(x, "绕过设备的条目", empty=True)
+        if not x:
+            continue
+        if not bypass_ok(x):
+            raise ValueError(f"绕过设备只能填 IP、网段或 MAC 地址：{x[:60]}")
+        out.append(x)
+    return out
+
+
+def clean_tests(v):
+    out = []
+    for i, t in enumerate(_list(v, "延迟站点")):
+        if not isinstance(t, dict):
+            raise ValueError(f"延迟站点第 {i + 1} 项格式不正确")
+        name = _str(t.get("name"), f"延迟站点第 {i + 1} 项的名称")
+        out.append({"name": name[:40], "url": _url(t.get("url"), f"延迟站点「{name}」的网址")})
+    if not out:
+        raise ValueError("延迟站点不能为空")
+    return out
+
+
+def clean_rules(v):
+    out = []
+    for x in _list(v, "自定义规则"):
+        x = _str(x, "自定义规则", empty=True)
+        if "\\n" in x or "\\r" in x:
+            raise ValueError("自定义规则不能含换行")
+        if x:
+            out.append(x)
+    return out
+
+
+def clean_subs(v):
+    seen = set()
+    for i, s in enumerate(_list(v, "订阅")):
+        if not isinstance(s, dict):
+            raise ValueError(f"订阅第 {i + 1} 项格式不正确")
+        name = _str(s.get("name"), f"订阅第 {i + 1} 项的名称")
+        if name in seen:
+            raise ValueError(f"订阅重名：{name}")
+        seen.add(name)
+        _url(s.get("url"), f"订阅「{name}」的地址")
+        for k in ("filter", "exclude"):
+            if s.get(k) is not None and not isinstance(s[k], str):
+                raise ValueError(f"订阅「{name}」的 {k} 应为文本")
+    return v
+
+
+def clean_nodes(v):
+    for i, n in enumerate(_list(v, "节点")):
+        p = n.get("proxy") if isinstance(n, dict) else None
+        if not isinstance(p, dict):
+            raise ValueError(f"节点第 {i + 1} 项缺少 proxy")
+        name = _str(p.get("name"), f"节点第 {i + 1} 项的名称")
+        _str(p.get("type"), f"节点「{name}」的类型")
+        _str(p.get("server"), f"节点「{name}」的服务器")
+        port = p.get("port")
+        try:
+            ok = not isinstance(port, bool) and 0 < int(port) < 65536
+        except (TypeError, ValueError):
+            ok = False
+        if not ok:
+            raise ValueError(f"节点「{name}」的端口无效")
+    return v
+
+
+def clean_custom_groups(v):
+    out, seen = [], set()
+    for i, g in enumerate(_list(v, "自定义策略组")):
+        if not isinstance(g, dict):
+            raise ValueError(f"自定义策略组第 {i + 1} 项格式不正确")
+        g = clean_custom_group(g)
+        if g["name"] in seen:
+            raise ValueError(f"策略组重名：{g['name']}")
+        seen.add(g["name"])
+        out.append(g)
+    return out
+
+
+def clean_adblock(v):
+    if not isinstance(v, dict):
+        raise ValueError("广告拦截设置应为对象")
+    for i, l in enumerate(_list(v.get("lists", []), "广告拦截列表")):
+        if not isinstance(l, dict) or not isinstance(l.get("id"), str) or not l["id"].strip():
+            raise ValueError(f"广告拦截列表第 {i + 1} 项格式不正确")
+        _url(l.get("url"), f"广告拦截列表「{l['id']}」的地址")
+    for k, label in (("black", "黑名单"), ("white", "白名单")):
+        for x in _list(v.get(k, []), label):
+            _str(x, label, empty=True)
+    return v
+
+
+def clean_devices(v):
+    if not isinstance(v, dict) or not all(isinstance(k, str) and isinstance(x, str) for k, x in v.items()):
+        raise ValueError("设备备注格式不正确")
+    return v
+
+
+def clean_schedule(v):
+    if not isinstance(v, dict):
+        raise ValueError("定时任务应为对象")
+    for k in ("sub_update", "core_restart", "geo_update"):
+        x = v.get(k) or ""
+        if not isinstance(x, str) or (x and not re.fullmatch(r"([01]\\d|2[0-3]):[0-5]\\d", x)):
+            raise ValueError(f"定时任务时间格式应为 HH:MM：{x}")
+    try:
+        int(v.get("latency") or 0)
+    except (TypeError, ValueError):
+        raise ValueError("自动测速间隔应为数字")
+    return v
+
+
+def _dict(label):
+    def f(v):
+        if not isinstance(v, dict):
+            raise ValueError(f"{label}应为对象")
+        return v
+    return f
+
+
+def _int(label, lo=0, hi=10**9):
+    def f(v):
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not lo <= v <= hi:
+            raise ValueError(f"{label}应为 {lo}–{hi} 的数字")
+        return int(v)
+    return f
+
+
+def _bool(v):
+    return bool(v)
+
+
+def _text(label):
+    def f(v):
+        if v is None:
+            return ""
+        if not isinstance(v, (str, int)) or isinstance(v, bool):
+            raise ValueError(f"{label}应为文本")
+        return str(v).strip()
+    return f
+
+
+def _choice(label, opts):
+    def f(v):
+        if v not in opts:
+            raise ValueError(f"{label}只能是 " + " / ".join(opts))
+        return v
+    return f
+
+
+def _dns(v):
+    if not isinstance(v, dict):
+        raise ValueError("DNS 设置应为对象")
+    for k in DNS_LISTS + ("hosts", "policies"):
+        if k in v and not isinstance(v[k], list):
+            raise ValueError(f"DNS 的 {k} 应为列表")
+    for pe in v.get("policies") or []:
+        if not isinstance(pe, dict) or not isinstance(pe.get("servers", []), list):
+            raise ValueError("DNS 分流策略格式不正确")
+    return v
+
+
+CLEANERS = {
+    "rulesets": clean_rulesets, "bypass": clean_bypass, "tests": clean_tests, "rules": clean_rules, "subs": clean_subs,
+    "nodes": clean_nodes, "custom_groups": clean_custom_groups, "adblock": clean_adblock, "devices": clean_devices,
+    "schedule": clean_schedule, "dns": _dns, "tun": _dict("TUN 设置"), "groups_cfg": _dict("地区分组设置"),
+    "sub_interval": _int("订阅更新间隔", 0, 10**8), "log_limit": _int("日志上限", 1, 100),
+    "region_groups": _bool, "ipv6": _bool, "watchdog": _bool, "sniffer": _bool, "tproxy": _bool,
+    "tg_token": _text("Telegram Token"), "tg_chat": _text("Telegram Chat ID"), "gh_proxy": _text("GitHub 加速地址"),
+    "mode": _choice("代理模式", ("rule", "global", "direct")), "proxy_mode": _choice("代理方式", tuple(PROXY_MODES) + ("",)),
+}
+
+
+def clean_fields(b, keys):
+    """按 CLEANERS 校验并规范化 b 中出现在 keys 里的字段，返回新 dict；有问题抛 ValueError（提示可直接给用户看）"""
+    if not isinstance(b, dict):
+        raise ValueError("请求内容应为 JSON 对象")
+    out = {}
+    for k in keys:
+        if k in b:
+            fn = CLEANERS.get(k)
+            out[k] = fn(b[k]) if fn else b[k]
+    return out
+'''
 _SRC['shunt.core'] = '''"""核心交互"""
 import os, threading, time
 
 from .base import CONF_DIR, LOCK, wd_hold
+from .errlog import log_err
 from .corehttp import core, core_json
 from .data import load, read_json, save
 from .groups import provider_nodes
@@ -1690,7 +1989,41 @@ def conns_snapshot(timeout=5, ttl=2):
 
 
 def reload_core(prev=None):
-    """写配置 → mihomo -t 校验 → 热重载；校验失败时回滚 data.json"""
+    """写配置 → mihomo -t / sing-box check 校验 → 热重载。
+
+    prev（修改前的 data.json）给出时，任何一步失败都回滚到它：校验失败、生成配置抛异常（如残缺的规则集）、
+    mihomo 热重载被拒、sing-box 重载后起不来。坏数据不会留在 data.json 里让 /api/state 一直 500"""
+    try:
+        return _reload_core(prev)
+    except Exception as e:
+        log_err("重载核心配置", e, tb=True)
+        for p in (os.path.join(CONF_DIR, "config.yaml.new"), SB_CONF + ".new"):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        if prev is None:
+            return False, "生成配置失败：" + str(e)[:300]
+        _rollback(prev)
+        return False, "生成配置失败，已撤销本次修改：" + str(e)[:300]
+
+
+def _rollback(prev, sb=None):
+    """data.json 恢复为 prev，并按它重写当前内核的配置文件；返回 (内核是否 sing-box, 配置路径)"""
+    with LOCK:
+        save(prev)
+        d = load()
+        if sb is None:
+            sb = active_core(d) == "singbox"
+        final = SB_CONF if sb else os.path.join(CONF_DIR, "config.yaml")
+        try:
+            (write_sb_config if sb else write_config)(d, final)
+        except Exception as e:  # 旧数据本身也生成不了：保留磁盘上原来的配置文件
+            log_err("回滚后重写配置", e)
+    return sb, final
+
+
+def _reload_core(prev):
     with LOCK:
         d = load()
         sb = active_core(d) == "singbox"
@@ -1720,9 +2053,7 @@ def reload_core(prev=None):
         ok, msg = sb_hot_reload()
         if not ok and prev is not None:  # 配置能通过 sing-box check 但运行时启动失败（如内核缺少模块）：撤销并恢复
             tail = sb_log_error()
-            with LOCK:
-                save(prev)
-                write_sb_config(load(), SB_CONF)
+            _rollback(prev, sb=True)
             svc_restart(timeout=90)
             return False, "sing-box 启动失败，已撤销本次修改" + ("：" + tail if tail else "")
         return ok, msg
@@ -1731,7 +2062,15 @@ def reload_core(prev=None):
     if code == 502:  # 核心没在跑，尝试启动
         svc_restart()
         return True, "已写入配置并重启 mihomo"
-    return code < 300, body.decode(errors="ignore") or "配置已重载"
+    text = body.decode(errors="ignore") if isinstance(body, (bytes, bytearray)) else str(body or "")
+    if code >= 300:
+        if prev is None:
+            return False, text or f"mihomo 重载失败（{code}）"
+        # 核心拒绝了新配置、还在跑旧配置：data.json 和 config.yaml 也退回去，界面与实际生效的配置保持一致
+        _, final = _rollback(prev, sb=False)
+        core("PUT", "/configs?force=true", {"path": final}, timeout=30)
+        return False, "mihomo 重载失败，已撤销本次修改：" + (text[:300] or str(code))
+    return True, text or "配置已重载"
 
 
 def group_sig(cfg):
@@ -3584,7 +3923,7 @@ _SRC['shunt.panel_update'] = '''"""面板在线更新"""
 import hashlib, os, re, shlex, shutil, time, urllib.request, urllib.error
 
 from .errlog import log_err
-from .base import BASE, PANEL_VERSION, UA, UPD_STATE, dl_check, local_file
+from .base import BASE, PANEL_VERSION, UA, UPD_STATE, dl_check, local_file, upd_begin, upd_busy_msg
 from .core_update import gh_api
 from .sysopt import proxy_opener, sh
 from .https import restart_self
@@ -3663,11 +4002,16 @@ def self_rollback():
     bak = os.path.join(BASE, ".backup")
     if not os.path.isfile(os.path.join(bak, "server.py")):
         return False, "没有可回滚的备份"
-    for root, _, names in os.walk(bak):
-        for n in names:
-            src = os.path.join(root, n)
-            shutil.copy2(src, local_file(os.path.relpath(src, bak)))
-    restart_self()
+    if not upd_begin("panel"):
+        return False, upd_busy_msg()
+    try:
+        for root, _, names in os.walk(bak):
+            for n in names:
+                src = os.path.join(root, n)
+                shutil.copy2(src, local_file(os.path.relpath(src, bak)))
+        restart_self()
+    finally:
+        UPD_STATE["busy"] = False
     return True, "已回滚到更新前的版本，面板正在重启"
 
 
@@ -3678,9 +4022,9 @@ def remote_version(src):
 
 def self_update(apply=False, gh=""):
     """检查 / 应用 GitHub 上的新版面板：下载全部文件 → 校验 → 备份 → 替换 → 重启面板"""
-    if UPD_STATE["busy"]:
-        return False, {"message": "正在更新中"}
-    UPD_STATE["busy"] = True
+    # 只检查不替换时不占用忙标志；真正更新时与内核更新 / 切换 / 回滚互斥（内核替换到一半时重启面板会留下半截二进制）
+    if apply and not upd_begin("panel"):
+        return False, {"message": upd_busy_msg()}
     try:
         files, changed = {}, []
         commit, shas = panel_manifest()
@@ -3749,7 +4093,8 @@ def self_update(apply=False, gh=""):
     except Exception as e:
         return False, {"message": str(e)}
     finally:
-        UPD_STATE["busy"] = False
+        if apply:
+            UPD_STATE["busy"] = False
 
 '''
 _SRC['shunt.backup'] = '''# SPDX-License-Identifier: GPL-3.0-or-later
@@ -3931,7 +4276,7 @@ from urllib.parse import quote
 
 from .base import BUILTIN_POLICIES, G_MANUAL, HC
 from .corehttp import core, core_json
-from .data import load, save
+from .data import load, update
 
 HEALTH_STATE = {"running": False, "last_run": 0, "total": 0, "checked": 0}
 
@@ -3947,9 +4292,8 @@ def health_cfg(d=None):
 
 
 def save_health_cfg(cfg):
-    d = load()
-    d["health_cfg"] = cfg
-    save(d)
+    """与其他写入共用 data.update()（全局锁内读-改-写、原子落盘），不会和同时保存的设置互相覆盖"""
+    update(lambda d: d.update(health_cfg=dict(cfg)))
 
 
 def _today():
@@ -3996,25 +4340,33 @@ def node_level(rec, cfg=None):
 def apply_results(results, d=None, universe=None):
     """合并一次全量测速结果：{node_name: latency_ms(0=失败)}。
     universe：当前全部节点名；给出时只删除不在其中的节点记录（失败节点保留并计数），
-    不给时按 results 的键清理（兼容旧调用）"""
-    d = d or load()
-    cfg = health_cfg(d)
-    health = d.get("health") or {}
-    for name, latency in results.items():
-        rec = health.get(name) or {"fail_days": 0, "fail_dates": [], "hidden": False}
-        record_one(rec, latency > 0, latency)
-        # 自动隐藏达到阈值的节点
-        if rec["fail_days"] >= cfg.get("hide_days", 7):
-            rec["hidden"] = True
-        health[name] = rec
-    # 清理已删除节点的记录
-    all_nodes = set(results.keys()) if universe is None else set(universe) | set(results.keys())
-    for name in list(health.keys()):
-        if name not in all_nodes:
-            del health[name]
-    d["health"] = health
-    save(d)
-    return health
+    不给时按 results 的键清理（兼容旧调用）。
+    d 给出时只在这份数据上合并（不落盘）；否则在 data.update() 的锁内读-改-写 data.json"""
+    out = {}
+
+    def merge(dd):
+        cfg = health_cfg(dd)
+        health = dd.get("health") or {}
+        for name, latency in results.items():
+            rec = health.get(name) or {"fail_days": 0, "fail_dates": [], "hidden": False}
+            record_one(rec, latency > 0, latency)
+            # 自动隐藏达到阈值的节点
+            if rec["fail_days"] >= cfg.get("hide_days", 7):
+                rec["hidden"] = True
+            health[name] = rec
+        # 清理已删除节点的记录
+        all_nodes = set(results.keys()) if universe is None else set(universe) | set(results.keys())
+        for name in list(health.keys()):
+            if name not in all_nodes:
+                del health[name]
+        dd["health"] = health
+        out["health"] = health
+
+    if d is not None:
+        merge(d)
+    else:
+        update(merge)
+    return out["health"]
 
 
 def merge_delay(members, code, data):
@@ -4032,17 +4384,21 @@ def merge_delay(members, code, data):
 
 def unhide(name):
     """手动取消隐藏节点，清零计数重新评估"""
-    d = load()
-    health = d.get("health") or {}
-    rec = health.get(name)
-    if rec:
-        rec["hidden"] = False
-        rec["fail_days"] = 0
-        rec["fail_dates"] = []
-        d["health"] = health
-        save(d)
-        return True
-    return False
+    found = []
+
+    def fn(d):
+        health = d.get("health") or {}
+        rec = health.get(name)
+        if rec:
+            rec["hidden"] = False
+            rec["fail_days"] = 0
+            rec["fail_dates"] = []
+            d["health"] = health
+            found.append(True)
+    if name not in (load().get("health") or {}):
+        return False
+    update(fn)
+    return bool(found)
 
 
 def get_records(d=None):
@@ -4097,7 +4453,7 @@ from collections import deque
 from urllib.parse import quote
 
 from .errlog import log_err
-from .base import CONF_DIR, CORE_UPD, LGBM_URL, MIHOMO_LOG, UA, UPD_STATE, dl_check
+from .base import CONF_DIR, CORE_UPD, LGBM_URL, MIHOMO_LOG, UA, dl_check, upd_begin, upd_busy_msg
 from .data import load
 from .mihomo import mh_bin, write_config
 from .core import reload_core
@@ -4391,9 +4747,9 @@ def core_rollback_job(kind="mihomo"):
 
 
 def core_job_start(fn, *args):
-    if CORE_UPD["busy"] or UPD_STATE["busy"]:
-        return False, "正在更新中，请稍候"
-    CORE_UPD.update(busy=True, stage="开始", pct=0, ok=None, message="", t=int(time.time()))
+    if not upd_begin("core"):  # 锁内检查并置忙：与面板更新、其他内核任务互斥
+        return False, upd_busy_msg()
+    CORE_UPD.update(stage="开始", pct=0, ok=None, message="", t=int(time.time()))
     CORE_UPD["log"].clear()
     threading.Thread(target=fn, args=args, daemon=True).start()
     return True, "已开始"
@@ -5413,34 +5769,41 @@ def _hist_last(p):
     return best
 
 
-def delay_merge(px):
-    """用核心的最新记录更新缓存，并给每个节点写入 _d（延迟）/ _dt（测速时间）"""
-    if DELAYS["data"] is None:
-        DELAYS["data"] = read_json(DELAY_FILE, {}) or {}
-    data, now = DELAYS["data"], int(time.time())
-    for name, p in px.items():
-        if p.get("all") is not None:  # 策略组的延迟取当前节点，前端处理
-            continue
-        r = _hist_last(p)
-        if r:
-            old = data.get(name)
-            if not old or old.get("ts") != r[1]:
-                data[name] = {"d": r[0], "ts": r[1], "at": now}
+def delay_merge(px, prov_ok=True):
+    """用核心的最新记录更新缓存，并给每个节点写入 _d（延迟）/ _dt（测速时间）。
+    多个 /api/px 请求与 retest_soon 后台线程会同时调用：缓存的读改写和落盘都在 _DELAY_LOCK 内，
+    不再出现「dictionary changed size during iteration」和两个线程同写一个 .tmp。
+    prov_ok=False（订阅节点列表没取到）时不清理「已不存在」的节点，免得把订阅节点的缓存延迟全删掉"""
+    with _DELAY_LOCK:
+        if DELAYS["data"] is None:
+            DELAYS["data"] = read_json(DELAY_FILE, {}) or {}
+        data, now = DELAYS["data"], int(time.time())
+        for name, p in px.items():
+            if p.get("all") is not None:  # 策略组的延迟取当前节点，前端处理
+                continue
+            r = _hist_last(p)
+            if r:
+                old = data.get(name)
+                if not old or old.get("ts") != r[1]:
+                    data[name] = {"d": r[0], "ts": r[1], "at": now}
+                    DELAYS["dirty"] = True
+            c = data.get(name)
+            if c:
+                p["_d"], p["_dt"] = c["d"], c["at"]
+        if px and prov_ok:
+            for n in [n for n in data if n not in px]:  # 节点已不存在
+                data.pop(n)
                 DELAYS["dirty"] = True
-        c = data.get(name)
-        if c:
-            p["_d"], p["_dt"] = c["d"], c["at"]
-    if px:
-        for n in [n for n in data if n not in px]:  # 节点已不存在
-            data.pop(n)
-            DELAYS["dirty"] = True
-    if DELAYS["dirty"] and now - DELAYS["saved"] > 30:
-        try:
-            write_json(DELAY_FILE, data)
-            DELAYS.update(saved=now, dirty=False)
-        except OSError as e:
-            log_err("保存延迟缓存", e)
+        if DELAYS["dirty"] and now - DELAYS["saved"] > 30:
+            try:
+                write_json(DELAY_FILE, data)
+                DELAYS.update(saved=now, dirty=False)
+            except OSError as e:
+                log_err("保存延迟缓存", e)
     return px
+
+
+_DELAY_LOCK = threading.Lock()
 
 
 def fix_global():
@@ -5574,9 +5937,10 @@ def proxies_merged():
         return None
     px = dict(a.get("proxies") or {})
     try:
-        prov = prov_json().get("providers") or {}
+        pj = prov_json()
+        prov, prov_ok = pj.get("providers") or {}, bool(pj)  # 核心没应答时 prov_json() 返回 {}
     except Exception:
-        prov = {}
+        prov, prov_ok = {}, False
     for pv in prov.values():
         for n in pv.get("proxies") or []:
             if n and n.get("name"):
@@ -5585,7 +5949,7 @@ def proxies_merged():
                     px[n["name"]] = n
                 elif not _hist_last(cur) and _hist_last(n):  # 同名节点：保留有测速记录的那份
                     cur["history"], cur["extra"] = n.get("history") or [], n.get("extra") or {}
-    delay_merge(px)
+    delay_merge(px, prov_ok)
     nodes = [p for p in px.values() if p.get("all") is None and p.get("type") not in ("Direct", "Reject", "RejectDrop", "Pass", "Compatible", "Dns")]
     if nodes and not any("_d" in p for p in nodes):  # 一个延迟都没有（刚启动 / 刚重载）：后台补测
         retest_soon(1)
@@ -6780,13 +7144,13 @@ def log_loop():
         time.sleep(60)
 '''
 _SRC['shunt.schedule'] = '''"""定时任务"""
-import json, time
+import json, os, re, threading, time
 from collections import deque
 from urllib.parse import quote
 
 from .errlog import log_err
-from .base import G_MANUAL, HC
-from .data import load
+from .base import G_MANUAL, HC, PANEL_DIR
+from .data import load, read_json, write_json
 from .core import refresh_regions, reload_core
 from .corehttp import core, core_json
 from .sb_common import active_core
@@ -6799,6 +7163,55 @@ from .latency import bg_fetch, bg_meta, bg_meta_save
 from .adblock import AB_STATE, ab_meta, adblock_update
 from .health import health_cfg, run_check as health_run_check
 SCHED = {"events": deque(maxlen=30), "done": {}}
+# 每天定点任务的最近执行记录 {任务: {"date": 日期, "at": 当时的设定时刻}}，落盘到 sched_done.json：
+# 面板重启后不会把今天已跑过的任务再跑一遍
+DAILY_FILE = os.path.join(PANEL_DIR, "sched_done.json")
+DAILY = {"data": None}
+_DAILY_LOCK = threading.Lock()
+HHMM = re.compile(r"([01]\\d|2[0-3]):[0-5]\\d")
+
+
+def _daily():
+    if DAILY["data"] is None:
+        d = read_json(DAILY_FILE, {})
+        DAILY["data"] = d if isinstance(d, dict) else {}
+    return DAILY["data"]
+
+
+def _daily_mark(k, today, at):
+    _daily()[k] = {"date": today, "at": at}
+    try:
+        write_json(DAILY_FILE, DAILY["data"])
+    except OSError as e:
+        log_err("保存定时任务记录", e)
+
+
+def daily_due(k, at, now_hm, today):
+    """每天定点任务是否该执行：到点或已过点（当天补跑）且今天还没跑过；返回 True 时已记为今天执行过（不会重复触发）。
+
+    - 原来要求当前 HH:MM 正好等于设定值：循环被长任务卡住跨过那一分钟，当天就漏跑了
+    - 第一次见到这个任务、或设定时刻刚被改过，而今天的时刻已经过了：记为今天已执行，从下一次开始
+      （刚升级 / 开机 / 改时间时不会立刻把今天错过的任务全跑一遍，比如定时重启）
+    - 设定时刻无效（如 25:00）或为空：永不触发"""
+    if not at or not HHMM.fullmatch(at):
+        return False
+    with _DAILY_LOCK:
+        rec = _daily().get(k)
+        if not isinstance(rec, dict):
+            rec = None
+        if rec is not None and rec.get("date") == today:
+            if rec.get("at") != at:  # 今天已经跑过、之后改了时刻：只更新记录，明天按新时刻
+                _daily_mark(k, today, at)
+            return False
+        if now_hm < at:  # 还没到点：记下设定时刻，到点时才认得出「这是没改过的时刻」
+            if rec is None or rec.get("at") != at:
+                _daily_mark(k, (rec or {}).get("date") or "", at)
+            return False
+        if rec is None or rec.get("at") != at:
+            _daily_mark(k, today, at)
+            return False
+        _daily_mark(k, today, at)
+        return True
 
 
 def sched_event(msg):
@@ -6871,11 +7284,10 @@ def sched_loop():
             sc = d.get("schedule") or {}
             now = time.strftime("%H:%M")
             today = time.strftime("%Y-%m-%d")
-            due = [k for k in ("sub_update", "core_restart", "geo_update")
-                   if sc.get(k) and sc[k] == now and SCHED["done"].get(k) != today]
-            # 节点健康检查：每天到点且启用时执行
+            due = [k for k in ("sub_update", "core_restart", "geo_update") if daily_due(k, str(sc.get(k) or ""), now, today)]
+            # 节点健康检查：每天到点且启用时执行（已过点、今天还没跑也补跑）
             hcfg = health_cfg(d)
-            if hcfg.get("enabled") and hcfg.get("time") == now and SCHED["done"].get("health") != today:
+            if hcfg.get("enabled") and daily_due("health", str(hcfg.get("time") or ""), now, today):
                 due.append("health")
             mins = int(sc.get("latency") or 0)
             if mins and time.time() - SCHED["done"].get("latency", 0) >= mins * 60:
@@ -6900,7 +7312,8 @@ def sched_loop():
                 if time.time() - max(AB_STATE["last"], ab_last_update()) >= int(ab["interval"]):
                     due.append("adblock")
             for k in due:
-                SCHED["done"][k] = time.time() if k in ("latency",) else today
+                if k == "latency":
+                    SCHED["done"][k] = time.time()
                 if k == "adblock":
                     AB_STATE["last"] = int(time.time())  # 失败也等下一个周期，避免频繁重试
                 ok, msg = run_task(k)
@@ -8034,11 +8447,11 @@ from . import adblock, stats
 from .base import (
     AB_DIR, AB_PRESETS, BUILTIN_POLICIES, CERT, DEFAULT_EXCLUDE, DNS_DEFAULT, DNS_LISTS, GROUP_TYPES, G_MANUAL, G_SEL, HC, KEY,
     LB_STRATEGIES, LOCK, MAX_BODY, MIHOMO_BIN, MIHOMO_LOG, PANEL_VERSION, PRIMARY_REGIONS, PROXY_MODES, REGIONS, SMART_BIN, SVC, TPROXY_SH,
-    TUN_STACKS, wd_hold
+    TUN_STACKS, upd_begin, upd_busy_msg, wd_hold
 )
 from .data import HISTORY_FILE, HISTORY_SKIP, auto_name, config_version, lb_names, load, migrate_names, read_json, region_lb_set, save, update
 from .links import add_links, q1, reserved_names
-from .groups import all_node_names, clean_custom_group, gcfg, region_plan, rx
+from .groups import all_node_names, clean_custom_group, gcfg, provider_nodes, provider_rev, region_plan, rx
 from .mihomo import bad_rule_policies, build_config, dns_cfg, safe_dev, validate_dns
 from .core import conns_snapshot, refresh_after_sub, refresh_regions, reload_core
 from .corehttp import core, core_json
@@ -8068,6 +8481,7 @@ from .dnsleak import antileak_dns, dns_route, leak_check
 from .https import gen_cert, restart_self
 from .access import acl_cfg, host_name, host_ok, ip_is_lan
 from .update_guard import group_meta, rename_policy
+from .validate import clean_fields
 from .static import MANIFEST, STATIC_TYPES, static_file
 ROUTES = {}  # (方法, 路径) → H 的处理函数；api() 先处理前缀 / 条件路由，再查这张表
 
@@ -8145,7 +8559,7 @@ def _svc_job(act):
         _SVC_CACHE.pop("v", None)  # 状态缓存作废，前端马上拿到真实运行状态
     SVC_JOB.update(busy=False, ok=ok, message=msg, t=time.time())
     _SVC_LOCK.release()
-_GRP_CACHE = {}  # {"v": (cfgver, groups, gmeta)}：策略组名单按配置版本缓存，避免每次完整 build_config
+_GRP_CACHE = {}  # {"v": ((配置版本, 订阅节点名单版本), groups, gmeta)}：避免每次 /api/state 完整 build_config
 
 
 def _svc_status():
@@ -8265,6 +8679,61 @@ def validate_groups(d):
 def ad_today():
     """顶栏「广告拦截」：今天（本地自然日）拦截数，与概览「今日拦截广告」同一口径"""
     return adblock.AD_STATS.today() if adblock.AD_STATS else 0
+
+
+def state_groups(d):
+    """/api/state 的策略组名单与元数据。按（配置版本, 订阅节点名单版本）缓存：订阅下载完成、节点增删后地区组会变，
+    只按配置版本缓存会让「目标策略」下拉框一直缺新地区组。生成失败时返回空名单（记日志），不让整个面板 500"""
+    provider_nodes()  # 先刷新订阅节点名单（60 秒内存缓存），名单变化会推进 provider_rev()
+    key = (config_version(), provider_rev())
+    gv = _GRP_CACHE.get("v")
+    if gv is not None and gv[0] == key:
+        return gv[1], gv[2]
+    try:
+        cfg = build_config(d)
+        groups = [g["name"] for g in cfg["proxy-groups"]]
+        gmeta = group_meta(d, cfg)
+        if active_core(d) == "singbox":  # 地区负载均衡并入自动优选；负载均衡 / 故障转移按自动测速运行
+            lbs = region_lb_set()
+            groups = [g for g in groups if g not in lbs]
+            for n, mt in list(gmeta.items()):
+                if n in lbs:
+                    gmeta.pop(n)
+                elif mt["type"] in ("load-balance", "fallback"):
+                    mt.update(sb_from=mt["type"], type="url-test")
+    except Exception as e:
+        log_err("/api/state：生成策略组", e, tb=True)
+        return [], {}
+    _GRP_CACHE["v"] = (key, groups, gmeta)
+    return groups, gmeta
+
+
+def state_nodes(d):
+    """手动节点的摘要；残缺的条目跳过，不让整个 /api/state 500"""
+    out = []
+    for n in d.get("nodes") or []:
+        try:
+            px = n["proxy"]
+            out.append({"name": px["name"], "type": px["type"], "server": px["server"], "port": px["port"]})
+        except (KeyError, TypeError):
+            continue
+    return out
+
+
+def probe_data(d):
+    """按生成配置与 /api/state 的方式完整走一遍：会抛异常的数据不让写进 data.json。返回错误提示或 None"""
+    try:
+        cfg = build_config(d)
+        group_meta(d, cfg)
+        dns_cfg(d)
+        for n in d.get("nodes") or []:
+            n["proxy"]["name"], n["proxy"]["type"], n["proxy"]["server"], n["proxy"]["port"]
+        if active_core(d) == "singbox":
+            build_singbox(d)
+    except Exception as e:
+        log_err("保存前检查配置", e)
+        return f"数据格式不正确，未保存：{type(e).__name__}: {e}"[:300]
+    return None
 
 
 class H(BaseHTTPRequestHandler):
@@ -8822,12 +9291,17 @@ class H(BaseHTTPRequestHandler):
             if b.get("action") == "rollback":
                 if not sb_version(SB_BIN + ".bak"):
                     return self.send(400, {"message": "没有可回滚的 sing-box 备份"})
-                tmp = SB_BIN + ".swap"
-                shutil.copy2(SB_BIN, tmp)
-                os.replace(SB_BIN + ".bak", SB_BIN)
-                os.replace(tmp, SB_BIN + ".bak")
-                if active_core() == "singbox":
-                    svc_restart(timeout=90)
+                if not upd_begin("core"):
+                    return self.send(409, {"message": upd_busy_msg()})
+                try:
+                    tmp = SB_BIN + ".swap"
+                    shutil.copy2(SB_BIN, tmp)
+                    os.replace(SB_BIN + ".bak", SB_BIN)
+                    os.replace(tmp, SB_BIN + ".bak")
+                    if active_core() == "singbox":
+                        svc_restart(timeout=90)
+                finally:
+                    CORE_UPD["busy"] = False
                 return self.reply(True, f"已回滚到 sing-box {sb_version()}")
             ch = b.get("channel") or "stable"
             ok, msg = core_job_start(sb_update_job, ch, load().get("gh_proxy") or "", bool(b.get("force")))
@@ -8861,44 +9335,28 @@ class H(BaseHTTPRequestHandler):
     def api_state_get(self, m, p, b, q):
         d = load()
         st, code, version = _svc_status()
-        cfgver = config_version()
-        gv = _GRP_CACHE.get("v")
-        if gv is None or gv[0] != cfgver:  # 配置未变时复用策略组名单，不再完整 build_config
-            cfg = build_config(d)
-            groups = [g["name"] for g in cfg["proxy-groups"]]
-            gmeta = group_meta(d, cfg)
-            if active_core(d) == "singbox":  # 地区负载均衡并入自动优选；负载均衡 / 故障转移按自动测速运行
-                lbs = region_lb_set()
-                groups = [g for g in groups if g not in lbs]
-                for n, mt in list(gmeta.items()):
-                    if n in lbs:
-                        gmeta.pop(n)
-                    elif mt["type"] in ("load-balance", "fallback"):
-                        mt.update(sb_from=mt["type"], type="url-test")
-            _GRP_CACHE["v"] = (cfgver, groups, gmeta)
-        else:
-            _, groups, gmeta = gv
-        return self.send(200, {"mode": d["mode"], "subs": d["subs"], "rules": d["rules"],
-                               "running": "started" in st or code == 200, "version": version, "groups": groups,
-                               "nodes": [{"name": n["proxy"]["name"], "type": n["proxy"]["type"],
-                                                            "server": n["proxy"]["server"], "port": n["proxy"]["port"]} for n in d["nodes"]],
-                               "rulesets": d["rulesets"], "bypass": d["bypass"], "tests": d["tests"],
-                               "sub_interval": d["sub_interval"],
-                               "ipv6": d["ipv6"], "https": d["https"],
-                               "watchdog": d["watchdog"], "tg_token": d["tg_token"], "tg_chat": d["tg_chat"],
-                               "default_exclude": DEFAULT_EXCLUDE, "proxy_mode": d["proxy_mode"], "tun": d["tun"],
-                               "log_limit": d["log_limit"], "dns": dns_cfg(d),
-                               "schedule": d["schedule"], "devices": d["devices"], "adblock_on": d["adblock"]["enabled"],
-                               "sched_events": list(SCHED["events"])[:20], "group_meta": gmeta,
-                               "sniffer": d["sniffer"],
-                               "gh_proxy": d["gh_proxy"], "panel_version": PANEL_VERSION, "core": active_core(d),
-                               "wd": {"status": WD["status"], "last_check": WD["last_check"],
-                                      "events": list(WD["events"])[:20]}})
+        groups, gmeta = state_groups(d)
+        out = {"running": "started" in st or code == 200, "version": version, "groups": groups, "group_meta": gmeta,
+               "nodes": state_nodes(d), "default_exclude": DEFAULT_EXCLUDE, "sched_events": list(SCHED["events"])[:20],
+               "panel_version": PANEL_VERSION, "core": active_core(d),
+               "wd": {"status": WD["status"], "last_check": WD["last_check"], "events": list(WD["events"])[:20]}}
+        for k in ("mode", "subs", "rules", "rulesets", "bypass", "tests", "sub_interval", "ipv6", "https", "watchdog", "tg_token",
+                  "tg_chat", "proxy_mode", "tun", "log_limit", "schedule", "devices", "sniffer", "gh_proxy"):
+            out[k] = d.get(k)
+        try:
+            out["dns"] = dns_cfg(d)
+        except Exception as e:
+            log_err("/api/state：DNS 设置", e)
+            out["dns"] = copy.deepcopy(DNS_DEFAULT)
+        out["adblock_on"] = bool((d.get("adblock") or {}).get("enabled")) if isinstance(d.get("adblock"), dict) else False
+        return self.send(200, out)
 
     @api_route("/api/ping", "GET")
     def api_ping_get(self, m, p, b, q):
-        """轻量心跳：前端 15 秒轮询，version（data.json 每次 save 自增）变化时才拉全量 /api/state"""
-        return self.send(200, {"ok": True, "core": active_core(), "version": config_version(), "ad_today": ad_today()})
+        """轻量心跳：前端 15 秒轮询，version 变化时才拉全量 /api/state。
+        version = 配置版本（data.json 每次 save 自增）+ 订阅节点名单版本（新订阅下载完、节点增删时地区组会变）"""
+        return self.send(200, {"ok": True, "core": active_core(), "version": f"{config_version()}.{provider_rev()}",
+                               "ad_today": ad_today()})
 
     @api_route("/api/groups", "GET")
     def api_groups_get(self, m, p, b, q):
@@ -9194,6 +9652,18 @@ class H(BaseHTTPRequestHandler):
                 "metadata": {k: (x.get("metadata") or {}).get(k) for k in keep}} for x in c.get("connections") or []]
         return self.send(200, {"connections": out})
 
+    @api_route("/api/conns/stats", "GET")
+    def api_conns_stats_get(self, m, p, b, q):
+        """概览只要两个数字：连接数和来源设备数，不必把整份连接列表（几十到几百 KB）传给前端"""
+        c = conns_snapshot(timeout=5)
+        if c is None:
+            return self.send(502, {"message": "mihomo 未运行或无法连接"})
+        conns = c.get("connections") or []
+        devs = {(x.get("metadata") or {}).get("sourceIP") for x in conns}
+        devs.discard(None)
+        devs.discard("")
+        return self.send(200, {"count": len(conns), "devices": len(devs)})
+
     @api_route("/api/live", "GET")
     def api_live_get(self, m, p, b, q):
         out = dict(LIVE)
@@ -9301,7 +9771,7 @@ class H(BaseHTTPRequestHandler):
             with stats.STATS.lock:
                 for b2 in stats.STATS.data["days"].values():
                     ips |= set(b2.get("dev", {}))
-        c = core_json("/connections", timeout=5) or {}
+        c = conns_snapshot(timeout=5) or {}  # 与连接页 / 统计共用 2 秒快照，不再单独全量抓取
         ips |= {(x.get("metadata") or {}).get("sourceIP") for x in c.get("connections") or []}
         return self.send(200, {"map": device_map(sorted(i for i in ips if i)), "custom": load()["devices"]})
 
@@ -9386,7 +9856,16 @@ class H(BaseHTTPRequestHandler):
             b["sniffer"] = bool(b["sniffer"])
         if "log_limit" in b and b["log_limit"] not in (1, 2, 5, 10, 20):
             return self.send(400, {"message": "日志上限只能是 1 / 2 / 5 / 10 / 20 MB"})
-        prev = update(lambda d: d.update({k: v for k, v in b.items() if k in allowed}))
+        try:  # 形状校验：残缺的规则集 / 绕过设备 / 延迟站点直接 400，不写进 data.json
+            new = clean_fields(b, allowed)
+        except ValueError as e:
+            return self.send(400, {"message": str(e)})
+        test = load()
+        test.update(new)
+        err = probe_data(test)
+        if err:
+            return self.send(400, {"message": err})
+        prev = update(lambda d: d.update(new))
         d = load()
         msg = "已保存"
         if set(b) & {"rulesets", "sub_interval", "region_groups", "ipv6", "sniffer"} or ("bypass" in b and d["proxy_mode"] == "tun"):
@@ -9477,8 +9956,7 @@ class H(BaseHTTPRequestHandler):
             cfg["enabled"] = bool(b["enabled"])
         if "time" in b:
             t = str(b["time"]).strip()
-            import re
-            if not re.match(r"^\\d{2}:\\d{2}$", t):
+            if not re.fullmatch(r"([01]\\d|2[0-3]):[0-5]\\d", t):
                 return self.send(400, {"ok": False, "message": "时间格式应为 HH:MM"})
             cfg["time"] = t
         for k in ("warn_days", "hide_days"):
@@ -9501,11 +9979,25 @@ class H(BaseHTTPRequestHandler):
                 "nodes", "ipv6", "watchdog", "tg_token", "tg_chat", "proxy_mode", "tun", "log_limit", "adblock", "dns",
                 "devices", "schedule", "groups_cfg", "custom_groups", "sniffer", "gh_proxy")
 
+        try:  # 恢复残缺 / 旧格式的备份：任何一项形状不对都整体拒绝，不写进 data.json
+            vals = clean_fields(b, keys)
+        except ValueError as e:
+            return self.send(400, {"message": "备份内容无效：" + str(e)})
+        if not vals:
+            return self.send(400, {"message": "备份内容无效：没有可恢复的设置"})
+
         def apply_backup(d):
-            d.update({k: b[k] for k in keys if k in b})
-            if "proxy_mode" not in b and "tproxy" in b:
-                d["proxy_mode"] = "tproxy" if b["tproxy"] else "off"
+            d.update(copy.deepcopy(vals))
+            if "proxy_mode" not in vals and "tproxy" in vals:
+                d["proxy_mode"] = "tproxy" if vals["tproxy"] else "off"
+            if d.get("proxy_mode") not in PROXY_MODES:
+                d["proxy_mode"] = "tproxy" if d.get("tproxy", True) else "off"
             migrate_names(d)  # 旧版备份里的地区组名自动换成新名称
+        test = load()
+        apply_backup(test)
+        err = probe_data(test)
+        if err:
+            return self.send(400, {"message": "备份内容无效：" + err})
         prev = update(apply_backup)
         ab_compose(load())
         ok, msg = reload_core(prev)

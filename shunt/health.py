@@ -6,7 +6,7 @@ from urllib.parse import quote
 
 from .base import BUILTIN_POLICIES, G_MANUAL, HC
 from .corehttp import core, core_json
-from .data import load, save
+from .data import load, update
 
 HEALTH_STATE = {"running": False, "last_run": 0, "total": 0, "checked": 0}
 
@@ -22,9 +22,8 @@ def health_cfg(d=None):
 
 
 def save_health_cfg(cfg):
-    d = load()
-    d["health_cfg"] = cfg
-    save(d)
+    """与其他写入共用 data.update()（全局锁内读-改-写、原子落盘），不会和同时保存的设置互相覆盖"""
+    update(lambda d: d.update(health_cfg=dict(cfg)))
 
 
 def _today():
@@ -71,25 +70,33 @@ def node_level(rec, cfg=None):
 def apply_results(results, d=None, universe=None):
     """合并一次全量测速结果：{node_name: latency_ms(0=失败)}。
     universe：当前全部节点名；给出时只删除不在其中的节点记录（失败节点保留并计数），
-    不给时按 results 的键清理（兼容旧调用）"""
-    d = d or load()
-    cfg = health_cfg(d)
-    health = d.get("health") or {}
-    for name, latency in results.items():
-        rec = health.get(name) or {"fail_days": 0, "fail_dates": [], "hidden": False}
-        record_one(rec, latency > 0, latency)
-        # 自动隐藏达到阈值的节点
-        if rec["fail_days"] >= cfg.get("hide_days", 7):
-            rec["hidden"] = True
-        health[name] = rec
-    # 清理已删除节点的记录
-    all_nodes = set(results.keys()) if universe is None else set(universe) | set(results.keys())
-    for name in list(health.keys()):
-        if name not in all_nodes:
-            del health[name]
-    d["health"] = health
-    save(d)
-    return health
+    不给时按 results 的键清理（兼容旧调用）。
+    d 给出时只在这份数据上合并（不落盘）；否则在 data.update() 的锁内读-改-写 data.json"""
+    out = {}
+
+    def merge(dd):
+        cfg = health_cfg(dd)
+        health = dd.get("health") or {}
+        for name, latency in results.items():
+            rec = health.get(name) or {"fail_days": 0, "fail_dates": [], "hidden": False}
+            record_one(rec, latency > 0, latency)
+            # 自动隐藏达到阈值的节点
+            if rec["fail_days"] >= cfg.get("hide_days", 7):
+                rec["hidden"] = True
+            health[name] = rec
+        # 清理已删除节点的记录
+        all_nodes = set(results.keys()) if universe is None else set(universe) | set(results.keys())
+        for name in list(health.keys()):
+            if name not in all_nodes:
+                del health[name]
+        dd["health"] = health
+        out["health"] = health
+
+    if d is not None:
+        merge(d)
+    else:
+        update(merge)
+    return out["health"]
 
 
 def merge_delay(members, code, data):
@@ -107,17 +114,21 @@ def merge_delay(members, code, data):
 
 def unhide(name):
     """手动取消隐藏节点，清零计数重新评估"""
-    d = load()
-    health = d.get("health") or {}
-    rec = health.get(name)
-    if rec:
-        rec["hidden"] = False
-        rec["fail_days"] = 0
-        rec["fail_dates"] = []
-        d["health"] = health
-        save(d)
-        return True
-    return False
+    found = []
+
+    def fn(d):
+        health = d.get("health") or {}
+        rec = health.get(name)
+        if rec:
+            rec["hidden"] = False
+            rec["fail_days"] = 0
+            rec["fail_dates"] = []
+            d["health"] = health
+            found.append(True)
+    if name not in (load().get("health") or {}):
+        return False
+    update(fn)
+    return bool(found)
 
 
 def get_records(d=None):

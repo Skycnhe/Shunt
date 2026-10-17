@@ -26,6 +26,7 @@ python3 tools/build.py --split  # 直接改了 server.py 时，把内嵌源码�
 | links | 节点链接解析 |
 | groups | 策略组 |
 | mihomo | 生成 mihomo 配置、DNS 校验 |
+| validate | /api/settings、/api/restore 的数据形状校验（坏条目 400，不写入） |
 | core | 与内核交互（API、重载） |
 | sb_common / sb_yaml / sb_subs / sb_nodes / sb_rules / sb_dns / sb_config / sb_switch | sing-box：公共、YAML 解析、订阅、节点转换、规则转换、DNS、生成配置、内核切换 |
 | panel_update / core_update | 面板在线更新（按 update-files.txt）、内核更新 |

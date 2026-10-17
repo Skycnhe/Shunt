@@ -9,11 +9,11 @@ from . import adblock, stats
 from .base import (
     AB_DIR, AB_PRESETS, BUILTIN_POLICIES, CERT, DEFAULT_EXCLUDE, DNS_DEFAULT, DNS_LISTS, GROUP_TYPES, G_MANUAL, G_SEL, HC, KEY,
     LB_STRATEGIES, LOCK, MAX_BODY, MIHOMO_BIN, MIHOMO_LOG, PANEL_VERSION, PRIMARY_REGIONS, PROXY_MODES, REGIONS, SMART_BIN, SVC, TPROXY_SH,
-    TUN_STACKS, wd_hold
+    TUN_STACKS, upd_begin, upd_busy_msg, wd_hold
 )
 from .data import HISTORY_FILE, HISTORY_SKIP, auto_name, config_version, lb_names, load, migrate_names, read_json, region_lb_set, save, update
 from .links import add_links, q1, reserved_names
-from .groups import all_node_names, clean_custom_group, gcfg, region_plan, rx
+from .groups import all_node_names, clean_custom_group, gcfg, provider_nodes, provider_rev, region_plan, rx
 from .mihomo import bad_rule_policies, build_config, dns_cfg, safe_dev, validate_dns
 from .core import conns_snapshot, refresh_after_sub, refresh_regions, reload_core
 from .corehttp import core, core_json
@@ -43,6 +43,7 @@ from .dnsleak import antileak_dns, dns_route, leak_check
 from .https import gen_cert, restart_self
 from .access import acl_cfg, host_name, host_ok, ip_is_lan
 from .update_guard import group_meta, rename_policy
+from .validate import clean_fields
 from .static import MANIFEST, STATIC_TYPES, static_file
 ROUTES = {}  # (方法, 路径) → H 的处理函数；api() 先处理前缀 / 条件路由，再查这张表
 
@@ -120,7 +121,7 @@ def _svc_job(act):
         _SVC_CACHE.pop("v", None)  # 状态缓存作废，前端马上拿到真实运行状态
     SVC_JOB.update(busy=False, ok=ok, message=msg, t=time.time())
     _SVC_LOCK.release()
-_GRP_CACHE = {}  # {"v": (cfgver, groups, gmeta)}：策略组名单按配置版本缓存，避免每次完整 build_config
+_GRP_CACHE = {}  # {"v": ((配置版本, 订阅节点名单版本), groups, gmeta)}：避免每次 /api/state 完整 build_config
 
 
 def _svc_status():
@@ -240,6 +241,61 @@ def validate_groups(d):
 def ad_today():
     """顶栏「广告拦截」：今天（本地自然日）拦截数，与概览「今日拦截广告」同一口径"""
     return adblock.AD_STATS.today() if adblock.AD_STATS else 0
+
+
+def state_groups(d):
+    """/api/state 的策略组名单与元数据。按（配置版本, 订阅节点名单版本）缓存：订阅下载完成、节点增删后地区组会变，
+    只按配置版本缓存会让「目标策略」下拉框一直缺新地区组。生成失败时返回空名单（记日志），不让整个面板 500"""
+    provider_nodes()  # 先刷新订阅节点名单（60 秒内存缓存），名单变化会推进 provider_rev()
+    key = (config_version(), provider_rev())
+    gv = _GRP_CACHE.get("v")
+    if gv is not None and gv[0] == key:
+        return gv[1], gv[2]
+    try:
+        cfg = build_config(d)
+        groups = [g["name"] for g in cfg["proxy-groups"]]
+        gmeta = group_meta(d, cfg)
+        if active_core(d) == "singbox":  # 地区负载均衡并入自动优选；负载均衡 / 故障转移按自动测速运行
+            lbs = region_lb_set()
+            groups = [g for g in groups if g not in lbs]
+            for n, mt in list(gmeta.items()):
+                if n in lbs:
+                    gmeta.pop(n)
+                elif mt["type"] in ("load-balance", "fallback"):
+                    mt.update(sb_from=mt["type"], type="url-test")
+    except Exception as e:
+        log_err("/api/state：生成策略组", e, tb=True)
+        return [], {}
+    _GRP_CACHE["v"] = (key, groups, gmeta)
+    return groups, gmeta
+
+
+def state_nodes(d):
+    """手动节点的摘要；残缺的条目跳过，不让整个 /api/state 500"""
+    out = []
+    for n in d.get("nodes") or []:
+        try:
+            px = n["proxy"]
+            out.append({"name": px["name"], "type": px["type"], "server": px["server"], "port": px["port"]})
+        except (KeyError, TypeError):
+            continue
+    return out
+
+
+def probe_data(d):
+    """按生成配置与 /api/state 的方式完整走一遍：会抛异常的数据不让写进 data.json。返回错误提示或 None"""
+    try:
+        cfg = build_config(d)
+        group_meta(d, cfg)
+        dns_cfg(d)
+        for n in d.get("nodes") or []:
+            n["proxy"]["name"], n["proxy"]["type"], n["proxy"]["server"], n["proxy"]["port"]
+        if active_core(d) == "singbox":
+            build_singbox(d)
+    except Exception as e:
+        log_err("保存前检查配置", e)
+        return f"数据格式不正确，未保存：{type(e).__name__}: {e}"[:300]
+    return None
 
 
 class H(BaseHTTPRequestHandler):
@@ -797,12 +853,17 @@ class H(BaseHTTPRequestHandler):
             if b.get("action") == "rollback":
                 if not sb_version(SB_BIN + ".bak"):
                     return self.send(400, {"message": "没有可回滚的 sing-box 备份"})
-                tmp = SB_BIN + ".swap"
-                shutil.copy2(SB_BIN, tmp)
-                os.replace(SB_BIN + ".bak", SB_BIN)
-                os.replace(tmp, SB_BIN + ".bak")
-                if active_core() == "singbox":
-                    svc_restart(timeout=90)
+                if not upd_begin("core"):
+                    return self.send(409, {"message": upd_busy_msg()})
+                try:
+                    tmp = SB_BIN + ".swap"
+                    shutil.copy2(SB_BIN, tmp)
+                    os.replace(SB_BIN + ".bak", SB_BIN)
+                    os.replace(tmp, SB_BIN + ".bak")
+                    if active_core() == "singbox":
+                        svc_restart(timeout=90)
+                finally:
+                    CORE_UPD["busy"] = False
                 return self.reply(True, f"已回滚到 sing-box {sb_version()}")
             ch = b.get("channel") or "stable"
             ok, msg = core_job_start(sb_update_job, ch, load().get("gh_proxy") or "", bool(b.get("force")))
@@ -836,44 +897,28 @@ class H(BaseHTTPRequestHandler):
     def api_state_get(self, m, p, b, q):
         d = load()
         st, code, version = _svc_status()
-        cfgver = config_version()
-        gv = _GRP_CACHE.get("v")
-        if gv is None or gv[0] != cfgver:  # 配置未变时复用策略组名单，不再完整 build_config
-            cfg = build_config(d)
-            groups = [g["name"] for g in cfg["proxy-groups"]]
-            gmeta = group_meta(d, cfg)
-            if active_core(d) == "singbox":  # 地区负载均衡并入自动优选；负载均衡 / 故障转移按自动测速运行
-                lbs = region_lb_set()
-                groups = [g for g in groups if g not in lbs]
-                for n, mt in list(gmeta.items()):
-                    if n in lbs:
-                        gmeta.pop(n)
-                    elif mt["type"] in ("load-balance", "fallback"):
-                        mt.update(sb_from=mt["type"], type="url-test")
-            _GRP_CACHE["v"] = (cfgver, groups, gmeta)
-        else:
-            _, groups, gmeta = gv
-        return self.send(200, {"mode": d["mode"], "subs": d["subs"], "rules": d["rules"],
-                               "running": "started" in st or code == 200, "version": version, "groups": groups,
-                               "nodes": [{"name": n["proxy"]["name"], "type": n["proxy"]["type"],
-                                                            "server": n["proxy"]["server"], "port": n["proxy"]["port"]} for n in d["nodes"]],
-                               "rulesets": d["rulesets"], "bypass": d["bypass"], "tests": d["tests"],
-                               "sub_interval": d["sub_interval"],
-                               "ipv6": d["ipv6"], "https": d["https"],
-                               "watchdog": d["watchdog"], "tg_token": d["tg_token"], "tg_chat": d["tg_chat"],
-                               "default_exclude": DEFAULT_EXCLUDE, "proxy_mode": d["proxy_mode"], "tun": d["tun"],
-                               "log_limit": d["log_limit"], "dns": dns_cfg(d),
-                               "schedule": d["schedule"], "devices": d["devices"], "adblock_on": d["adblock"]["enabled"],
-                               "sched_events": list(SCHED["events"])[:20], "group_meta": gmeta,
-                               "sniffer": d["sniffer"],
-                               "gh_proxy": d["gh_proxy"], "panel_version": PANEL_VERSION, "core": active_core(d),
-                               "wd": {"status": WD["status"], "last_check": WD["last_check"],
-                                      "events": list(WD["events"])[:20]}})
+        groups, gmeta = state_groups(d)
+        out = {"running": "started" in st or code == 200, "version": version, "groups": groups, "group_meta": gmeta,
+               "nodes": state_nodes(d), "default_exclude": DEFAULT_EXCLUDE, "sched_events": list(SCHED["events"])[:20],
+               "panel_version": PANEL_VERSION, "core": active_core(d),
+               "wd": {"status": WD["status"], "last_check": WD["last_check"], "events": list(WD["events"])[:20]}}
+        for k in ("mode", "subs", "rules", "rulesets", "bypass", "tests", "sub_interval", "ipv6", "https", "watchdog", "tg_token",
+                  "tg_chat", "proxy_mode", "tun", "log_limit", "schedule", "devices", "sniffer", "gh_proxy"):
+            out[k] = d.get(k)
+        try:
+            out["dns"] = dns_cfg(d)
+        except Exception as e:
+            log_err("/api/state：DNS 设置", e)
+            out["dns"] = copy.deepcopy(DNS_DEFAULT)
+        out["adblock_on"] = bool((d.get("adblock") or {}).get("enabled")) if isinstance(d.get("adblock"), dict) else False
+        return self.send(200, out)
 
     @api_route("/api/ping", "GET")
     def api_ping_get(self, m, p, b, q):
-        """轻量心跳：前端 15 秒轮询，version（data.json 每次 save 自增）变化时才拉全量 /api/state"""
-        return self.send(200, {"ok": True, "core": active_core(), "version": config_version(), "ad_today": ad_today()})
+        """轻量心跳：前端 15 秒轮询，version 变化时才拉全量 /api/state。
+        version = 配置版本（data.json 每次 save 自增）+ 订阅节点名单版本（新订阅下载完、节点增删时地区组会变）"""
+        return self.send(200, {"ok": True, "core": active_core(), "version": f"{config_version()}.{provider_rev()}",
+                               "ad_today": ad_today()})
 
     @api_route("/api/groups", "GET")
     def api_groups_get(self, m, p, b, q):
@@ -1169,6 +1214,18 @@ class H(BaseHTTPRequestHandler):
                 "metadata": {k: (x.get("metadata") or {}).get(k) for k in keep}} for x in c.get("connections") or []]
         return self.send(200, {"connections": out})
 
+    @api_route("/api/conns/stats", "GET")
+    def api_conns_stats_get(self, m, p, b, q):
+        """概览只要两个数字：连接数和来源设备数，不必把整份连接列表（几十到几百 KB）传给前端"""
+        c = conns_snapshot(timeout=5)
+        if c is None:
+            return self.send(502, {"message": "mihomo 未运行或无法连接"})
+        conns = c.get("connections") or []
+        devs = {(x.get("metadata") or {}).get("sourceIP") for x in conns}
+        devs.discard(None)
+        devs.discard("")
+        return self.send(200, {"count": len(conns), "devices": len(devs)})
+
     @api_route("/api/live", "GET")
     def api_live_get(self, m, p, b, q):
         out = dict(LIVE)
@@ -1276,7 +1333,7 @@ class H(BaseHTTPRequestHandler):
             with stats.STATS.lock:
                 for b2 in stats.STATS.data["days"].values():
                     ips |= set(b2.get("dev", {}))
-        c = core_json("/connections", timeout=5) or {}
+        c = conns_snapshot(timeout=5) or {}  # 与连接页 / 统计共用 2 秒快照，不再单独全量抓取
         ips |= {(x.get("metadata") or {}).get("sourceIP") for x in c.get("connections") or []}
         return self.send(200, {"map": device_map(sorted(i for i in ips if i)), "custom": load()["devices"]})
 
@@ -1361,7 +1418,16 @@ class H(BaseHTTPRequestHandler):
             b["sniffer"] = bool(b["sniffer"])
         if "log_limit" in b and b["log_limit"] not in (1, 2, 5, 10, 20):
             return self.send(400, {"message": "日志上限只能是 1 / 2 / 5 / 10 / 20 MB"})
-        prev = update(lambda d: d.update({k: v for k, v in b.items() if k in allowed}))
+        try:  # 形状校验：残缺的规则集 / 绕过设备 / 延迟站点直接 400，不写进 data.json
+            new = clean_fields(b, allowed)
+        except ValueError as e:
+            return self.send(400, {"message": str(e)})
+        test = load()
+        test.update(new)
+        err = probe_data(test)
+        if err:
+            return self.send(400, {"message": err})
+        prev = update(lambda d: d.update(new))
         d = load()
         msg = "已保存"
         if set(b) & {"rulesets", "sub_interval", "region_groups", "ipv6", "sniffer"} or ("bypass" in b and d["proxy_mode"] == "tun"):
@@ -1452,8 +1518,7 @@ class H(BaseHTTPRequestHandler):
             cfg["enabled"] = bool(b["enabled"])
         if "time" in b:
             t = str(b["time"]).strip()
-            import re
-            if not re.match(r"^\d{2}:\d{2}$", t):
+            if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", t):
                 return self.send(400, {"ok": False, "message": "时间格式应为 HH:MM"})
             cfg["time"] = t
         for k in ("warn_days", "hide_days"):
@@ -1476,11 +1541,25 @@ class H(BaseHTTPRequestHandler):
                 "nodes", "ipv6", "watchdog", "tg_token", "tg_chat", "proxy_mode", "tun", "log_limit", "adblock", "dns",
                 "devices", "schedule", "groups_cfg", "custom_groups", "sniffer", "gh_proxy")
 
+        try:  # 恢复残缺 / 旧格式的备份：任何一项形状不对都整体拒绝，不写进 data.json
+            vals = clean_fields(b, keys)
+        except ValueError as e:
+            return self.send(400, {"message": "备份内容无效：" + str(e)})
+        if not vals:
+            return self.send(400, {"message": "备份内容无效：没有可恢复的设置"})
+
         def apply_backup(d):
-            d.update({k: b[k] for k in keys if k in b})
-            if "proxy_mode" not in b and "tproxy" in b:
-                d["proxy_mode"] = "tproxy" if b["tproxy"] else "off"
+            d.update(copy.deepcopy(vals))
+            if "proxy_mode" not in vals and "tproxy" in vals:
+                d["proxy_mode"] = "tproxy" if vals["tproxy"] else "off"
+            if d.get("proxy_mode") not in PROXY_MODES:
+                d["proxy_mode"] = "tproxy" if d.get("tproxy", True) else "off"
             migrate_names(d)  # 旧版备份里的地区组名自动换成新名称
+        test = load()
+        apply_backup(test)
+        err = probe_data(test)
+        if err:
+            return self.send(400, {"message": "备份内容无效：" + err})
         prev = update(apply_backup)
         ab_compose(load())
         ok, msg = reload_core(prev)

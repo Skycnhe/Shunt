@@ -1,11 +1,13 @@
 // 连接
-const prevConn={};
+let prevConn=new Map(),_prevConnT=0;
 let _lastConnRender=0;
 function renderConns(list){const f=$('#c-filter').value.toLowerCase();const now=Date.now();
   list.sort((a,b)=>new Date(b.start)-new Date(a.start));
-  // 速率基线每秒更新（/s 显示准确），DOM 全量重绘降频到每 2 秒
-  const rates=new Map();
-  for(const c of list){const p=prevConn[c.id];rates.set(c.id,p?[c.download-p.d,c.upload-p.u]:[0,0]);prevConn[c.id]={d:c.download,u:c.upload}}
+  // 速率基线每次拉取都更新，按实际时间差折算成 /s（退避跳过几秒也不会偏大）；DOM 全量重绘降频到每 2 秒。
+  // 基线表每次用本轮的连接重建：已关闭连接的记录随之丢弃，连接页开几个小时也不会越积越多
+  const rates=new Map(),next=new Map(),dt=_prevConnT?Math.max(1,(now-_prevConnT)/1000):1;
+  for(const c of list){const p=prevConn.get(c.id);rates.set(c.id,p?[Math.max(0,c.download-p.d)/dt,Math.max(0,c.upload-p.u)/dt]:[0,0]);next.set(c.id,{d:c.download,u:c.upload})}
+  prevConn=next;_prevConnT=now;
   if(now-_lastConnRender<2000)return;
   _lastConnRender=now;
   $('#conns').innerHTML=list.filter(c=>!f||(JSON.stringify(c)+dname(c.metadata?.sourceIP)).toLowerCase().includes(f)).slice(0,300).map(c=>{const m=c.metadata||{};

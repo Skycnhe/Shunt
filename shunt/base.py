@@ -27,6 +27,23 @@ def wd_hold(sec, why="", reset=False):
 
 
 CORE_UPD = {"busy": False, "stage": "", "pct": 0, "ok": None, "message": "", "log": deque(maxlen=30), "t": 0}  # 内核更新状态：core_update 与 notify 共用
+_UPD_LOCK = threading.Lock()
+
+
+def upd_begin(kind):
+    """面板更新 / 内核更新（含切换、回滚）互斥：在锁内「检查 + 置忙」一步完成，双击或多标签页同时点也只有一个能进。
+    kind="panel" 置 UPD_STATE，其余置 CORE_UPD；两者任一在忙都返回 False。结束时由调用方把对应的 busy 置回 False"""
+    with _UPD_LOCK:
+        if UPD_STATE["busy"] or CORE_UPD["busy"]:
+            return False
+        (UPD_STATE if kind == "panel" else CORE_UPD)["busy"] = True
+        return True
+
+
+def upd_busy_msg():
+    return "内核正在更新或切换，请稍后再试" if CORE_UPD["busy"] else "面板正在更新，请稍后再试"
+
+
 MASS_TEST = {"n": 0}  # 进行中的全节点测速（/group/*/delay）计数：corehttp 置位，notify 看门狗据此暂停故障判定，避免高负载误判
 
 
@@ -158,7 +175,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "10.1.1"
+PANEL_VERSION = "10.1.2"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),

@@ -1,11 +1,11 @@
 """定时任务"""
-import json, time
+import json, os, re, threading, time
 from collections import deque
 from urllib.parse import quote
 
 from .errlog import log_err
-from .base import G_MANUAL, HC
-from .data import load
+from .base import G_MANUAL, HC, PANEL_DIR
+from .data import load, read_json, write_json
 from .core import refresh_regions, reload_core
 from .corehttp import core, core_json
 from .sb_common import active_core
@@ -18,6 +18,55 @@ from .latency import bg_fetch, bg_meta, bg_meta_save
 from .adblock import AB_STATE, ab_meta, adblock_update
 from .health import health_cfg, run_check as health_run_check
 SCHED = {"events": deque(maxlen=30), "done": {}}
+# 每天定点任务的最近执行记录 {任务: {"date": 日期, "at": 当时的设定时刻}}，落盘到 sched_done.json：
+# 面板重启后不会把今天已跑过的任务再跑一遍
+DAILY_FILE = os.path.join(PANEL_DIR, "sched_done.json")
+DAILY = {"data": None}
+_DAILY_LOCK = threading.Lock()
+HHMM = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
+
+
+def _daily():
+    if DAILY["data"] is None:
+        d = read_json(DAILY_FILE, {})
+        DAILY["data"] = d if isinstance(d, dict) else {}
+    return DAILY["data"]
+
+
+def _daily_mark(k, today, at):
+    _daily()[k] = {"date": today, "at": at}
+    try:
+        write_json(DAILY_FILE, DAILY["data"])
+    except OSError as e:
+        log_err("保存定时任务记录", e)
+
+
+def daily_due(k, at, now_hm, today):
+    """每天定点任务是否该执行：到点或已过点（当天补跑）且今天还没跑过；返回 True 时已记为今天执行过（不会重复触发）。
+
+    - 原来要求当前 HH:MM 正好等于设定值：循环被长任务卡住跨过那一分钟，当天就漏跑了
+    - 第一次见到这个任务、或设定时刻刚被改过，而今天的时刻已经过了：记为今天已执行，从下一次开始
+      （刚升级 / 开机 / 改时间时不会立刻把今天错过的任务全跑一遍，比如定时重启）
+    - 设定时刻无效（如 25:00）或为空：永不触发"""
+    if not at or not HHMM.fullmatch(at):
+        return False
+    with _DAILY_LOCK:
+        rec = _daily().get(k)
+        if not isinstance(rec, dict):
+            rec = None
+        if rec is not None and rec.get("date") == today:
+            if rec.get("at") != at:  # 今天已经跑过、之后改了时刻：只更新记录，明天按新时刻
+                _daily_mark(k, today, at)
+            return False
+        if now_hm < at:  # 还没到点：记下设定时刻，到点时才认得出「这是没改过的时刻」
+            if rec is None or rec.get("at") != at:
+                _daily_mark(k, (rec or {}).get("date") or "", at)
+            return False
+        if rec is None or rec.get("at") != at:
+            _daily_mark(k, today, at)
+            return False
+        _daily_mark(k, today, at)
+        return True
 
 
 def sched_event(msg):
@@ -90,11 +139,10 @@ def sched_loop():
             sc = d.get("schedule") or {}
             now = time.strftime("%H:%M")
             today = time.strftime("%Y-%m-%d")
-            due = [k for k in ("sub_update", "core_restart", "geo_update")
-                   if sc.get(k) and sc[k] == now and SCHED["done"].get(k) != today]
-            # 节点健康检查：每天到点且启用时执行
+            due = [k for k in ("sub_update", "core_restart", "geo_update") if daily_due(k, str(sc.get(k) or ""), now, today)]
+            # 节点健康检查：每天到点且启用时执行（已过点、今天还没跑也补跑）
             hcfg = health_cfg(d)
-            if hcfg.get("enabled") and hcfg.get("time") == now and SCHED["done"].get("health") != today:
+            if hcfg.get("enabled") and daily_due("health", str(hcfg.get("time") or ""), now, today):
                 due.append("health")
             mins = int(sc.get("latency") or 0)
             if mins and time.time() - SCHED["done"].get("latency", 0) >= mins * 60:
@@ -119,7 +167,8 @@ def sched_loop():
                 if time.time() - max(AB_STATE["last"], ab_last_update()) >= int(ab["interval"]):
                     due.append("adblock")
             for k in due:
-                SCHED["done"][k] = time.time() if k in ("latency",) else today
+                if k == "latency":
+                    SCHED["done"][k] = time.time()
                 if k == "adblock":
                     AB_STATE["last"] = int(time.time())  # 失败也等下一个周期，避免频繁重试
                 ok, msg = run_task(k)

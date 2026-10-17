@@ -15,9 +15,11 @@ async function start(){
   try{await loadState()}catch(e){if(e.message==='未登录')return;toast('面板服务连接失败：'+e.message)}
   $('#app').classList.remove('hide');nav();go(TAB);
   const vis=f=>()=>{if(!document.hidden)f()};
-  timers.forEach(clearInterval);timers=[setInterval(tick,1000),setInterval(vis(testSites),60000),setInterval(vis(()=>loadState().catch(()=>{})),15000),setInterval(vis(loadDevs),30000),
+  // 设备名单只在用得到它的概览 / 连接 / 统计页轮询（统计页 loadStats 自带）；站点延迟卡片只在概览，测速也只在概览跑
+  timers.forEach(clearInterval);timers=[setInterval(tick,1000),setInterval(vis(()=>{if(TAB==='概览')testSites()}),60000),setInterval(vis(()=>loadState().catch(()=>{})),15000),
+    setInterval(vis(()=>{if(TAB==='概览'||TAB==='连接')loadDevs()}),30000),
     setInterval(vis(()=>{if(TAB==='统计')loadStats();if(TAB==='概览')loadAdStat();if(TAB==='广告拦截'&&!AB?.updating)loadAB()}),30000)];
-  loadDevs();tick();testSites();bgSync()}
+  loadDevs();tick();bgSync()}
 // 切回前台时立即刷新一次
 document.addEventListener('visibilitychange',()=>{if(document.hidden||$('#app').classList.contains('hide'))return;_skip=0;tick();loadState().catch(()=>{});if(TAB==='节点')loadProxies()});
 placeNav();
