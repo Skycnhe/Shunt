@@ -40,7 +40,20 @@ def notify(text):
 # 「手动停止」标志落盘：以前只在内存里，面板一重启（在线更新、切 HTTPS、rc-service shunt restart）标志就丢了，
 # 看门狗随即把用户手动停掉的核心又拉起来
 STOP_FLAG = os.path.join(PANEL_DIR, "core_stopped")
-WD = {"status": "ok", "fails": 0, "events": deque(maxlen=50), "last_check": 0, "manual_stop": os.path.isfile(STOP_FLAG),
+# 看门狗事件落盘：以前只在内存里，面板一重启记录就没了。只留最近 WD_EVENTS_MAX 条，满了自动删掉最旧的
+WD_EVENTS_FILE = os.path.join(PANEL_DIR, "wd_events.json")
+WD_EVENTS_MAX = 20
+
+
+def _load_wd_events():
+    ev = read_json(WD_EVENTS_FILE, [])
+    if not isinstance(ev, list):
+        ev = []
+    ev = [e for e in ev if isinstance(e, dict) and isinstance(e.get("t"), int) and isinstance(e.get("msg"), str)]
+    return deque(ev[:WD_EVENTS_MAX], maxlen=WD_EVENTS_MAX)
+
+
+WD = {"status": "ok", "fails": 0, "events": _load_wd_events(), "last_check": 0, "manual_stop": os.path.isfile(STOP_FLAG),
       "tp_off": False}
 
 
@@ -57,8 +70,25 @@ def set_manual_stop(on):
         pass
 
 
-def wd_event(msg, push=True):
-    WD["events"].appendleft({"t": int(time.time()), "msg": msg})
+def wd_counts(events=None):
+    """记录里的自动重启 / 切换直连 / 恢复次数"""
+    c = {"restart": 0, "direct": 0, "recover": 0}
+    for e in (WD["events"] if events is None else events):
+        k = e.get("kind")
+        if k in c:
+            c[k] += 1
+    return c
+
+
+def wd_event(msg, push=True, kind=""):
+    e = {"t": int(time.time()), "msg": msg}
+    if kind:
+        e["kind"] = kind
+    WD["events"].appendleft(e)  # deque(maxlen=20)：第 21 条进来时最旧的一条自动删除
+    try:
+        write_json(WD_EVENTS_FILE, list(WD["events"]))
+    except OSError:
+        pass
     print(time.strftime("%F %T"), "[watchdog]", msg, flush=True)
     if push:
         notify(msg)
@@ -200,7 +230,7 @@ def watchdog_tick():
                 code, out = sh(TPROXY_SH + " apply")
                 msg += "，透明代理已重新开启" if code == 0 else "，但重新开启透明代理失败：" + out[-120:]
             WD["tp_off"] = False
-            wd_event(msg)
+            wd_event(msg, kind="recover")
         WD["status"], WD["fails"] = "ok", 0
         return
     if WD["manual_stop"]:
@@ -217,7 +247,7 @@ def watchdog_tick():
         if fd and core_hang_dump(why):
             why += f"，现场已存到 {HANG_LOG}"
         wd_event(f"{cname} 核心{why}，第 {WD['fails']} 次自动重启" + (f"；日志最后一条错误：{err}" if err else ""),
-                 push=WD["fails"] == 1)
+                 push=WD["fails"] == 1, kind="restart")
         svc_restart(timeout=60, why="看门狗重启核心", cancel=lambda: WD["manual_stop"])
         return
     if WD["status"] != "direct":
@@ -225,7 +255,7 @@ def watchdog_tick():
         if redirecting:
             sh(TPROXY_SH + " stop")  # TUN 模式下核心退出时 TUN 设备与路由随之消失，这里再撤掉 DNS 重定向
             WD["tp_off"] = True
-        wd_event(f"{cname} 核心重启 2 次仍无响应，已关闭透明代理，局域网暂时直连上网")
+        wd_event(f"{cname} 核心重启 2 次仍无响应，已关闭透明代理，局域网暂时直连上网", kind="direct")
     elif WD["fails"] % 10 == 0:  # 直连状态下每 5 分钟再尝试拉起一次
         svc_restart(timeout=60, why="看门狗重启核心", cancel=lambda: WD["manual_stop"])
         if redirecting:
