@@ -160,9 +160,12 @@ def watchdog_tick():
         wd_event(f"{cname} 核心重启 2 次仍无响应，已关闭透明代理，局域网暂时直连上网")
     elif WD["fails"] % 10 == 0:  # 直连状态下每 5 分钟再尝试拉起一次
         svc_restart(timeout=60, why="看门狗重启核心", cancel=lambda: WD["manual_stop"])
-        if redirecting and core_alive():
-            sh(TPROXY_SH + " stop")  # rc 的 start_post 会重新挂上规则，等下一轮确认恢复后再开
+        if redirecting:
+            # rc 的 start_post 不管核心是否真的起来都会重新挂上规则（command_background 下启动总算成功）：
+            # 一律撤掉，局域网保持直连；核心若已恢复，下一轮确认后再重新开启
             # TUN 模式下核心一启动就接管路由，无法“暂不接管”，下一轮检查会正常恢复
+            sh(TPROXY_SH + " stop")
+            WD["tp_off"] = True
 
 
 def load_notified():

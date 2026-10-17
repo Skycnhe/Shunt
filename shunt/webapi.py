@@ -243,7 +243,23 @@ def ad_today():
 
 
 class H(BaseHTTPRequestHandler):
-    timeout = 30  # 读请求/TLS 握手的超时：卡住不发数据的连接不再永久占用线程（日志流只写不读，不受影响）
+    # HTTP/1.1 长连接：每秒的 /api/live 等轮询复用同一条 TCP / TLS 连接，不再每次握手。
+    # 约定：每个响应都带准确的 Content-Length（204 / 304 无 body），流式响应发 Connection: close；
+    # 请求体在路由前完整读掉，读不了的（超限、chunked）回应后关闭连接，避免残留字节被当成下一个请求
+    protocol_version = "HTTP/1.1"
+    timeout = 30  # 读请求/TLS 握手的超时：空闲的长连接 30 秒后关闭，卡住不发数据的连接不再永久占用线程（日志流只写不读，不受影响）
+    _want_close = False  # 本次响应后关闭连接（end_headers 时补发 Connection: close）
+    _started = False  # 本次响应的状态行是否已发出
+    _raw = b""  # 本次请求已读入的请求体
+
+    def send_response(self, code, message=None):
+        self._started = True
+        super().send_response(code, message)
+
+    def end_headers(self):
+        if self._want_close and not self.close_connection:
+            self.send_header("Connection", "close")  # send_header 会同时置 close_connection
+        super().end_headers()
 
     def log_message(self, *a):
         pass
@@ -258,6 +274,12 @@ class H(BaseHTTPRequestHandler):
 
     def send(self, code, obj, ctype="application/json"):
         body = obj if isinstance(obj, bytes) else json.dumps(obj, ensure_ascii=False).encode()
+        if code < 200 or code in (204, 304):  # 这些状态码不允许带 body：写了会污染长连接上的下一个响应
+            self.send_response(code)
+            self.send_header("Cache-Control", "no-store")
+            self.sec_headers()
+            self.end_headers()
+            return
         zipped = len(body) > 1400 and ctype in ("application/json", "text/html", "text/plain") and self.gzip_ok()
         if zipped:  # 连接列表、节点列表等较大的 JSON 压缩后通常只有 1/5～1/10
             body = gzip.compress(body, 5)
@@ -298,18 +320,46 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def body(self):
+    def pending_body(self):
+        """请求声明的 body 长度；无法按长度读取（chunked 等）返回 -1，Content-Length 非法返回 -2"""
+        te = (self.headers.get("Transfer-Encoding") or "").strip().lower()
+        if te and te != "identity":
+            return -1
         try:
             n = int(self.headers.get("Content-Length") or 0)
         except ValueError:
-            n = 0
-        if n <= 0:
-            return {}
+            return -2
+        return n if n >= 0 else -2
+
+    def read_body(self):
+        """把请求体完整读掉（长连接上不能留下未读字节）。返回错误响应已发出时为 False"""
+        self._raw = b""
+        n = self.pending_body()
+        if n == 0:
+            return True
+        self._want_close = True  # 下面任何一条错误路径都不再复用这条连接
+        if n == -1:
+            self.send(411, {"message": "不支持分块传输的请求体，请带上 Content-Length"})
+            return False
+        if n == -2:
+            self.send(400, {"message": "Content-Length 无效"})
+            return False
         if n > MAX_BODY:  # 防止超大 body 耗尽路由器内存
-            raise ValueError("请求体过大")
+            self.send(413, {"message": "请求体过大"})
+            return False
         raw = self.rfile.read(n)
+        if len(raw) < n:  # 客户端中途断开
+            self.close_connection = True
+            return False
+        self._raw = raw
+        self._want_close = False
+        return True
+
+    def body(self):
+        if not self._raw:
+            return {}
         try:
-            return json.loads(raw)
+            return json.loads(self._raw)
         except Exception:
             return {}
 
@@ -353,11 +403,16 @@ class H(BaseHTTPRequestHandler):
         return ""
 
     def route(self, m):
+        self._want_close, self._started, self._raw = False, False, b""
         u = urlparse(self.path)
         p = u.path
         why = self.guard(m, p)
         if why:
+            if self.pending_body():  # 被拒绝的请求不读它的 body，回应后直接关闭连接
+                self._want_close = True
             return self.deny(why)
+        if not self.read_body():
+            return
         if m == "GET" and (p in ("/", "/index.html") or p.lstrip("/") in STATIC_TYPES):
             return self.send_static("index.html" if p == "/" else p.lstrip("/"))
         if m == "GET" and p == "/manifest.webmanifest":
@@ -388,6 +443,9 @@ class H(BaseHTTPRequestHandler):
             raise
         except Exception as e:
             log_err(f"{m} {p}", e, tb=True)  # 堆栈只写服务端日志
+            if self._started:  # 响应头已发出一半：无法再回 500，关闭连接让客户端知道响应不完整
+                self.close_connection = True
+                return
             return self.send(500, {"message": "内部错误"})
 
     def logstream(self, level):
@@ -397,6 +455,7 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Accel-Buffering", "no")
+        self._want_close = True  # 事件流没有长度，结束即关闭连接
         self.end_headers()
         q, stop = deque(), {}
         ev = threading.Event()
@@ -690,7 +749,7 @@ class H(BaseHTTPRequestHandler):
         return self.send(200, {"message": f"已删除 {name}{extra}"})
 
     def api(self, m, p, q):
-        b = self.body() if m in ("POST", "PUT", "PATCH", "DELETE") else {}
+        b = self.body() if m in ("POST", "PUT", "PATCH", "DELETE") else {}  # 请求体已在 route() 里完整读入
         # 透传到 mihomo external-controller
         if p.startswith("/api/core/") and active_core() == "singbox":
             sub = p[len("/api/core"):]
@@ -758,6 +817,9 @@ class H(BaseHTTPRequestHandler):
             self.send_header("Content-Type", ct)
             self.send_header("Content-Length", str(len(b)))
             self.send_header("Cache-Control", "max-age=86400")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", "default-src 'none'; sandbox")  # 远端内容：即使被当作文档打开也不能执行脚本
+            self.sec_headers()
             self.end_headers()
             return self.wfile.write(b)
         if p == "/api/unlock":

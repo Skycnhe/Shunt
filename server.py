@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "10.1.0"
+PANEL_VERSION = "10.1.1"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -250,7 +250,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "10.1.0"
+PANEL_VERSION = "10.1.1"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -3731,9 +3731,9 @@ def self_update(apply=False, gh=""):
             from . import backup as backup_mod
             ok, name = backup_mod.create()
             if not ok:
-                log_err("更新前自动备份失败：%s" % name)
+                log_err("面板在线更新", "更新前自动备份失败：%s" % name)
         except Exception as e:
-            log_err("更新前自动备份异常：%s" % e)
+            log_err("面板在线更新：更新前自动备份异常", e)
         for f in changed:
             dst = local_file(f)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
@@ -3929,7 +3929,7 @@ import threading
 import time
 from urllib.parse import quote
 
-from .base import G_MANUAL, HC
+from .base import BUILTIN_POLICIES, G_MANUAL, HC
 from .corehttp import core, core_json
 from .data import load, save
 
@@ -3993,8 +3993,10 @@ def node_level(rec, cfg=None):
     return "ok"
 
 
-def apply_results(results, d=None):
-    """合并一次全量测速结果：{node_name: latency_ms(0=失败)}"""
+def apply_results(results, d=None, universe=None):
+    """合并一次全量测速结果：{node_name: latency_ms(0=失败)}。
+    universe：当前全部节点名；给出时只删除不在其中的节点记录（失败节点保留并计数），
+    不给时按 results 的键清理（兼容旧调用）"""
     d = d or load()
     cfg = health_cfg(d)
     health = d.get("health") or {}
@@ -4006,13 +4008,26 @@ def apply_results(results, d=None):
             rec["hidden"] = True
         health[name] = rec
     # 清理已删除节点的记录
-    all_nodes = set(results.keys())
+    all_nodes = set(results.keys()) if universe is None else set(universe) | set(results.keys())
     for name in list(health.keys()):
         if name not in all_nodes:
             del health[name]
     d["health"] = health
     save(d)
     return health
+
+
+def merge_delay(members, code, data):
+    """把 /group/…/delay 的应答整理成 {节点: 延迟(0=失败)}。
+    mihomo 与 sing-box 的 clash API 都只返回测速成功的节点，失败的直接缺席；
+    mihomo 全部失败时返回 504，sing-box 返回空对象。全集取自组的 all 成员，缺席的记为失败"""
+    ok = data if code == 200 and isinstance(data, dict) else {}
+    nodes = [n for n in (members or list(ok)) if isinstance(n, str) and n not in BUILTIN_POLICIES]
+    results = {}
+    for n in nodes:
+        v = ok.get(n)
+        results[n] = v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else 0
+    return results
 
 
 def unhide(name):
@@ -4042,23 +4057,25 @@ def run_check():
     HEALTH_STATE["checked"] = 0
     try:
         # 用「🖐️ 手动选择」组测速（含全部节点），不影响 url-test 组的固定选择
-        if not core_json("/proxies/" + quote(G_MANUAL)):
+        pg = core_json("/proxies/" + quote(G_MANUAL))
+        if not pg:
             return False, "手动选择组不存在"
+        members = pg.get("all") or []
         code, raw = core("GET", f"/group/{quote(G_MANUAL)}/delay?url={quote(HC)}&timeout=5000", timeout=180)
-        if code != 200:
+        if code not in (200, 504):  # 504：mihomo 全部节点超时，按全部失败记录
             return False, f"测速接口返回 {code}"
-        try:
-            data = json.loads(raw)
-        except Exception:
-            return False, "测速结果解析失败"
-        results = {}
-        for name, v in data.items():
-            # 只统计实际节点，跳过策略组
-            if isinstance(v, int):
-                results[name] = v
+        data = {}
+        if code == 200:
+            try:
+                data = json.loads(raw)
+            except Exception:
+                return False, "测速结果解析失败"
+        results = merge_delay(members, code, data)
+        if not results:
+            return False, "手动选择组里没有节点"
         HEALTH_STATE["total"] = len(results)
         HEALTH_STATE["checked"] = len(results)
-        apply_results(results)
+        apply_results(results, universe=results.keys())
         HEALTH_STATE["last_run"] = int(time.time())
         ok_count = sum(1 for v in results.values() if v > 0)
         return True, f"检查完成：{ok_count}/{len(results)} 个节点正常"
@@ -5091,20 +5108,57 @@ FAV_FAIL = {}
 FAV_FAIL_MAX = 2000  # 失败记录上限：超限淘汰最旧的，防止无界增长
 
 
+def img_type(b):
+    """按魔数识别位图图标，返回 Content-Type；SVG、HTML 等可执行脚本的格式一律不认（防 XSS）"""
+    if b[:4] == b"\\x00\\x00\\x01\\x00":
+        return "image/x-icon"
+    if b[:8] == b"\\x89PNG\\r\\n\\x1a\\n":
+        return "image/png"
+    if b[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if b[:3] == b"\\xff\\xd8\\xff":
+        return "image/jpeg"
+    if b[:4] == b"RIFF" and b[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
 def _is_img(b):
-    return b[:4] in (b"\\x00\\x00\\x01\\x00", b"\\x89PNG") or b[:3] == b"GIF" or b[:2] == b"\\xff\\xd8" or b[:4] == b"RIFF" or b.lstrip()[:4] == b"<svg"
+    return img_type(b) is not None
 
 
-def favicon(url):
-    host = (urlsplit(url).hostname or "").lower()
+def fav_hosts(d=None):
+    """允许取图标的站点：只限「延迟站点」列表里出现过的 host，防止面板被当作任意 URL 的同源代理"""
+    tests = (d or load()).get("tests") or TESTS
+    out = set()
+    for t in tests:
+        try:
+            h = (urlsplit(str(t.get("url") or "")).hostname or "").lower()
+        except (AttributeError, ValueError):
+            continue
+        if h:
+            out.add(h)
+    return out
+
+
+def favicon(url, allowed=None):
+    try:
+        host = (urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return None, None
     if not re.fullmatch(r"[a-z0-9.-]{1,253}", host):
+        return None, None
+    if host not in (fav_hosts() if allowed is None else allowed):
         return None, None
     path = os.path.join(FAV_DIR, host)
     try:
         if time.time() - os.path.getmtime(path) < 7 * 86400:
             with open(path, "rb") as f:
                 b = f.read()
-            return b, ("image/svg+xml" if b.lstrip()[:4] == b"<svg" else "image/x-icon" if b[:4] == b"\\x00\\x00\\x01\\x00" else "image/png")
+            ct = img_type(b)
+            if ct:
+                return b, ct
+            os.remove(path)  # 旧版本缓存的 SVG 等非位图：删掉重新获取
     except OSError:
         pass
     if time.time() - FAV_FAIL.get(host, 0) < 3600:
@@ -5121,7 +5175,7 @@ def favicon(url):
                 os.makedirs(FAV_DIR, exist_ok=True)
                 with open(path, "wb") as f:
                     f.write(b)
-                return favicon(url)
+                return b, img_type(b)
         except Exception:
             pass
     if len(FAV_FAIL) >= FAV_FAIL_MAX:
@@ -5291,9 +5345,12 @@ def watchdog_tick():
         wd_event(f"{cname} 核心重启 2 次仍无响应，已关闭透明代理，局域网暂时直连上网")
     elif WD["fails"] % 10 == 0:  # 直连状态下每 5 分钟再尝试拉起一次
         svc_restart(timeout=60, why="看门狗重启核心", cancel=lambda: WD["manual_stop"])
-        if redirecting and core_alive():
-            sh(TPROXY_SH + " stop")  # rc 的 start_post 会重新挂上规则，等下一轮确认恢复后再开
+        if redirecting:
+            # rc 的 start_post 不管核心是否真的起来都会重新挂上规则（command_background 下启动总算成功）：
+            # 一律撤掉，局域网保持直连；核心若已恢复，下一轮确认后再重新开启
             # TUN 模式下核心一启动就接管路由，无法“暂不接管”，下一轮检查会正常恢复
+            sh(TPROXY_SH + " stop")
+            WD["tp_off"] = True
 
 
 def load_notified():
@@ -8211,7 +8268,23 @@ def ad_today():
 
 
 class H(BaseHTTPRequestHandler):
-    timeout = 30  # 读请求/TLS 握手的超时：卡住不发数据的连接不再永久占用线程（日志流只写不读，不受影响）
+    # HTTP/1.1 长连接：每秒的 /api/live 等轮询复用同一条 TCP / TLS 连接，不再每次握手。
+    # 约定：每个响应都带准确的 Content-Length（204 / 304 无 body），流式响应发 Connection: close；
+    # 请求体在路由前完整读掉，读不了的（超限、chunked）回应后关闭连接，避免残留字节被当成下一个请求
+    protocol_version = "HTTP/1.1"
+    timeout = 30  # 读请求/TLS 握手的超时：空闲的长连接 30 秒后关闭，卡住不发数据的连接不再永久占用线程（日志流只写不读，不受影响）
+    _want_close = False  # 本次响应后关闭连接（end_headers 时补发 Connection: close）
+    _started = False  # 本次响应的状态行是否已发出
+    _raw = b""  # 本次请求已读入的请求体
+
+    def send_response(self, code, message=None):
+        self._started = True
+        super().send_response(code, message)
+
+    def end_headers(self):
+        if self._want_close and not self.close_connection:
+            self.send_header("Connection", "close")  # send_header 会同时置 close_connection
+        super().end_headers()
 
     def log_message(self, *a):
         pass
@@ -8226,6 +8299,12 @@ class H(BaseHTTPRequestHandler):
 
     def send(self, code, obj, ctype="application/json"):
         body = obj if isinstance(obj, bytes) else json.dumps(obj, ensure_ascii=False).encode()
+        if code < 200 or code in (204, 304):  # 这些状态码不允许带 body：写了会污染长连接上的下一个响应
+            self.send_response(code)
+            self.send_header("Cache-Control", "no-store")
+            self.sec_headers()
+            self.end_headers()
+            return
         zipped = len(body) > 1400 and ctype in ("application/json", "text/html", "text/plain") and self.gzip_ok()
         if zipped:  # 连接列表、节点列表等较大的 JSON 压缩后通常只有 1/5～1/10
             body = gzip.compress(body, 5)
@@ -8266,18 +8345,46 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def body(self):
+    def pending_body(self):
+        """请求声明的 body 长度；无法按长度读取（chunked 等）返回 -1，Content-Length 非法返回 -2"""
+        te = (self.headers.get("Transfer-Encoding") or "").strip().lower()
+        if te and te != "identity":
+            return -1
         try:
             n = int(self.headers.get("Content-Length") or 0)
         except ValueError:
-            n = 0
-        if n <= 0:
-            return {}
+            return -2
+        return n if n >= 0 else -2
+
+    def read_body(self):
+        """把请求体完整读掉（长连接上不能留下未读字节）。返回错误响应已发出时为 False"""
+        self._raw = b""
+        n = self.pending_body()
+        if n == 0:
+            return True
+        self._want_close = True  # 下面任何一条错误路径都不再复用这条连接
+        if n == -1:
+            self.send(411, {"message": "不支持分块传输的请求体，请带上 Content-Length"})
+            return False
+        if n == -2:
+            self.send(400, {"message": "Content-Length 无效"})
+            return False
         if n > MAX_BODY:  # 防止超大 body 耗尽路由器内存
-            raise ValueError("请求体过大")
+            self.send(413, {"message": "请求体过大"})
+            return False
         raw = self.rfile.read(n)
+        if len(raw) < n:  # 客户端中途断开
+            self.close_connection = True
+            return False
+        self._raw = raw
+        self._want_close = False
+        return True
+
+    def body(self):
+        if not self._raw:
+            return {}
         try:
-            return json.loads(raw)
+            return json.loads(self._raw)
         except Exception:
             return {}
 
@@ -8321,11 +8428,16 @@ class H(BaseHTTPRequestHandler):
         return ""
 
     def route(self, m):
+        self._want_close, self._started, self._raw = False, False, b""
         u = urlparse(self.path)
         p = u.path
         why = self.guard(m, p)
         if why:
+            if self.pending_body():  # 被拒绝的请求不读它的 body，回应后直接关闭连接
+                self._want_close = True
             return self.deny(why)
+        if not self.read_body():
+            return
         if m == "GET" and (p in ("/", "/index.html") or p.lstrip("/") in STATIC_TYPES):
             return self.send_static("index.html" if p == "/" else p.lstrip("/"))
         if m == "GET" and p == "/manifest.webmanifest":
@@ -8356,6 +8468,9 @@ class H(BaseHTTPRequestHandler):
             raise
         except Exception as e:
             log_err(f"{m} {p}", e, tb=True)  # 堆栈只写服务端日志
+            if self._started:  # 响应头已发出一半：无法再回 500，关闭连接让客户端知道响应不完整
+                self.close_connection = True
+                return
             return self.send(500, {"message": "内部错误"})
 
     def logstream(self, level):
@@ -8365,6 +8480,7 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Accel-Buffering", "no")
+        self._want_close = True  # 事件流没有长度，结束即关闭连接
         self.end_headers()
         q, stop = deque(), {}
         ev = threading.Event()
@@ -8658,7 +8774,7 @@ class H(BaseHTTPRequestHandler):
         return self.send(200, {"message": f"已删除 {name}{extra}"})
 
     def api(self, m, p, q):
-        b = self.body() if m in ("POST", "PUT", "PATCH", "DELETE") else {}
+        b = self.body() if m in ("POST", "PUT", "PATCH", "DELETE") else {}  # 请求体已在 route() 里完整读入
         # 透传到 mihomo external-controller
         if p.startswith("/api/core/") and active_core() == "singbox":
             sub = p[len("/api/core"):]
@@ -8726,6 +8842,9 @@ class H(BaseHTTPRequestHandler):
             self.send_header("Content-Type", ct)
             self.send_header("Content-Length", str(len(b)))
             self.send_header("Cache-Control", "max-age=86400")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", "default-src 'none'; sandbox")  # 远端内容：即使被当作文档打开也不能执行脚本
+            self.sec_headers()
             self.end_headers()
             return self.wfile.write(b)
         if p == "/api/unlock":

@@ -149,9 +149,9 @@ def self_update(apply=False, gh=""):
             from . import backup as backup_mod
             ok, name = backup_mod.create()
             if not ok:
-                log_err("更新前自动备份失败：%s" % name)
+                log_err("面板在线更新", "更新前自动备份失败：%s" % name)
         except Exception as e:
-            log_err("更新前自动备份异常：%s" % e)
+            log_err("面板在线更新：更新前自动备份异常", e)
         for f in changed:
             dst = local_file(f)
             os.makedirs(os.path.dirname(dst), exist_ok=True)

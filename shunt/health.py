@@ -4,7 +4,7 @@ import threading
 import time
 from urllib.parse import quote
 
-from .base import G_MANUAL, HC
+from .base import BUILTIN_POLICIES, G_MANUAL, HC
 from .corehttp import core, core_json
 from .data import load, save
 
@@ -68,8 +68,10 @@ def node_level(rec, cfg=None):
     return "ok"
 
 
-def apply_results(results, d=None):
-    """合并一次全量测速结果：{node_name: latency_ms(0=失败)}"""
+def apply_results(results, d=None, universe=None):
+    """合并一次全量测速结果：{node_name: latency_ms(0=失败)}。
+    universe：当前全部节点名；给出时只删除不在其中的节点记录（失败节点保留并计数），
+    不给时按 results 的键清理（兼容旧调用）"""
     d = d or load()
     cfg = health_cfg(d)
     health = d.get("health") or {}
@@ -81,13 +83,26 @@ def apply_results(results, d=None):
             rec["hidden"] = True
         health[name] = rec
     # 清理已删除节点的记录
-    all_nodes = set(results.keys())
+    all_nodes = set(results.keys()) if universe is None else set(universe) | set(results.keys())
     for name in list(health.keys()):
         if name not in all_nodes:
             del health[name]
     d["health"] = health
     save(d)
     return health
+
+
+def merge_delay(members, code, data):
+    """把 /group/…/delay 的应答整理成 {节点: 延迟(0=失败)}。
+    mihomo 与 sing-box 的 clash API 都只返回测速成功的节点，失败的直接缺席；
+    mihomo 全部失败时返回 504，sing-box 返回空对象。全集取自组的 all 成员，缺席的记为失败"""
+    ok = data if code == 200 and isinstance(data, dict) else {}
+    nodes = [n for n in (members or list(ok)) if isinstance(n, str) and n not in BUILTIN_POLICIES]
+    results = {}
+    for n in nodes:
+        v = ok.get(n)
+        results[n] = v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else 0
+    return results
 
 
 def unhide(name):
@@ -117,23 +132,25 @@ def run_check():
     HEALTH_STATE["checked"] = 0
     try:
         # 用「🖐️ 手动选择」组测速（含全部节点），不影响 url-test 组的固定选择
-        if not core_json("/proxies/" + quote(G_MANUAL)):
+        pg = core_json("/proxies/" + quote(G_MANUAL))
+        if not pg:
             return False, "手动选择组不存在"
+        members = pg.get("all") or []
         code, raw = core("GET", f"/group/{quote(G_MANUAL)}/delay?url={quote(HC)}&timeout=5000", timeout=180)
-        if code != 200:
+        if code not in (200, 504):  # 504：mihomo 全部节点超时，按全部失败记录
             return False, f"测速接口返回 {code}"
-        try:
-            data = json.loads(raw)
-        except Exception:
-            return False, "测速结果解析失败"
-        results = {}
-        for name, v in data.items():
-            # 只统计实际节点，跳过策略组
-            if isinstance(v, int):
-                results[name] = v
+        data = {}
+        if code == 200:
+            try:
+                data = json.loads(raw)
+            except Exception:
+                return False, "测速结果解析失败"
+        results = merge_delay(members, code, data)
+        if not results:
+            return False, "手动选择组里没有节点"
         HEALTH_STATE["total"] = len(results)
         HEALTH_STATE["checked"] = len(results)
-        apply_results(results)
+        apply_results(results, universe=results.keys())
         HEALTH_STATE["last_run"] = int(time.time())
         ok_count = sum(1 for v in results.values() if v > 0)
         return True, f"检查完成：{ok_count}/{len(results)} 个节点正常"
