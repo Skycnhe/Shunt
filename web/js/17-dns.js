@@ -99,7 +99,6 @@ const SVC_TXT={start:'启动',stop:'停止',restart:'重启'};
 function svcBusy(on){['#h-restart','#h-stop','#h-start'].forEach(k=>{const b=$(k);if(b){b.disabled=on;b.style.opacity=on?.5:''}})}
 async function svc(a){if(a==='stop'&&!confirm('停止代理核心？\n停止后经旁路由的设备将无法上网（看门狗不会自动拉起，需手动启动）。'))return;
   if(a==='restart'&&!confirm('重启代理核心？现有连接会断开。'))return;
-  if((a==='start'||a==='restart')&&WARP_ON&&!confirm('WARP 正在接管流量，启动核心会自动停止 WARP，继续？'))return;
   if(!SVC_TXT[a]){try{toast('执行中…');const j=await api('/api/service','POST',{action:a});toast(j.message||'完成');setTimeout(loadState,1500)}catch(e){toast(e.message)}return}
   svcBusy(true);
   try{let s;

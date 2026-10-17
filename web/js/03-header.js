@@ -1,19 +1,19 @@
 // 顶栏：核心状态 + 启停 + 实时数据
 const PM_TXT={tproxy:'TProxy',tun:'TUN',off:'已关闭'};
-let AD_TODAY=null,WARP_ON=false; // 今日拦截数（/api/ping 每 15 秒带回）
+let AD_TODAY=null; // 今日拦截数（/api/ping 每 15 秒带回）
 function renderAdChip(){const el=$('#h-ad');if(!el)return;const on=STATE.adblock_on!==false;
   el.querySelector('b').textContent=!on||AD_TODAY==null?'-':(+AD_TODAY||0).toLocaleString('zh-CN');
   el.title=on?'今天拦截的广告请求（本地时间 0 点清零，与概览「今日拦截广告」一致），点击查看':'广告拦截未开启，点击去开启'}
 let STATE_VER=-1; // data.json 的版本（每次 save 自增），变化时才拉全量 /api/state
 async function loadState(){
   let v=null;
-  try{const pg=await api('/api/ping');v=pg.version;AD_TODAY=pg.ad_today;if(!!pg.warp!==WARP_ON){WARP_ON=!!pg.warp;if(STATE.running!==undefined)renderCore(STATE.running)}}catch(e){/* 心跳失败则回退全量拉取 */}
+  try{const pg=await api('/api/ping');v=pg.version;AD_TODAY=pg.ad_today}catch(e){/* 心跳失败则回退全量拉取 */}
   renderAdChip();
   if(v!==null&&v===STATE_VER&&STATE.running!==undefined)return; // 配置无变化：顶栏运行状态由 1 秒实时流保持
-  STATE=await api('/api/state');STATE_VER=v;WARP_ON=!!STATE.warp;
+  STATE=await api('/api/state');STATE_VER=v;
   renderCore(STATE.running);renderAdChip();renderMode();renderWD();renderPMStat();renderVer()}
 function renderCore(run){$('#h-dot').className='dot '+(run?'on':'off');$('#h-run').textContent=run?'运行中':'已停止';
-  $('#h-mode').innerHTML=run?'<span class="ok">● 代理</span>':WARP_ON?'<span class="ok" title="核心已停止，局域网经 WARP 透明代理">● WARP</span>':'<span class="mut">● 直连</span>';
+  $('#h-mode').innerHTML=run?'<span class="ok">● 代理</span>':'<span class="mut">● 直连</span>';
   $('#h-ver').textContent=run&&STATE.version&&STATE.version!=='-'?STATE.version:'';$('#h-run').parentNode.title=run&&STATE.version&&STATE.version!=='-'?(CORE_LABEL[STATE.core]||STATE.core||'')+' '+STATE.version:'';
   $('#h-restart').classList.toggle('hide',!run);$('#h-stop').classList.toggle('hide',!run);$('#h-start').classList.toggle('hide',run)}
 function renderHdr(l){$('#h-up').textContent=fmt(l.up)+'/s';$('#h-down').textContent=fmt(l.down)+'/s';

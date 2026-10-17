@@ -5,7 +5,7 @@
 #   start  TProxy 模式：TCP/UDP 打标记转发到 mihomo 的 7893，DNS 劫持到 1053
 #   dns    TUN 模式：只保留 “发往本机 53 端口的 DNS 重定向到 1053”（流量本身由 mihomo TUN 的 auto-route 接管）
 #   stop   删除本脚本创建的全部规则
-#   apply  按面板里的“代理方式”(TProxy / TUN / 关闭) 自动选择上面三者之一；WARP 在运行时固定用 TProxy（WARP 实例监听 7893）
+#   apply  按面板里的“代理方式”(TProxy / TUN / 关闭) 自动选择上面三者之一
 TPROXY_PORT=7893
 DNS_PORT=1053
 MARK=0x162
@@ -175,8 +175,6 @@ case "$1" in
   stop) stop ;;
   status) status ;;
   apply)
-    WPID=$(cat /run/shunt-warp.pid 2>/dev/null)
-    if [ -n "$WPID" ] && grep -q warp "/proc/$WPID/cmdline" 2>/dev/null; then start; exit $?; fi
     load_env
     case "$MODE" in
       tproxy) start ;;

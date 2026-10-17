@@ -1,10 +1,10 @@
 """"""
-import ipaddress, os, re, signal, ssl, sys, threading, time
+import ipaddress, os, re, shlex, signal, ssl, sys, threading, time
 
 from .svcmigrate import svc_migrate
 from .errlog import log_err
 from . import adblock, stats
-from .base import CERT, KEY, PANEL_DIR, PORT
+from .base import CERT, KEY, PANEL_DIR, PORT, TPROXY_SH
 from .data import load, update
 from .mihomo import dns_cfg
 from .sb_common import active_core, write_core_file
@@ -21,7 +21,6 @@ from .migrate import snapshot_selections, startup_migrate
 from .https import Server, gen_cert, https_ready
 from .update_guard import ROLLBACK_NOTE
 from .webapi import H
-from . import warp
 def tp_env():
     """供 tproxy.sh eval：绕过列表、IPv6 开关、本机 IPv6 网段（值均经过正则过滤）"""
     d = load()
@@ -54,6 +53,29 @@ def default_tz():
     os.environ["TZ"] = "CST-8"
     time.tzset()
     return True
+
+
+def _drop_warp():
+    """v10.1.0 去掉了 WARP：结束旧版留下的 WARP 实例、撤掉它挂的透明代理规则（恢复直连），删除其配置目录"""
+    import shutil
+    pidf, wdir = "/run/shunt-warp.pid", os.path.join(PANEL_DIR, "warp")
+    if os.path.isfile(pidf):
+        try:
+            with open(pidf) as f:
+                pid = int(f.read().strip())
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                if wdir.encode() not in f.read():  # pid 已被别的进程复用
+                    raise ValueError
+            os.kill(pid, signal.SIGTERM)
+            sh(f"sh {shlex.quote(TPROXY_SH)} stop", timeout=30)
+            print(time.strftime("%F %T"), "[upgrade] 已结束旧版 WARP 实例，局域网恢复直连；需要代理请在顶栏启动核心", flush=True)
+        except (OSError, ValueError):
+            pass
+        try:
+            os.remove(pidf)
+        except OSError:
+            pass
+    shutil.rmtree(wdir, ignore_errors=True)
 
 
 def main():
@@ -105,11 +127,12 @@ def main():
         os.remove(os.path.join(PANEL_DIR, "sessions.json"))
     except FileNotFoundError:
         pass
+    _drop_warp()
     signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))  # 让 finally 有机会保存统计
     STATS = stats.STATS = Stats()
     AD_STATS = adblock.AD_STATS = AdStats()
     for target, args in ((STATS.loop, ()), (monitor_loop, ()), (AD_STATS.loop, ()), (AD_STATS.dns_loop, ()), (live_loop, ("/traffic",)),
-                         (live_loop, ("/memory",)), (log_loop, ()), (sched_loop, ()), (rdns_loop, ()), (startup_migrate, ()), (warp.loop, ())):
+                         (live_loop, ("/memory",)), (log_loop, ()), (sched_loop, ()), (rdns_loop, ()), (startup_migrate, ())):
         threading.Thread(target=target, args=args, daemon=True).start()
     try:
         opt_fix_ulimit()
