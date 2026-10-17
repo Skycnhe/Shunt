@@ -127,6 +127,42 @@ DOH_IPS = ["1.1.1.1/32", "1.0.0.1/32", "8.8.8.8/32", "8.8.4.4/32", "9.9.9.9/32",
 DOH_DOMAINS = ["+.dns.google", "+.cloudflare-dns.com", "+.one.one.one.one", "+.dns.quad9.net", "+.doh.opendns.com", "+.dns.adguard-dns.com",
                "+.dns.adguard.com", "+.dns.nextdns.io", "+.doh.pub", "+.dot.pub", "+.dns.alidns.com", "+.doh.360.cn", "+.dns.twnic.tw",
                "+.mozilla.cloudflare-dns.com", "+.chrome.cloudflare-dns.com", "+.dns.sb", "+.doh.dns.sb"]
+# 国内常用 App / 网站直连名单（内置 cn-apps 规则集）：geosite:cn 之外再兜一层。
+# 漏网的典型是字节系 snssdk.com：不在 geosite-cn 里，没命中域名规则就会按 IP 判断，经代理 DNS 解析
+# 拿到海外 IP，最后落进「漏网之鱼」走代理。名单排在 AI / 流媒体 / geolocation-!cn 之前，DNS 也走直连。
+CN_APPS = {
+    "社交": ["qq.com", "qq.com.cn", "weixin.qq.com", "wechat.com", "weixinbridge.com", "wechatpay.com", "qpic.cn", "gtimg.cn",
+             "gtimg.com", "idqqimg.com", "qlogo.cn", "tencent.com", "tencent-cloud.net", "myqcloud.com", "qcloud.com", "tencentcs.com",
+             "weibo.com", "weibo.cn", "sinaimg.cn", "sina.com.cn", "sina.cn", "xiaohongshu.com", "xhscdn.com", "xhslink.com",
+             "zhihu.com", "zhimg.com", "douban.com", "doubanio.com", "immomo.com", "momocdn.com", "soulapp.cn", "soulapp.me",
+             "tieba.baidu.com", "hupu.com", "hoopchina.com.cn", "dingtalk.com", "dingtalkapps.com", "feishu.cn", "feishucdn.com",
+             "larksuite.cn", "work.weixin.qq.com"],
+    "视频": ["bilibili.com", "bilibili.cn", "biliapi.com", "biliapi.net", "bilivideo.com", "bilivideo.cn", "hdslb.com", "biligame.com",
+             "iqiyi.com", "iqiyipic.com", "qiyi.com", "qiyipic.com", "71.am", "youku.com", "ykimg.com", "tudou.com", "mgtv.com",
+             "hitv.com", "v.qq.com", "video.qq.com", "douyu.com", "douyucdn.cn", "huya.com", "msstatic.com", "cctv.com", "cntv.cn",
+             "yangshipin.cn", "miguvideo.com", "migu.cn", "music.163.com", "126.net", "kugou.com", "kuwo.cn", "y.qq.com", "ximalaya.com",
+             "xmcdn.com"],
+    "短视频": ["douyin.com", "douyincdn.com", "douyinpic.com", "douyinvod.com", "douyinstatic.com", "amemv.com", "snssdk.com",
+               "bytedance.com", "byteimg.com", "bytecdn.cn", "bytedns.net", "byted-static.com", "bytegoofy.com", "ibytedtos.com",
+               "ixigua.com", "pstatp.com", "toutiao.com", "toutiaoimg.com", "toutiaocdn.com", "zijieapi.com", "zijieimg.com",
+               "volces.com", "volccdn.com", "kuaishou.com", "kuaishouzt.com", "gifshow.com", "ksapisrv.com", "kwaicdn.com",
+               "kwimgs.com", "yximgs.com", "kspkg.com", "weishi.qq.com", "channels.weixin.qq.com"],
+    "头部网站": ["baidu.com", "bdstatic.com", "bdimg.com", "baidupcs.com", "bcebos.com", "taobao.com", "tmall.com", "alicdn.com",
+                 "aliyun.com", "aliyuncs.com", "alibaba.com", "tbcdn.cn", "mmstat.com", "jd.com", "jd.hk", "360buyimg.com", "jdcloud.com",
+                 "pinduoduo.com", "yangkeduo.com", "pddpic.com", "pddugc.com", "meituan.com", "meituan.net", "dianping.com",
+                 "ele.me", "elemecdn.com", "163.com", "netease.com", "ctrip.com", "trip.com", "12306.cn", "amap.com", "autonavi.com",
+                 "didi.cn", "didiglobal.com", "didistatic.com", "xiaomi.com", "mi.com", "miui.com", "huawei.com", "hicloud.com",
+                 "dbankcloud.com", "hihonorcloud.com", "honor.com", "vivo.com.cn", "oppo.com", "heytapmobi.com", "coloros.com",
+                 "csdn.net", "sohu.com", "ifeng.com", "360.cn", "qhimg.com", "smzdm.com", "58.com", "zhipin.com"],
+    "支付银行": ["alipay.com", "alipay.cn", "alipayobjects.com", "alipay-eco.com", "antgroup.com", "mybank.cn", "tenpay.com",
+                 "wechatpay.com", "unionpay.com", "95516.com", "chinaums.com", "jdpay.com", "icbc.com.cn", "ccb.com", "abchina.com",
+                 "boc.cn", "bankcomm.com", "cmbchina.com", "psbc.com", "spdb.com.cn", "citicbank.com", "cebbank.com", "cmbc.com.cn",
+                 "pingan.com", "webank.com", "yunshanfu.cn"],
+}
+CN_APP_DOMAINS = list(dict.fromkeys("+." + x for v in CN_APPS.values() for x in v))
+# 规则匹配前解析域名时带上国内网段（ECS）：未知的国内域名经代理 DNS 解析也能拿到国内 CDN 的 IP，GEOIP,CN 才能命中直连；
+# 只用于分流判断，不暴露用户真实 IP（223.5.5.0/24 是阿里公共 DNS 所在网段）
+CN_ECS = "223.5.5.0/24"
 LAN_IN = "IN-TYPE,TPROXY/TUN/REDIR"  # 只针对透明代理进来的局域网流量；mihomo 自己的 DNS 查询（Inner）与 7890 端口不受影响
 # 国内（会看到你查询国外域名就算泄露）的 DNS 服务器特征
 CN_DNS = re.compile(r"(?i)(?:^|[/@\[])(?:223\.5\.5\.5|223\.6\.6\.6|2400:3200|119\.29\.29\.29|119\.28\.28\.28|182\.254\.11[68]\.116|"
@@ -180,7 +216,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "10.2.3"
+PANEL_VERSION = "10.2.4"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
