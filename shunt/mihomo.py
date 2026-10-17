@@ -2,7 +2,7 @@
 import ipaddress, json, os, re
 
 from .base import (
-    AUTO_ORDER, BUILTIN_POLICIES, CONF_DIR, CTRL_HOST, CTRL_PORT, DEFAULT_EXCLUDE, DNS_DEFAULT, DNS_LISTS, DOH_DOMAINS, DOH_IPS, G_AI,
+    AUTO_ORDER, BUILTIN_POLICIES, CN_APP_DOMAINS, CONF_DIR, CTRL_HOST, CTRL_PORT, DEFAULT_EXCLUDE, DNS_DEFAULT, DNS_LISTS, DOH_DOMAINS, DOH_IPS, G_AI,
     G_AUTO, G_DIRECT, G_FINAL, G_GG, G_MANUAL, G_NF, G_SEL, G_TG, G_YT, HC, LAN_IN, LB_ORDER, LGBM_URL, MIHOMO_BIN, MIXED, SIDE_GROUPS, SMART_BIN,
     TUN_DEFAULT, TUN_STACKS
 )
@@ -150,6 +150,7 @@ def build_rule_providers(d, dc):
                                      "url": r["url"], "path": f"./rules/{safe(r['name'])}.{ext}", "interval": 86400}
     ab_prov, ab_rules = adblock_providers(d)
     rule_providers.update(ab_prov)
+    rule_providers["cn-apps"] = {"type": "inline", "behavior": "domain", "payload": list(CN_APP_DOMAINS)}
     if dc["block_bypass"]:  # 阻止局域网设备绕过 mihomo DNS：拒绝 DoT/DoQ(853) 与已知公共 DoH 服务器
         rule_providers["dns-bypass-ip"] = {"type": "inline", "behavior": "ipcidr", "payload": list(DOH_IPS)}
         rule_providers["dns-bypass-domain"] = {"type": "inline", "behavior": "domain", "payload": list(DOH_DOMAINS)}
@@ -191,7 +192,7 @@ def mihomo_rules(d, policies, dc):
                  f"AND,(({LAN_IN}),(DST-PORT,443),(RULE-SET,dns-bypass-ip,no-resolve)),REJECT",
                  f"AND,(({LAN_IN}),(RULE-SET,dns-bypass-domain)),REJECT"]
     rules = pre + guard + ab_rules + [x for x in custom if x] + rs_rules + [
-        "GEOSITE,private,DIRECT", "GEOIP,private,DIRECT,no-resolve",
+        "GEOSITE,private,DIRECT", "GEOIP,private,DIRECT,no-resolve", "RULE-SET,cn-apps,DIRECT",
         f"GEOSITE,category-ai-!cn,{G_AI}", f"GEOSITE,netflix,{G_NF}", f"GEOIP,netflix,{G_NF},no-resolve",
         f"GEOSITE,youtube,{G_YT}", f"GEOSITE,google,{G_GG}", f"GEOIP,google,{G_GG},no-resolve",
         f"GEOSITE,telegram,{G_TG}", f"GEOIP,telegram,{G_TG},no-resolve",
@@ -237,6 +238,7 @@ def mihomo_dns(d, dc, policies, ab_prov):
         if pe["match"] not in pol:
             pol[pe["match"]] = fx(pe["servers"])
     if dc["policy"] and proxy_dns:  # 国内域名走直连 DNS，其余（含未知域名）走代理 DNS
+        pol.setdefault("rule-set:cn-apps", direct)
         pol.setdefault("geosite:cn,private", direct)
     if pol:
         dns["nameserver-policy"] = pol
