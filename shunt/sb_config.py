@@ -2,7 +2,7 @@
 import ipaddress, json, os, re, shlex, signal, threading, time, urllib.request, urllib.error
 
 from .base import (
-    AB_DIR, BUILTIN_POLICIES, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, UA, dl_check, wd_hold)
+    AB_DIR, BUILTIN_POLICIES, CN_ECS, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, UA, dl_check, wd_hold)
 from .errlog import log_tail
 from .data import auto_name, lb_dropped_names, lb_names, lb_old_name, load, safe, write_json
 from .groups import PROV, gcfg, rx
@@ -65,6 +65,7 @@ def build_singbox(d):
         for r in route_rules:
             if r.get("action") == "resolve":
                 r["server"] = t_proxy if dns_cfg(d)["mode"] == "fake-ip" else dns["final"]
+                r["client_subnet"] = CN_ECS  # 经代理 DNS 解析时按国内网段返回，国内 CDN 域名才能命中 GEOIP,CN 直连
     elif resolved:
         for r in route_rules:
             if r.get("action") == "resolve":
