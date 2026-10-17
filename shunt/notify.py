@@ -1,5 +1,5 @@
 """Telegram 通知"""
-import json, os, socket, threading, time, urllib.request, urllib.error
+import json, os, signal, socket, threading, time, urllib.request, urllib.error
 from collections import deque
 from urllib.parse import quote
 
@@ -109,6 +109,59 @@ def core_fd_usage():
         return ""
 
 
+HANG_LOG = os.environ.get("PANEL_HANG_LOG", "/var/log/shunt-core-hang.log")
+
+
+def core_hang_dump(why):
+    """控制接口无响应、进程仍在：重启前把核心日志末尾和 Go 协程栈（SIGQUIT）存进 HANG_LOG。
+    start_pre 会清空核心日志，不存下来就无从知道核心当时卡在哪。只保留最近一次（最多约 512KB）"""
+    try:
+        with open(CORE_PID) as f:
+            pid = int(f.read().strip())
+        os.kill(pid, 0)
+    except Exception:
+        return False
+    def tail(n):
+        try:
+            with open(MIHOMO_LOG, "rb") as f:
+                f.seek(0, 2)
+                end = f.tell()
+                f.seek(max(0, end - n))
+                return end, f.read()
+        except OSError:
+            return 0, b""
+    off, before = tail(64 * 1024)
+    try:
+        os.kill(pid, signal.SIGQUIT)  # Go 运行时收到 SIGQUIT 把所有协程栈打到 stderr（即核心日志）后退出
+    except OSError:
+        pass
+    for _ in range(20):
+        time.sleep(0.25)
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            break
+    time.sleep(0.3)
+    end, _ = tail(0)
+    dump = b""
+    if end > off:
+        try:
+            with open(MIHOMO_LOG, "rb") as f:
+                f.seek(off)
+                dump = f.read(448 * 1024)
+        except OSError:
+            pass
+    try:
+        with open(HANG_LOG, "wb") as f:
+            f.write(("===== %s %s =====\n----- 核心日志末尾 -----\n" % (time.strftime("%F %T"), why)).encode())
+            f.write(before)
+            f.write("\n----- SIGQUIT 协程栈 -----\n".encode())
+            f.write(dump)
+        return True
+    except OSError:
+        return False
+
+
 def core_last_error():
     """核心日志末尾 16KB 里最后一条 FATAL / ERROR / panic，写进看门狗事件，便于事后查原因"""
     for line in reversed(log_tail(MIHOMO_LOG) or []):
@@ -161,6 +214,8 @@ def watchdog_tick():
         fd = core_fd_usage() if core_proc_alive() else ""
         if fd:
             why += f"，文件句柄 {fd}"
+        if fd and core_hang_dump(why):
+            why += f"，现场已存到 {HANG_LOG}"
         wd_event(f"{cname} 核心{why}，第 {WD['fails']} 次自动重启" + (f"；日志最后一条错误：{err}" if err else ""),
                  push=WD["fails"] == 1)
         svc_restart(timeout=60, why="看门狗重启核心", cancel=lambda: WD["manual_stop"])
