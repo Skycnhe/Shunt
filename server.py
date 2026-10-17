@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "8.3.8"
+PANEL_VERSION = "8.3.9"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -334,7 +334,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "8.3.8"
+PANEL_VERSION = "8.3.9"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -5763,7 +5763,20 @@ def notify(text):
 # 「手动停止」标志落盘：以前只在内存里，面板一重启（在线更新、切 HTTPS、rc-service shunt restart）标志就丢了，
 # 看门狗随即把用户手动停掉的核心又拉起来
 STOP_FLAG = os.path.join(PANEL_DIR, "core_stopped")
-WD = {"status": "ok", "fails": 0, "events": deque(maxlen=50), "last_check": 0, "manual_stop": os.path.isfile(STOP_FLAG),
+# 看门狗事件落盘：以前只在内存里，面板一重启记录就没了。只留最近 WD_EVENTS_MAX 条，满了自动删掉最旧的
+WD_EVENTS_FILE = os.path.join(PANEL_DIR, "wd_events.json")
+WD_EVENTS_MAX = 20
+
+
+def _load_wd_events():
+    ev = read_json(WD_EVENTS_FILE, [])
+    if not isinstance(ev, list):
+        ev = []
+    ev = [e for e in ev if isinstance(e, dict) and isinstance(e.get("t"), int) and isinstance(e.get("msg"), str)]
+    return deque(ev[:WD_EVENTS_MAX], maxlen=WD_EVENTS_MAX)
+
+
+WD = {"status": "ok", "fails": 0, "events": _load_wd_events(), "last_check": 0, "manual_stop": os.path.isfile(STOP_FLAG),
       "tp_off": False}
 
 
@@ -5780,8 +5793,25 @@ def set_manual_stop(on):
         pass
 
 
-def wd_event(msg, push=True):
-    WD["events"].appendleft({"t": int(time.time()), "msg": msg})
+def wd_counts(events=None):
+    """记录里的自动重启 / 切换直连 / 恢复次数"""
+    c = {"restart": 0, "direct": 0, "recover": 0}
+    for e in (WD["events"] if events is None else events):
+        k = e.get("kind")
+        if k in c:
+            c[k] += 1
+    return c
+
+
+def wd_event(msg, push=True, kind=""):
+    e = {"t": int(time.time()), "msg": msg}
+    if kind:
+        e["kind"] = kind
+    WD["events"].appendleft(e)  # deque(maxlen=20)：第 21 条进来时最旧的一条自动删除
+    try:
+        write_json(WD_EVENTS_FILE, list(WD["events"]))
+    except OSError:
+        pass
     print(time.strftime("%F %T"), "[watchdog]", msg, flush=True)
     if push:
         notify(msg)
@@ -5930,7 +5960,7 @@ def watchdog_tick():
                 code, out = sh(TPROXY_SH + " apply")
                 msg += "，透明代理已重新开启" if code == 0 else "，但重新开启透明代理失败：" + out[-120:]
             WD["tp_off"] = False
-            wd_event(msg)
+            wd_event(msg, kind="recover")
         WD["status"], WD["fails"] = "ok", 0
         return
     if WD["manual_stop"]:
@@ -5947,7 +5977,7 @@ def watchdog_tick():
         if fd and core_hang_dump(why):
             why += f"，现场已存到 {HANG_LOG}"
         wd_event(f"{cname} 核心{why}，第 {WD['fails']} 次自动重启" + (f"；日志最后一条错误：{err}" if err else ""),
-                 push=WD["fails"] == 1)
+                 push=WD["fails"] == 1, kind="restart")
         svc_restart(timeout=60, why="看门狗重启核心", cancel=lambda: WD["manual_stop"])
         return
     if WD["status"] != "direct":
@@ -5955,7 +5985,7 @@ def watchdog_tick():
         if redirecting:
             sh(TPROXY_SH + " stop")  # TUN 模式下核心退出时 TUN 设备与路由随之消失，这里再撤掉 DNS 重定向
             WD["tp_off"] = True
-        wd_event(f"{cname} 核心重启 2 次仍无响应，已关闭透明代理，局域网暂时直连上网")
+        wd_event(f"{cname} 核心重启 2 次仍无响应，已关闭透明代理，局域网暂时直连上网", kind="direct")
     elif WD["fails"] % 10 == 0:  # 直连状态下每 5 分钟再尝试拉起一次
         svc_restart(timeout=60, why="看门狗重启核心", cancel=lambda: WD["manual_stop"])
         if redirecting:
@@ -8754,7 +8784,7 @@ from .core_update import (
     lgbm_fetch, lgbm_fetch_reload
 )
 from .sysopt import SVC_OP, core_procs, delay_test, favicon, kill_core_procs, nft_ok, opt_apply, opt_status, rc_run, sh, speed_test, svc_restart
-from .notify import WD, core_alive, core_proc_alive, set_manual_stop, tg_send
+from .notify import WD, WD_EVENTS_MAX, core_alive, core_proc_alive, set_manual_stop, tg_send, wd_counts
 from .latency import BG_FILE, RETEST, bg_fetch, bg_meta, bg_meta_save, bg_save, bg_type, fix_global, proxies_merged, retest_soon
 from .stats import arp_table
 from .unlock import unlock_test
@@ -9670,7 +9700,8 @@ class H(BaseHTTPRequestHandler):
         out = {"running": "started" in st or code == 200, "version": version, "groups": groups, "group_meta": gmeta,
                "nodes": state_nodes(d), "default_exclude": DEFAULT_EXCLUDE, "sched_events": list(SCHED["events"])[:20],
                "panel_version": PANEL_VERSION, "core": active_core(d),
-               "wd": {"status": WD["status"], "last_check": WD["last_check"], "events": list(WD["events"])[:20]}}
+               "wd": {"status": WD["status"], "last_check": WD["last_check"], "events": list(WD["events"]),
+                      "counts": wd_counts(), "max": WD_EVENTS_MAX}}
         for k in ("mode", "subs", "rules", "rulesets", "bypass", "tests", "sub_interval", "ipv6", "https", "watchdog", "tg_token",
                   "tg_chat", "proxy_mode", "tun", "log_limit", "schedule", "devices", "sniffer", "gh_proxy"):
             out[k] = d.get(k)
