@@ -496,8 +496,8 @@ def _pid_alive(pid):
         return False
 
 
-SB_RELOAD_WAIT = 10.0  # 最多等 10 秒
-SB_RELOAD_NOMARK = 6.0  # 日志里一直没有标记（旧版本 / 日志被清）时，控制端口应答且进程在，等满 6 秒也算成功
+SB_RELOAD_WAIT = 60.0  # 最多等 60 秒：小路由上 SIGHUP 后先 check 新配置（大订阅 / 规则集要好几秒），再关旧实例、启动新实例
+SB_RELOAD_NOMARK = 40.0  # 日志里一直没有「sing-box started」（日志被清）时，控制端口应答且进程在，等满 40 秒才算成功
 
 
 def sb_hot_reload():
@@ -505,11 +505,14 @@ def sb_hot_reload():
 
     以前 SIGHUP 后 0.5 秒控制端口一应答就算成功，应答的可能还是没来得及关闭的旧实例。现在以日志为准：
     SIGHUP 之后出现「sing-box started」且控制端口应答 → 成功；出现「reload service」错误（新配置被拒，旧实例继续跑）
-    或进程退出 → 失败，交给 reload_core 回滚"""
+    或进程退出 → 失败，交给 reload_core 回滚。
+    v10.2.6 / v8.3.8：以前没等到标记 6 秒后控制端口一应答就算成功，可 sing-box 收到 SIGHUP 后要先 check 新配置，
+    这几秒里应答的是旧实例；面板随即把看门狗暂停缩短到 5 秒，旧实例关闭、新实例启动期间控制端口不通，
+    看门狗就误判「控制接口无响应（进程仍在）」把核心重启（更新广告规则、订阅后最常见）"""
     pid = core_pid()
     if pid:
         try:
-            wd_hold(45, "sing-box 重载配置")  # 重载期间控制端口短暂不可用，看门狗不要当成故障
+            wd_hold(SB_RELOAD_WAIT + 30, "sing-box 重载配置")  # 重载期间控制端口短暂不可用，看门狗不要当成故障
             off = _log_size()
             os.kill(pid, signal.SIGHUP)
             t0 = time.time()
