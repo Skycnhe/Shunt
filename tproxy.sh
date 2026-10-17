@@ -15,8 +15,11 @@ DATA=/etc/mihomo-panel/data.json
 SELF="$(cd "$(dirname "$0")" && pwd)"
 SERVER="$SELF/server.py"
 [ -f "$SERVER" ] || SERVER=/opt/mihomo-panel/server.py
+ENV_LOADED=""  # 不继承外部环境变量
 
 load_env() {
+  [ -n "$ENV_LOADED" ] && return 0  # apply 已加载过：start / dns_only 不再启动第二次 Python（每次都要加载整个面板）
+  ENV_LOADED=1
   B_IP=""; B_MAC=""; B_IP6=""; LOCAL6=""; IPV6=0; MODE=""; DNS_ALL=0
   ENV=$(python3 "$SERVER" --tpenv 2>/dev/null) && eval "$ENV"
   if [ -z "$MODE" ]; then  # 面板脚本不可用时直接读 data.json

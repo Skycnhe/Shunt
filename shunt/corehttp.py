@@ -7,7 +7,7 @@ import os
 import urllib.request
 import urllib.error
 
-from .base import CTRL, DATA_FILE, MASS_TEST
+from .base import CTRL, DATA_FILE, mass_begin, mass_end
 from .data import load
 
 DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # 访问本机控制器绝不走系统代理
@@ -33,8 +33,7 @@ def core(method, path, body=None, timeout=10):
     req = urllib.request.Request(CTRL + path, data=data, method=method,
                                  headers={"Authorization": "Bearer " + ctrl_secret(), "Content-Type": "application/json"})
     mass = method == "GET" and "/group/" in path and "/delay" in path  # 全节点测速：核心高负载，看门狗暂停判定
-    if mass:
-        MASS_TEST["n"] += 1
+    tok = mass_begin() if mass else None
     try:
         with DIRECT_OPENER.open(req, timeout=timeout) as r:
             return r.status, r.read()
@@ -43,8 +42,8 @@ def core(method, path, body=None, timeout=10):
     except Exception as e:
         return 502, json.dumps({"message": "mihomo 未运行或无法连接: %s" % e}).encode()
     finally:
-        if mass:
-            MASS_TEST["n"] -= 1
+        if tok is not None:
+            mass_end(tok)
 
 
 def core_json(path, timeout=10):

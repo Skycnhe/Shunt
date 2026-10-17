@@ -56,6 +56,14 @@ SVC_JOB = {"busy": False, "act": "", "ok": None, "message": "", "t": 0}  # 最�
 SVC_NAMES = {"start": "启动", "stop": "停止", "restart": "重启"}
 
 
+def tp_apply():
+    """按当前代理方式重载 nftables 规则。核心被手动停止时不挂规则：否则局域网流量会被导向不存在的核心端口
+    （init.d 的 start_post 会在下次启动核心时自动加载）"""
+    if WD["manual_stop"]:
+        return 0, ""
+    return sh(TPROXY_SH + " apply")
+
+
 def _svc_do(act):
     """执行启停并确认结果，返回 (成功?, 提示)"""
     if act == "stop":
@@ -156,6 +164,38 @@ def _mask_val(v):
     """敏感值掩盖中间：长值露头 3 + 尾 2，短值全打码"""
     s = str(v)
     return f"{s[:3]}******{s[-2:]}" if len(s) > 6 else "******"
+
+
+def mask_secret(v):
+    """/api/state 里的 TG token：空值保持空（前端据此显示「未配置」），非空打码"""
+    return _mask_val(v) if isinstance(v, str) and v else (v or "")
+
+
+def mask_url(u):
+    """订阅 URL 打码：保留协议和主机（去掉 user:pass@），路径与查询串（通常带 token）打码"""
+    if not isinstance(u, str) or not u:
+        return u or ""
+    try:
+        sp = urlparse(u)
+    except ValueError:
+        return _mask_val(u)
+    head = f"{sp.scheme}://{sp.netloc}"
+    if not sp.scheme or not sp.netloc or not u.startswith(head):
+        return _mask_val(u)
+    rest = u[len(head):]
+    host = f"{sp.scheme}://{sp.netloc.rpartition('@')[2]}"
+    return host + ("/" + _mask_val(rest.lstrip("/")) if rest.strip("/") else rest)
+
+
+def unmask(new, cur, masker):
+    """前端把打码后的占位值原样提交回来 = 没改：换回服务端保存的原值"""
+    if isinstance(new, str) and isinstance(cur, str) and cur and new.strip() == masker(cur):
+        return cur
+    return new
+
+
+def state_subs(subs):
+    return [dict(s, url=mask_url(s.get("url"))) if isinstance(s, dict) else s for s in subs or []]
 
 
 def _mask_cfg(o):
@@ -578,10 +618,10 @@ class H(BaseHTTPRequestHandler):
         if not ok:
             return self.send(500, {"message": msg})
         WD["tp_off"] = False
-        code, out = sh(TPROXY_SH + " apply")
+        code, out = tp_apply()
         label = {"tproxy": "TProxy", "tun": "TUN", "off": "关闭"}[mode]
         note = ""
-        if mode == "tun":  # mihomo -t 只做语法校验；TUN 网卡创建失败时核心照常运行，需要单独确认
+        if mode == "tun" and not WD["manual_stop"]:  # 核心手动停止时不检查（TUN 网卡要等核心启动才创建）；mihomo -t 只做语法校验；TUN 网卡创建失败时核心照常运行，需要单独确认
             err = tun_runtime_error(safe_dev(load()["tun"].get("device")))
             if active_core() == "singbox" and load()["tun"].get("auto_redirect", True) and not nft_ok():
                 note = "（内核不支持 nftables，auto-redirect 未启用）"
@@ -594,9 +634,11 @@ class H(BaseHTTPRequestHandler):
             if err:  # TUN 起不来时局域网会断网：恢复为原来的代理方式
                 save(prev)
                 reload_core()
-                sh(TPROXY_SH + " apply")
+                tp_apply()
                 return self.send(500, {"message": "TUN 启动失败，已恢复原来的代理方式：" + err +
                                        "。可尝试：关闭 auto-redirect、换用 gvisor 协议栈、确认以 root 运行并已加载 tun 模块（modprobe tun）"})
+        if WD["manual_stop"]:
+            note += "（核心已手动停止，启动后生效）"
         if code != 0:
             return self.send(500, {"message": f"核心已切换为 {label}，但 nftables 规则处理失败：{out[-200:]}"})
         return self.send(200, {"message": f"代理方式：{label}{note}。" + (out.splitlines()[-1] if out else "")})
@@ -681,7 +723,7 @@ class H(BaseHTTPRequestHandler):
         prev = update(fn)
         ok, msg = reload_core(prev)
         if ok and dns_cfg(prev)["block_bypass"] != dc["block_bypass"] and prev.get("proxy_mode") != "off":
-            sh(TPROXY_SH + " apply")  # 重新加载 nftables：是否劫持发往任意服务器的 53 端口
+            tp_apply()  # 重新加载 nftables：是否劫持发往任意服务器的 53 端口
         if ok:
             core("POST", "/cache/dns/flush")
             core("POST", "/cache/fakeip/flush") if dc["mode"] == "fake-ip" else None
@@ -905,6 +947,9 @@ class H(BaseHTTPRequestHandler):
         for k in ("mode", "subs", "rules", "rulesets", "bypass", "tests", "sub_interval", "ipv6", "https", "watchdog", "tg_token",
                   "tg_chat", "proxy_mode", "tun", "log_limit", "schedule", "devices", "sniffer", "gh_proxy"):
             out[k] = d.get(k)
+        # 与 /api/config 一致：订阅 URL（常带 token）和 TG token 打码；前端原样提交回来时由 unmask() 换回原值
+        out["subs"] = state_subs(d.get("subs"))
+        out["tg_token"] = mask_secret(d.get("tg_token"))
         try:
             out["dns"] = dns_cfg(d)
         except Exception as e:
@@ -1130,6 +1175,9 @@ class H(BaseHTTPRequestHandler):
     @api_route("/api/subs", "POST")
     def api_subs_post(self, m, p, b, q):
         name, url = (b.get("name") or "").strip(), (b.get("url") or "").strip()
+        cur = next((s for s in load()["subs"] if isinstance(s, dict) and s.get("name") == name), None)
+        if cur:  # 编辑订阅时表单里是打码后的 URL：没改就沿用原链接
+            url = unmask(url, cur.get("url"), mask_url)
         if not name or not url.startswith("http"):
             return self.send(400, {"message": "名称或订阅链接无效"})
         flt, exc = (b.get("filter") or "").strip(), (b["exclude"] if "exclude" in b else DEFAULT_EXCLUDE).strip()
@@ -1276,7 +1324,10 @@ class H(BaseHTTPRequestHandler):
 
     @api_route("/api/adblock/check", "POST")
     def api_adblock_check_post(self, m, p, b, q):
-        return self.send(200, ab_check(b.get("domain") or ""))
+        try:
+            return self.send(200, ab_check(b.get("domain") or ""))
+        except ValueError as e:  # 无效域名：给出原因，不再 500「内部错误」
+            return self.send(400, {"message": str(e)})
 
     @api_route("/api/dns", "PUT")
     def api_dns_put(self, m, p, b, q):
@@ -1305,7 +1356,7 @@ class H(BaseHTTPRequestHandler):
         ab_compose(load())
         ok, msg = reload_core(prev)
         if ok:
-            sh(TPROXY_SH + " apply")
+            tp_apply()
         return self.reply(ok, ("已恢复到 " + time.strftime("%m-%d %H:%M", time.localtime(snap["t"])) + " 的配置") if ok else msg)
 
     @api_route("/api/dnsquery", "POST")
@@ -1414,6 +1465,8 @@ class H(BaseHTTPRequestHandler):
                 return self.send(400, {"message": "GitHub 加速地址格式应为 https://ghfast.top/"})
             if b["gh_proxy"] and not b["gh_proxy"].endswith("/"):
                 b["gh_proxy"] += "/"
+        if "tg_token" in b:  # 打码的 token 原样提交回来 = 没改
+            b["tg_token"] = unmask(b["tg_token"], load().get("tg_token"), mask_secret)
         if "sniffer" in b:
             b["sniffer"] = bool(b["sniffer"])
         if "log_limit" in b and b["log_limit"] not in (1, 2, 5, 10, 20):
@@ -1435,7 +1488,7 @@ class H(BaseHTTPRequestHandler):
             if not ok:
                 return self.send(500, {"message": msg})
         if set(b) & {"bypass", "ipv6"} and d["proxy_mode"] != "off":
-            sh(TPROXY_SH + " apply")
+            tp_apply()
         if "watchdog" in b and not b["watchdog"]:
             WD["status"] = "off"
         return self.send(200, {"message": msg})
@@ -1455,7 +1508,7 @@ class H(BaseHTTPRequestHandler):
     def api_tg_test_post(self, m, p, b, q):
         d = load()
         if "tg_token" in b:
-            d.update(tg_token=b.get("tg_token", ""), tg_chat=b.get("tg_chat", ""))
+            d.update(tg_token=unmask(b.get("tg_token", ""), d.get("tg_token"), mask_secret), tg_chat=b.get("tg_chat", ""))
         return self.reply(*tg_send("✅ 测试消息：通知已配置成功", d))
 
     @api_route("/api/backup", "GET")
@@ -1564,7 +1617,7 @@ class H(BaseHTTPRequestHandler):
         ab_compose(load())
         ok, msg = reload_core(prev)
         if ok:
-            sh(TPROXY_SH + " apply")
+            tp_apply()
         return self.reply(ok, ("已恢复，" if ok else "") + msg)
 
     @api_route("/api/logticket", "POST")

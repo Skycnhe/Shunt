@@ -132,12 +132,21 @@ elif [ ! -x /usr/local/bin/mihomo ] || [ -n "$UPDATE_CORE" ]; then
   [ -n "$VER" ] || VER=$(curl -fsSL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)
   [ -n "$VER" ] || { echo "获取版本失败，可设置 GH_PROXY 后重试"; exit 1; }
   echo ">> 下载 mihomo $VER ($ARCH)"
-  curl -fL "${GH}https://github.com/MetaCubeX/mihomo/releases/download/$VER/mihomo-linux-$ARCH-$VER.gz" | gunzip > /usr/local/bin/mihomo.new
-  chmod +x /usr/local/bin/mihomo.new && mv /usr/local/bin/mihomo.new /usr/local/bin/mihomo
+  # 下载中断时 gunzip 会报错：只有完整解压成功才替换，不留半截二进制
+  if curl -fL "${GH}https://github.com/MetaCubeX/mihomo/releases/download/$VER/mihomo-linux-$ARCH-$VER.gz" | gunzip > /usr/local/bin/mihomo.new \
+      && [ -s /usr/local/bin/mihomo.new ]; then
+    chmod +x /usr/local/bin/mihomo.new && mv /usr/local/bin/mihomo.new /usr/local/bin/mihomo
+  else
+    rm -f /usr/local/bin/mihomo.new; echo "!! 下载 mihomo 失败，可设置 GH_PROXY 后重试"; exit 1
+  fi
 fi
 
 for f in geoip.dat geosite.dat geoip.metadb; do
-  [ -s /etc/mihomo/$f ] || { echo ">> 下载 $f"; curl -fL -o /etc/mihomo/$f "${GH}https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/$f"; }
+  # 先写 .tmp，完整下载成功才 mv：中断留下的残缺文件非空，以前会被 [ -s ] 当成已下载而跳过，mihomo 加载不了
+  [ -s /etc/mihomo/$f ] || { echo ">> 下载 $f"
+    if curl -fL --retry 3 -o /etc/mihomo/$f.tmp "${GH}https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/$f" \
+        && [ -s /etc/mihomo/$f.tmp ]; then mv -f /etc/mihomo/$f.tmp /etc/mihomo/$f
+    else rm -f /etc/mihomo/$f.tmp; echo "!! 下载 $f 失败（国内请加 --cn 或设置 GH_PROXY）"; exit 1; fi; }
 done
 
 echo ">> 安装面板"

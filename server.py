@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "10.1.2"
+PANEL_VERSION = "10.1.3"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -137,7 +137,37 @@ def upd_busy_msg():
     return "内核正在更新或切换，请稍后再试" if CORE_UPD["busy"] else "面板正在更新，请稍后再试"
 
 
-MASS_TEST = {"n": 0}  # 进行中的全节点测速（/group/*/delay）计数：corehttp 置位，notify 看门狗据此暂停故障判定，避免高负载误判
+MASS_TEST = {"n": 0, "active": {}}  # 进行中的全节点测速（/group/*/delay）：corehttp 登记，notify 看门狗据此暂停故障判定，避免高负载误判
+_MASS_LOCK = threading.Lock()
+MASS_MAX_AGE = 300  # 单次测速登记超过 5 分钟视为失效（异常路径漏了注销也不会让看门狗永久暂停）
+
+
+def mass_begin():
+    """登记一次全节点测速，返回凭据交给 mass_end。锁内增删，计数不会因并发丢失"""
+    import time as _t
+    tok = object()
+    with _MASS_LOCK:
+        MASS_TEST["active"][tok] = _t.time()
+        MASS_TEST["n"] = len(MASS_TEST["active"])
+    return tok
+
+
+def mass_end(tok):
+    with _MASS_LOCK:
+        MASS_TEST["active"].pop(tok, None)
+        MASS_TEST["n"] = len(MASS_TEST["active"])
+
+
+def mass_testing(max_age=MASS_MAX_AGE):
+    """是否有全节点测速在进行；顺带清掉超时的登记（自愈）"""
+    import time as _t
+    now = _t.time()
+    with _MASS_LOCK:
+        act = MASS_TEST["active"]
+        for tok in [k for k, t0 in act.items() if now - t0 > max_age]:
+            del act[tok]
+        MASS_TEST["n"] = len(act)
+        return bool(act)
 
 
 def local_file(f):
@@ -268,7 +298,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "10.1.2"
+PANEL_VERSION = "10.1.3"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -1952,18 +1982,18 @@ def clean_fields(b, keys):
     return out
 '''
 _SRC['shunt.core'] = '''"""核心交互"""
-import os, threading, time
+import itertools, os, threading, time
 
 from .base import CONF_DIR, LOCK, wd_hold
 from .errlog import log_err
 from .corehttp import core, core_json
-from .data import load, read_json, save
+from .data import config_version, load, read_json, save
 from .groups import provider_nodes
 from .mihomo import build_config, check_config, write_config
 from .sb_common import SB_CONF, active_core
 from .sb_config import build_singbox, check_sb_config, sb_hot_reload, sb_log_error, sb_rule_need, sb_sync_assets, write_sb_config
 from .sysopt import svc_restart
-from .notify import core_alive, set_manual_stop
+from .notify import WD, core_alive
 
 
 _CONN_SNAP = {}
@@ -1996,12 +2026,7 @@ def reload_core(prev=None):
     try:
         return _reload_core(prev)
     except Exception as e:
-        log_err("重载核心配置", e, tb=True)
-        for p in (os.path.join(CONF_DIR, "config.yaml.new"), SB_CONF + ".new"):
-            try:
-                os.remove(p)
-            except OSError:
-                pass
+        log_err("重载核心配置", e, tb=True)  # 临时配置文件已由 _reload_core 清理
         if prev is None:
             return False, "生成配置失败：" + str(e)[:300]
         _rollback(prev)
@@ -2023,31 +2048,62 @@ def _rollback(prev, sb=None):
     return sb, final
 
 
+_TMP_SEQ = itertools.count(1)
+RELOAD_TRIES = 3  # 校验期间配置又被改了：重新生成再校验，最后一次在锁内校验（退回旧做法，保证能结束）
+
+
+def _gen_config(d, sb, tmp):
+    """生成待校验的配置到临时文件 tmp"""
+    if sb:
+        try:  # 广告 / 白名单列表改动后，先把对应的 sing-box 规则集文件转换好，否则这些规则会被跳过
+            need = {k: v for k, v in sb_rule_need(d).items() if v.get("kind") == "adblock"}
+            if need:
+                sb_sync_assets(d, need=need)
+        except Exception as e:
+            print("sb adblock sync", e, flush=True)
+        return write_sb_config(d, tmp)
+    return write_config(d, tmp)
+
+
 def _reload_core(prev):
-    with LOCK:
-        d = load()
-        sb = active_core(d) == "singbox"
-        if sb:
-            final = SB_CONF
-            try:  # 广告 / 白名单列表改动后，先把对应的 sing-box 规则集文件转换好，否则这些规则会被跳过
-                need = {k: v for k, v in sb_rule_need(d).items() if v.get("kind") == "adblock"}
-                if need:
-                    sb_sync_assets(d, need=need)
-            except Exception as e:
-                print("sb adblock sync", e, flush=True)
-            tmp = write_sb_config(d, final + ".new")
-            ok, err = check_sb_config(tmp)
-        else:
-            final = os.path.join(CONF_DIR, "config.yaml")
-            tmp = write_config(d, final + ".new")
-            ok, err = check_config(tmp)
-        if not ok:
-            os.remove(tmp)
-            if prev is not None:
-                save(prev)
-            return False, "配置校验失败，已撤销本次修改：" + err
-        os.replace(tmp, final)
-    set_manual_stop(False)
+    """mihomo -t / sing-box check 最长 90 秒：以前整段持有全局 LOCK，期间所有 update()（设备备注、定时任务设置等）都被卡住。
+    现在锁内只生成配置并记下 config_version，校验在锁外做；校验完再拿锁，版本没变才替换正式配置，变了就按最新数据重来"""
+    tmp = None
+    try:
+        for i in range(RELOAD_TRIES):
+            last = i == RELOAD_TRIES - 1
+            with LOCK:
+                d = load()
+                ver = config_version()
+                sb = active_core(d) == "singbox"
+                final = SB_CONF if sb else os.path.join(CONF_DIR, "config.yaml")
+                tmp = f"{final}.new{next(_TMP_SEQ)}"  # 唯一临时文件：并发重载各用各的，不互相覆盖
+                _gen_config(d, sb, tmp)
+                check = check_sb_config if sb else check_config
+                if last:
+                    ok, err = check(tmp)
+            if not last:
+                ok, err = check(tmp)  # 锁外校验
+            with LOCK:
+                if not ok:
+                    if prev is not None:
+                        save(prev)
+                    return False, "配置校验失败，已撤销本次修改：" + err
+                if config_version() != ver and not last:
+                    os.remove(tmp)  # 校验期间 data.json 被改过：这份配置已过时，丢掉重来
+                    tmp = None
+                    continue
+                os.replace(tmp, final)
+                tmp = None
+                break
+    finally:
+        if tmp:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+    if WD["manual_stop"]:  # 用户手动停止了核心：只写配置，不替用户把核心拉起来（与 refresh_regions 一致）
+        return True, "配置已保存；核心已手动停止，下次启动时生效"
     retest_soon()
     if sb:
         ok, msg = sb_hot_reload()
@@ -2131,7 +2187,7 @@ import os
 import urllib.request
 import urllib.error
 
-from .base import CTRL, DATA_FILE, MASS_TEST
+from .base import CTRL, DATA_FILE, mass_begin, mass_end
 from .data import load
 
 DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # 访问本机控制器绝不走系统代理
@@ -2157,8 +2213,7 @@ def core(method, path, body=None, timeout=10):
     req = urllib.request.Request(CTRL + path, data=data, method=method,
                                  headers={"Authorization": "Bearer " + ctrl_secret(), "Content-Type": "application/json"})
     mass = method == "GET" and "/group/" in path and "/delay" in path  # 全节点测速：核心高负载，看门狗暂停判定
-    if mass:
-        MASS_TEST["n"] += 1
+    tok = mass_begin() if mass else None
     try:
         with DIRECT_OPENER.open(req, timeout=timeout) as r:
             return r.status, r.read()
@@ -2167,8 +2222,8 @@ def core(method, path, body=None, timeout=10):
     except Exception as e:
         return 502, json.dumps({"message": "mihomo 未运行或无法连接: %s" % e}).encode()
     finally:
-        if mass:
-            MASS_TEST["n"] -= 1
+        if tok is not None:
+            mass_end(tok)
 
 
 def core_json(path, timeout=10):
@@ -3614,16 +3669,63 @@ def sb_log_error():
     return ""
 
 
+def _log_size():
+    try:
+        return os.path.getsize(MIHOMO_LOG)
+    except OSError:
+        return 0
+
+
+def _log_since(off):
+    """日志从 off 起新增的内容（文件被截断 / 清理过则从头读），最多读 64KB"""
+    try:
+        with open(MIHOMO_LOG, "rb") as f:
+            f.seek(0, 2)
+            end = f.tell()
+            if end < off:
+                off = 0
+            f.seek(max(off, end - 64 * 1024))
+            return f.read().decode("utf-8", "ignore")
+    except OSError:
+        return ""
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+SB_RELOAD_WAIT = 10.0  # 最多等 10 秒
+SB_RELOAD_NOMARK = 6.0  # 日志里一直没有标记（旧版本 / 日志被清）时，控制端口应答且进程在，等满 6 秒也算成功
+
+
 def sb_hot_reload():
-    """sing-box 收到 SIGHUP 会重新读取配置（透明代理规则不受影响）；进程不在时重启服务"""
+    """sing-box 收到 SIGHUP 会先 check 新配置，通过则关闭旧实例、按新配置重建（透明代理规则不受影响）；进程不在时重启服务。
+
+    以前 SIGHUP 后 0.5 秒控制端口一应答就算成功，应答的可能还是没来得及关闭的旧实例。现在以日志为准：
+    SIGHUP 之后出现「sing-box started」且控制端口应答 → 成功；出现「reload service」错误（新配置被拒，旧实例继续跑）
+    或进程退出 → 失败，交给 reload_core 回滚"""
     pid = core_pid()
     if pid:
         try:
             wd_hold(45, "sing-box 重载配置")  # 重载期间控制端口短暂不可用，看门狗不要当成故障
+            off = _log_size()
             os.kill(pid, signal.SIGHUP)
-            for _ in range(20):
+            t0 = time.time()
+            while time.time() - t0 < SB_RELOAD_WAIT:
                 time.sleep(0.5)
-                if core_alive():
+                if not _pid_alive(pid):
+                    return False, "sing-box 重载后进程已退出，请查看日志"
+                new = _log_since(off)
+                m = re.search(r"(?:ERROR|FATAL)[^\\n]*reload service[^\\n]*", new)
+                if m:
+                    return False, "sing-box 拒绝了新配置：" + m.group(0)[-200:]
+                started = "sing-box started" in new
+                if (started or time.time() - t0 >= SB_RELOAD_NOMARK) and core_alive():
+                    wd_hold(5, "sing-box 重载配置", reset=True)  # 已确认恢复：缩短看门狗暂停期
                     return True, "配置已重载"
             return False, "sing-box 重载后未响应，请查看日志"
         except OSError:
@@ -4122,7 +4224,19 @@ _FILES = [
 
 
 def _ensure_dir():
-    os.makedirs(BACKUP_DIR, exist_ok=True)
+    os.makedirs(BACKUP_DIR, mode=0o700, exist_ok=True)
+
+
+def _fix_perms():
+    """备份里有 data.json（订阅 URL、节点密码、TG token）：旧版按默认 umask 建成 644 的收紧为 600"""
+    try:
+        os.chmod(BACKUP_DIR, 0o700)
+        for fn in os.listdir(BACKUP_DIR):
+            fp = os.path.join(BACKUP_DIR, fn)
+            if fn.endswith(".tar.gz") and os.path.isfile(fp) and os.stat(fp).st_mode & 0o077:
+                os.chmod(fp, 0o600)
+    except OSError:
+        pass
 
 
 def _backup_name(version, ts=None):
@@ -4155,13 +4269,22 @@ def create(version=None, auto=False):
             name = _backup_name(version)[:-7] + "-%d.tar.gz" % i
             path = os.path.join(BACKUP_DIR, name)
             i += 1
-        with tarfile.open(path, "w:gz") as tf:
-            for kind, rel in _FILES:
-                src = os.path.join(BASE, rel) if kind == "base" else rel
-                if os.path.isfile(src):
-                    tf.add(src, arcname=rel)
-            if os.path.isfile(DATA_FILE):
-                tf.add(DATA_FILE, arcname="data.json")
+        # 一开始就以 600 创建（不经过默认 umask 的 644 窗口）；O_EXCL 防止同名覆盖
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(fd, "wb") as fo, tarfile.open(fileobj=fo, mode="w:gz") as tf:
+                for kind, rel in _FILES:
+                    src = os.path.join(BASE, rel) if kind == "base" else rel
+                    if os.path.isfile(src):
+                        tf.add(src, arcname=rel)
+                if os.path.isfile(DATA_FILE):
+                    tf.add(DATA_FILE, arcname="data.json")
+        except BaseException:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            raise
         cleanup()
         return True, name
     except Exception as e:
@@ -4172,6 +4295,7 @@ def create(version=None, auto=False):
 def list():
     """返回备份列表 [{name, version, size, mtime}]，按时间倒序。"""
     _ensure_dir()
+    _fix_perms()
     out = []
     try:
         for fn in os.listdir(BACKUP_DIR):
@@ -5544,7 +5668,7 @@ import json, os, socket, threading, time, urllib.request, urllib.error
 from collections import deque
 from urllib.parse import quote
 
-from .base import CORE_UPD, G_MANUAL, HC, MASS_TEST, MIHOMO_LOG, NOTIFY_FILE, PANEL_DIR, TPROXY_SH, WD_HOLD
+from .base import CORE_UPD, G_MANUAL, HC, MIHOMO_LOG, NOTIFY_FILE, PANEL_DIR, TPROXY_SH, WD_HOLD, mass_testing
 from .data import load, read_json, write_json
 from .corehttp import core, core_json
 from .sb_common import CORE_PID, CORES, active_core
@@ -5659,7 +5783,7 @@ def watchdog_tick():
     if not d.get("watchdog", True):
         WD["status"] = "off"
         return
-    if MASS_TEST["n"] > 0:  # 全节点测速进行中：核心高负载，/version 可能超时，暂停故障判定
+    if mass_testing():  # 全节点测速进行中：核心高负载，/version 可能超时，暂停故障判定
         return
     redirecting = d["proxy_mode"] != "off"  # TProxy 或 TUN（TUN 模式下 tproxy.sh 仍负责 DNS 重定向）
     cname = CORES.get(active_core(d), "mihomo")
@@ -6724,7 +6848,36 @@ def adblock_update(ids=None, apply=True):
         AB_STATE["updating"] = False
 
 
-AB_CACHE = {}
+AB_CACHE = {}  # 列表路径 → (mtime, 后缀集合, 精确集合)：只给「查询域名」用，空闲 AB_IDLE 秒后整体释放
+AB_IDLE = 300
+_AB_GC = {"last": 0.0, "timer": None}
+_AB_GC_LOCK = threading.Lock()
+
+
+def _ab_touch():
+    """记一次使用；没有待执行的释放定时器就起一个。几十万条的 HaGeZi / anti-AD 列表转成 set 要占几十 MB，
+    以前查一次就常驻到下次更新，现在 5 分钟没人查就释放"""
+    with _AB_GC_LOCK:
+        _AB_GC["last"] = time.time()
+        if _AB_GC["timer"] is None:
+            _ab_arm(AB_IDLE)
+
+
+def _ab_arm(delay):
+    t = threading.Timer(delay, _ab_gc)
+    t.daemon = True
+    _AB_GC["timer"] = t
+    t.start()
+
+
+def _ab_gc():
+    with _AB_GC_LOCK:
+        left = _AB_GC["last"] + AB_IDLE - time.time()
+        if left > 1:
+            _ab_arm(left)
+            return
+        _AB_GC["timer"] = None
+        AB_CACHE.clear()
 
 
 def ab_sets(path):
@@ -6732,6 +6885,7 @@ def ab_sets(path):
         mt = os.path.getmtime(path)
     except OSError:
         return set(), set()
+    _ab_touch()
     c = AB_CACHE.get(path)
     if c and c[0] == mt:
         return c[1], c[2]
@@ -6758,6 +6912,8 @@ def ab_match(host, sets):
 
 
 def ab_check(target):
+    if not isinstance(target, str):
+        raise ValueError("请输入有效域名")
     host = clean_target(target)
     if not norm_domain(host):
         raise ValueError("请输入有效域名")
@@ -8494,6 +8650,14 @@ SVC_JOB = {"busy": False, "act": "", "ok": None, "message": "", "t": 0}  # 最�
 SVC_NAMES = {"start": "启动", "stop": "停止", "restart": "重启"}
 
 
+def tp_apply():
+    """按当前代理方式重载 nftables 规则。核心被手动停止时不挂规则：否则局域网流量会被导向不存在的核心端口
+    （init.d 的 start_post 会在下次启动核心时自动加载）"""
+    if WD["manual_stop"]:
+        return 0, ""
+    return sh(TPROXY_SH + " apply")
+
+
 def _svc_do(act):
     """执行启停并确认结果，返回 (成功?, 提示)"""
     if act == "stop":
@@ -8594,6 +8758,38 @@ def _mask_val(v):
     """敏感值掩盖中间：长值露头 3 + 尾 2，短值全打码"""
     s = str(v)
     return f"{s[:3]}******{s[-2:]}" if len(s) > 6 else "******"
+
+
+def mask_secret(v):
+    """/api/state 里的 TG token：空值保持空（前端据此显示「未配置」），非空打码"""
+    return _mask_val(v) if isinstance(v, str) and v else (v or "")
+
+
+def mask_url(u):
+    """订阅 URL 打码：保留协议和主机（去掉 user:pass@），路径与查询串（通常带 token）打码"""
+    if not isinstance(u, str) or not u:
+        return u or ""
+    try:
+        sp = urlparse(u)
+    except ValueError:
+        return _mask_val(u)
+    head = f"{sp.scheme}://{sp.netloc}"
+    if not sp.scheme or not sp.netloc or not u.startswith(head):
+        return _mask_val(u)
+    rest = u[len(head):]
+    host = f"{sp.scheme}://{sp.netloc.rpartition('@')[2]}"
+    return host + ("/" + _mask_val(rest.lstrip("/")) if rest.strip("/") else rest)
+
+
+def unmask(new, cur, masker):
+    """前端把打码后的占位值原样提交回来 = 没改：换回服务端保存的原值"""
+    if isinstance(new, str) and isinstance(cur, str) and cur and new.strip() == masker(cur):
+        return cur
+    return new
+
+
+def state_subs(subs):
+    return [dict(s, url=mask_url(s.get("url"))) if isinstance(s, dict) else s for s in subs or []]
 
 
 def _mask_cfg(o):
@@ -9016,10 +9212,10 @@ class H(BaseHTTPRequestHandler):
         if not ok:
             return self.send(500, {"message": msg})
         WD["tp_off"] = False
-        code, out = sh(TPROXY_SH + " apply")
+        code, out = tp_apply()
         label = {"tproxy": "TProxy", "tun": "TUN", "off": "关闭"}[mode]
         note = ""
-        if mode == "tun":  # mihomo -t 只做语法校验；TUN 网卡创建失败时核心照常运行，需要单独确认
+        if mode == "tun" and not WD["manual_stop"]:  # 核心手动停止时不检查（TUN 网卡要等核心启动才创建）；mihomo -t 只做语法校验；TUN 网卡创建失败时核心照常运行，需要单独确认
             err = tun_runtime_error(safe_dev(load()["tun"].get("device")))
             if active_core() == "singbox" and load()["tun"].get("auto_redirect", True) and not nft_ok():
                 note = "（内核不支持 nftables，auto-redirect 未启用）"
@@ -9032,9 +9228,11 @@ class H(BaseHTTPRequestHandler):
             if err:  # TUN 起不来时局域网会断网：恢复为原来的代理方式
                 save(prev)
                 reload_core()
-                sh(TPROXY_SH + " apply")
+                tp_apply()
                 return self.send(500, {"message": "TUN 启动失败，已恢复原来的代理方式：" + err +
                                        "。可尝试：关闭 auto-redirect、换用 gvisor 协议栈、确认以 root 运行并已加载 tun 模块（modprobe tun）"})
+        if WD["manual_stop"]:
+            note += "（核心已手动停止，启动后生效）"
         if code != 0:
             return self.send(500, {"message": f"核心已切换为 {label}，但 nftables 规则处理失败：{out[-200:]}"})
         return self.send(200, {"message": f"代理方式：{label}{note}。" + (out.splitlines()[-1] if out else "")})
@@ -9119,7 +9317,7 @@ class H(BaseHTTPRequestHandler):
         prev = update(fn)
         ok, msg = reload_core(prev)
         if ok and dns_cfg(prev)["block_bypass"] != dc["block_bypass"] and prev.get("proxy_mode") != "off":
-            sh(TPROXY_SH + " apply")  # 重新加载 nftables：是否劫持发往任意服务器的 53 端口
+            tp_apply()  # 重新加载 nftables：是否劫持发往任意服务器的 53 端口
         if ok:
             core("POST", "/cache/dns/flush")
             core("POST", "/cache/fakeip/flush") if dc["mode"] == "fake-ip" else None
@@ -9343,6 +9541,9 @@ class H(BaseHTTPRequestHandler):
         for k in ("mode", "subs", "rules", "rulesets", "bypass", "tests", "sub_interval", "ipv6", "https", "watchdog", "tg_token",
                   "tg_chat", "proxy_mode", "tun", "log_limit", "schedule", "devices", "sniffer", "gh_proxy"):
             out[k] = d.get(k)
+        # 与 /api/config 一致：订阅 URL（常带 token）和 TG token 打码；前端原样提交回来时由 unmask() 换回原值
+        out["subs"] = state_subs(d.get("subs"))
+        out["tg_token"] = mask_secret(d.get("tg_token"))
         try:
             out["dns"] = dns_cfg(d)
         except Exception as e:
@@ -9568,6 +9769,9 @@ class H(BaseHTTPRequestHandler):
     @api_route("/api/subs", "POST")
     def api_subs_post(self, m, p, b, q):
         name, url = (b.get("name") or "").strip(), (b.get("url") or "").strip()
+        cur = next((s for s in load()["subs"] if isinstance(s, dict) and s.get("name") == name), None)
+        if cur:  # 编辑订阅时表单里是打码后的 URL：没改就沿用原链接
+            url = unmask(url, cur.get("url"), mask_url)
         if not name or not url.startswith("http"):
             return self.send(400, {"message": "名称或订阅链接无效"})
         flt, exc = (b.get("filter") or "").strip(), (b["exclude"] if "exclude" in b else DEFAULT_EXCLUDE).strip()
@@ -9714,7 +9918,10 @@ class H(BaseHTTPRequestHandler):
 
     @api_route("/api/adblock/check", "POST")
     def api_adblock_check_post(self, m, p, b, q):
-        return self.send(200, ab_check(b.get("domain") or ""))
+        try:
+            return self.send(200, ab_check(b.get("domain") or ""))
+        except ValueError as e:  # 无效域名：给出原因，不再 500「内部错误」
+            return self.send(400, {"message": str(e)})
 
     @api_route("/api/dns", "PUT")
     def api_dns_put(self, m, p, b, q):
@@ -9743,7 +9950,7 @@ class H(BaseHTTPRequestHandler):
         ab_compose(load())
         ok, msg = reload_core(prev)
         if ok:
-            sh(TPROXY_SH + " apply")
+            tp_apply()
         return self.reply(ok, ("已恢复到 " + time.strftime("%m-%d %H:%M", time.localtime(snap["t"])) + " 的配置") if ok else msg)
 
     @api_route("/api/dnsquery", "POST")
@@ -9852,6 +10059,8 @@ class H(BaseHTTPRequestHandler):
                 return self.send(400, {"message": "GitHub 加速地址格式应为 https://ghfast.top/"})
             if b["gh_proxy"] and not b["gh_proxy"].endswith("/"):
                 b["gh_proxy"] += "/"
+        if "tg_token" in b:  # 打码的 token 原样提交回来 = 没改
+            b["tg_token"] = unmask(b["tg_token"], load().get("tg_token"), mask_secret)
         if "sniffer" in b:
             b["sniffer"] = bool(b["sniffer"])
         if "log_limit" in b and b["log_limit"] not in (1, 2, 5, 10, 20):
@@ -9873,7 +10082,7 @@ class H(BaseHTTPRequestHandler):
             if not ok:
                 return self.send(500, {"message": msg})
         if set(b) & {"bypass", "ipv6"} and d["proxy_mode"] != "off":
-            sh(TPROXY_SH + " apply")
+            tp_apply()
         if "watchdog" in b and not b["watchdog"]:
             WD["status"] = "off"
         return self.send(200, {"message": msg})
@@ -9893,7 +10102,7 @@ class H(BaseHTTPRequestHandler):
     def api_tg_test_post(self, m, p, b, q):
         d = load()
         if "tg_token" in b:
-            d.update(tg_token=b.get("tg_token", ""), tg_chat=b.get("tg_chat", ""))
+            d.update(tg_token=unmask(b.get("tg_token", ""), d.get("tg_token"), mask_secret), tg_chat=b.get("tg_chat", ""))
         return self.reply(*tg_send("✅ 测试消息：通知已配置成功", d))
 
     @api_route("/api/backup", "GET")
@@ -10002,7 +10211,7 @@ class H(BaseHTTPRequestHandler):
         ab_compose(load())
         ok, msg = reload_core(prev)
         if ok:
-            sh(TPROXY_SH + " apply")
+            tp_apply()
         return self.reply(ok, ("已恢复，" if ok else "") + msg)
 
     @api_route("/api/logticket", "POST")

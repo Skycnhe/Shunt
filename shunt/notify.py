@@ -3,7 +3,7 @@ import json, os, socket, threading, time, urllib.request, urllib.error
 from collections import deque
 from urllib.parse import quote
 
-from .base import CORE_UPD, G_MANUAL, HC, MASS_TEST, MIHOMO_LOG, NOTIFY_FILE, PANEL_DIR, TPROXY_SH, WD_HOLD
+from .base import CORE_UPD, G_MANUAL, HC, MIHOMO_LOG, NOTIFY_FILE, PANEL_DIR, TPROXY_SH, WD_HOLD, mass_testing
 from .data import load, read_json, write_json
 from .corehttp import core, core_json
 from .sb_common import CORE_PID, CORES, active_core
@@ -118,7 +118,7 @@ def watchdog_tick():
     if not d.get("watchdog", True):
         WD["status"] = "off"
         return
-    if MASS_TEST["n"] > 0:  # 全节点测速进行中：核心高负载，/version 可能超时，暂停故障判定
+    if mass_testing():  # 全节点测速进行中：核心高负载，/version 可能超时，暂停故障判定
         return
     redirecting = d["proxy_mode"] != "off"  # TProxy 或 TUN（TUN 模式下 tproxy.sh 仍负责 DNS 重定向）
     cname = CORES.get(active_core(d), "mihomo")

@@ -44,7 +44,37 @@ def upd_busy_msg():
     return "内核正在更新或切换，请稍后再试" if CORE_UPD["busy"] else "面板正在更新，请稍后再试"
 
 
-MASS_TEST = {"n": 0}  # 进行中的全节点测速（/group/*/delay）计数：corehttp 置位，notify 看门狗据此暂停故障判定，避免高负载误判
+MASS_TEST = {"n": 0, "active": {}}  # 进行中的全节点测速（/group/*/delay）：corehttp 登记，notify 看门狗据此暂停故障判定，避免高负载误判
+_MASS_LOCK = threading.Lock()
+MASS_MAX_AGE = 300  # 单次测速登记超过 5 分钟视为失效（异常路径漏了注销也不会让看门狗永久暂停）
+
+
+def mass_begin():
+    """登记一次全节点测速，返回凭据交给 mass_end。锁内增删，计数不会因并发丢失"""
+    import time as _t
+    tok = object()
+    with _MASS_LOCK:
+        MASS_TEST["active"][tok] = _t.time()
+        MASS_TEST["n"] = len(MASS_TEST["active"])
+    return tok
+
+
+def mass_end(tok):
+    with _MASS_LOCK:
+        MASS_TEST["active"].pop(tok, None)
+        MASS_TEST["n"] = len(MASS_TEST["active"])
+
+
+def mass_testing(max_age=MASS_MAX_AGE):
+    """是否有全节点测速在进行；顺带清掉超时的登记（自愈）"""
+    import time as _t
+    now = _t.time()
+    with _MASS_LOCK:
+        act = MASS_TEST["active"]
+        for tok in [k for k, t0 in act.items() if now - t0 > max_age]:
+            del act[tok]
+        MASS_TEST["n"] = len(act)
+        return bool(act)
 
 
 def local_file(f):
@@ -175,7 +205,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "10.1.2"
+PANEL_VERSION = "10.1.3"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
