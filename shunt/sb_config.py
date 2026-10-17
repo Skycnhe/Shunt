@@ -6,7 +6,7 @@ from .base import (
 from .errlog import log_tail
 from .data import auto_name, lb_dropped_names, lb_names, lb_old_name, load, safe, write_json
 from .groups import PROV, gcfg, rx
-from .mihomo import BUILTIN_GEO, build_config, build_rule_providers, dns_cfg, policy_parts, tun_params, write_config
+from .mihomo import BUILTIN_GEO, build_config, build_rule_providers, dns_cfg, policy_parts, tun_params, write_atomic, write_config
 from .corehttp import core_json
 from .devroute import mark_applied
 from .sb_common import CORE_PID, SB_BIN, SB_CONF, SB_DIR, SB_RULE_DIR, SB_STATE, active_core
@@ -426,8 +426,7 @@ def write_sb_config(d, path=None):
     conf, warn, _ = build_singbox(d)
     SB_STATE["warn"] = warn
     path = path or SB_CONF
-    with open(path, "w") as f:
-        json.dump(conf, f, ensure_ascii=False, indent=2)
+    write_atomic(path, conf)
     mark_applied()
     return path
 
@@ -550,9 +549,10 @@ def sb_fake_providers(d):
     """sing-box 没有 proxy-provider：按 mihomo /providers/proxies 的格式拼出订阅节点及其延迟，前端无需区分内核"""
     px = (core_json("/proxies", timeout=5) or {}).get("proxies") or {}
     out = {}
+    pn = sb_provider_nodes(d)  # 只算一次：以前每个订阅都重新读一遍全部订阅缓存（N 个订阅读 N² 次大 JSON）
     for s in d["subs"]:
         c = sb_sub_cache(s["name"])
-        names = sb_provider_nodes(d).get(s["name"], [])
+        names = pn.get(s["name"], [])
         upd = c.get("updated")
         out[s["name"]] = {"name": s["name"], "type": "Proxy", "vehicleType": "HTTP",
                           "updatedAt": iso_utc(upd) if upd else "",

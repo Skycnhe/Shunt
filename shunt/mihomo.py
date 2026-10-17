@@ -1,5 +1,5 @@
 """生成配置"""
-import ipaddress, json, os, re
+import ipaddress, json, os, re, threading
 
 from .base import (
     AUTO_ORDER, BUILTIN_POLICIES, CONF_DIR, CTRL_HOST, CTRL_PORT, DEFAULT_EXCLUDE, DNS_DEFAULT, DNS_LISTS, DOH_DOMAINS, DOH_IPS, G_AI,
@@ -437,10 +437,27 @@ def bad_rule_policies(rules, d):
 def write_config(d, path=None):
     os.makedirs(os.path.join(CONF_DIR, "providers"), exist_ok=True)
     path = path or os.path.join(CONF_DIR, "config.yaml")
-    with open(path, "w") as f:  # JSON 是 YAML 的子集，mihomo 可直接读取
-        json.dump(build_config(d), f, ensure_ascii=False, indent=2)
+    write_atomic(path, build_config(d))  # JSON 是 YAML 的子集，mihomo 可直接读取
     mark_applied()
     return path
+
+
+def write_atomic(path, obj):
+    """先生成内容、写临时文件再改名：生成配置抛异常或写到一半断电时，原来的配置文件保持完整。
+    以前先 open(path, "w") 截断再生成，build 一出错（坏数据 / 回滚时旧数据也生成不了）正式配置就变成空文件，核心起不来"""
+    text = json.dumps(obj, ensure_ascii=False, indent=2)
+    tmp = f"{path}.tmp{os.getpid()}-{threading.get_ident()}"
+    try:
+        with open(tmp, "w") as f:
+            f.write(text)
+        try:  # 沿用原文件权限（以前是原地覆盖，权限不变）
+            os.chmod(tmp, os.stat(path).st_mode & 0o777)
+        except OSError:
+            pass
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
 
 
 def mh_bin(kind=None):

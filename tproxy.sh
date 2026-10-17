@@ -42,9 +42,10 @@ drop_legacy() {
 }
 
 clear_route() {
-  ip rule del fwmark $MARK table $TABLE_ID 2>/dev/null
+  # ip rule del 一次只删一条：以前 start 中途失败又重试时可能留下多条相同的策略路由，循环删干净（最多 20 次防死循环）
+  n=0; while [ $n -lt 20 ] && ip rule del fwmark $MARK table $TABLE_ID 2>/dev/null; do n=$((n+1)); done
   ip route flush table $TABLE_ID 2>/dev/null
-  ip -6 rule del fwmark $MARK table $TABLE_ID 2>/dev/null
+  n=0; while [ $n -lt 20 ] && ip -6 rule del fwmark $MARK table $TABLE_ID 2>/dev/null; do n=$((n+1)); done
   ip -6 route flush table $TABLE_ID 2>/dev/null
   return 0
 }

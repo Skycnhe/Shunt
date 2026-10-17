@@ -29,7 +29,10 @@ function rawDelay(n){if(n==='DIRECT'&&DIRECT_D!==undefined)return DIRECT_D;const
   return best?best.delay:undefined}
 // 负载均衡组没有单一的“当前节点”，组延迟取成员中最快的可用节点；成员都没测过时再用组自身的记录
 // 选择 / 自动测速 / 故障转移组的延迟 = 当前实际使用节点的延迟（组自身的记录很少更新，会忽有忽无）
-function lastDelay(n,_d){const p=PROXIES[n];if(!p)return undefined;
+// 渲染节点页期间缓存每个节点的延迟：排序比较、超时过滤、圆点、卡片都要查，组嵌套时还会递归，上千节点时重复计算很多
+let _LD=null;
+function lastDelay(n,_d){if(_LD&&!_d){if(_LD.has(n))return _LD.get(n);const v=_lastDelay(n);_LD.set(n,v);return v}return _lastDelay(n,_d)}
+function _lastDelay(n,_d){const p=PROXIES[n];if(!p)return undefined;
   if(p.all&&p.type!=='LoadBalance'&&p.type!=='Smart'&&p.now&&PROXIES[p.now]&&(_d||0)<5){const d=lastDelay(p.now,(_d||0)+1);if(d!==undefined)return d}
   if((p.type==='LoadBalance'||p.type==='Smart')&&(_d||0)<4){let best,tested=false;for(const m of (p.all||[])){const d=lastDelay(m,(_d||0)+1);if(d===undefined)continue;tested=true;if(d>0&&(best===undefined||d<best))best=d}
     if(tested)return best===undefined?0:best}
@@ -52,11 +55,13 @@ function renderNF(){const rg=regionGroups();$('#nf-r').innerHTML=rg.length?[`<bu
 // 分流组（YouTube / Google 等）在顶部「策略选择」里用下拉切换，下面不再重复显示卡片
 function policyOnly(g){return g!=='GLOBAL'&&g!==SEL&&g!==G_MANUAL&&PROXIES[g].type==='Selector'&&(PROXIES[g].all||[]).length>1}
 function saveOpen(){localStorage.setItem('mp_gopen',JSON.stringify(GOPEN))}
-function toggleG(i){const g=GL[i];GOPEN[g]=!gOpen(g);saveOpen();document.getElementById('gc'+i)?.classList.toggle('open',GOPEN[g])}
-function setAllOpen(v){GL.forEach(g=>GOPEN[g]=v);saveOpen();document.querySelectorAll('.gcard').forEach(e=>e.classList.toggle('open',v))}
+function toggleG(i){const g=GL[i];GOPEN[g]=!gOpen(g);saveOpen();const el=document.getElementById('gc'+i);
+  if(GOPEN[g]&&el&&!el.querySelector('.gbody .grid'))renderGroups();else el?.classList.toggle('open',GOPEN[g])}
+function setAllOpen(v){GL.forEach(g=>GOPEN[g]=v);saveOpen();if(v)renderGroups();else document.querySelectorAll('.gcard').forEach(e=>e.classList.toggle('open',v))}
 function gTag(g){const p=PROXIES[g],m=(STATE.group_meta||{})[g]||{};
   return `<span class="tag ${GTC[p.type]||''}">${esc(GT[p.type]||p.type)}</span>`+(m.kind==='custom'?'<span class="tag k-cus">自定义</span>':'')}
-function renderGroups(){
+function renderGroups(){_LD=new Map();try{_renderGroups()}finally{_LD=null}}
+function _renderGroups(){
   GL=groupOrder();GALL=[];
   const key=n=>{const d=lastDelay(n);return d===undefined?1e9-1:d<=0?1e9:d};
   renderNF();const filt=!!(NF.q||NF.r);
@@ -66,23 +71,25 @@ function renderGroups(){
     const vis=filt?all0.filter(nfVisible):all0;if(filt&&!vis.length&&!(NF.q&&g.toLowerCase().includes(NF.q)))return '';
     const all=HIDEDEAD?vis.filter(n=>n===p.now||!isDead(n)):vis,hid=vis.length-all.length;
     const allH=all.filter(n=>hfVisible(n,p.now)),hidH=all.length-allH.length;
-    const ch=nowChain(g),dl=lastDelay(g),lb=p.type==='LoadBalance';
+    const ch=nowChain(g),dl=lastDelay(g),lb=p.type==='LoadBalance',open=gOpen(g);
+    // 收起的组不生成节点卡片（展开时再渲染）：几十个组 × 上千节点时，以前每次刷新都要生成几万个隐藏的元素
+    const pos=new Map();if(open)all0.forEach((n,k)=>{if(!pos.has(n))pos.set(n,k)});
     const sub=lb?`策略：<b>${esc(LBS[m.strategy]||m.strategy||'-')}</b>`:p.type==='Smart'?(p.fixed?'已固定 → <b>'+esc(p.fixed)+'</b>':'智能竞技：按延迟 / 丢包 / 速度打分'+(p.uselightgbm||p.useLightGBM?' + LightGBM':'')):ch.length?'→ <b>'+ch.map(esc).join(' → ')+'</b>':'';
     const nodesN=allH.filter(n=>!isGroup(n)).length,groupsN=allH.length-nodesN;
     const cnt=[nodesN?nodesN+' 个节点':'',groupsN?groupsN+' 个分组':'',hid?`<span class="bad">已隐藏 ${hid} 个超时</span>`:'',hidH?`<span class="bad">健康隐藏 ${hidH} 个</span>`:''].filter(Boolean).join(' · ');
     const pin=p.fixed?`<span class="tag pin" title="点击取消固定，恢复自动选择" onclick="event.stopPropagation();unfix(${i})">📌 已固定 ✕</span>`:'';
     const ico=p.icon?`<img class="gico" src="${esc(p.icon)}" alt="" onerror="this.remove()">`:'';
     const dots=allH.slice(0,80).map(n=>`<i class="${dcls(lastDelay(n))==='mut'?'':dcls(lastDelay(n))}"></i>`).join('');
-    return `<div class="card gcard ${gOpen(g)?'open':''}" id="gc${i}"><div class="ghead" onclick="toggleG(${i})">
+    return `<div class="card gcard ${open?'open':''}" id="gc${i}"><div class="ghead" onclick="toggleG(${i})">
       <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></span>${ico}
       <div class="gt"><div class="gname">${esc(g)} ${gTag(g)} ${pin}</div><div class="gsub">${sub}${sub&&cnt?' · ':''}${cnt}</div><div class="dots">${dots}</div></div>
       ${dl!==undefined?`<span class="gdl ${dcls(dl)}"${lb?' title="成员中最快的可用节点"':''}>${lb&&dl>0?'最快 ':''}${dtxt(dl)}</span>`:''}
       <button class="btn g sm" onclick="event.stopPropagation();testGroup(${i},this)">测速</button></div>
-      <div class="gbody"><div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(min(100%,178px),1fr));gap:10px">${allH.map(n=>{const j=all0.indexOf(n),d=lastDelay(n),sg=isGroup(n);
+      <div class="gbody">${open?`<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(min(100%,178px),1fr));gap:10px">${allH.map(n=>{const j=pos.get(n),d=lastDelay(n),sg=isGroup(n);
         const s2=sg?`<div class="sub2">${esc(GT[PROXIES[n].type]||'')}${PROXIES[n].now?' → '+esc(PROXIES[n].now):''}</div>`:'';
-        const unh=hLevel(n)==='hidden'?`<button class="btn g sm" onclick="event.stopPropagation();unhideNode('${esc(n).replace(/'/g,"\\'")}')">取消隐藏</button>`:'';
+        const unh=hLevel(n)==='hidden'?`<button class="btn g sm" onclick="event.stopPropagation();unhideNode(${jsq(n)})">取消隐藏</button>`:'';
         return `<div class="node ${n===p.now&&!lb?'sel':''} ${lb?'lbm':''}" onclick="pick(${i},${j})" title="${esc(n)}">
-        <div class="n">${hIcon(n)}${sg?'📁 ':''}${esc(n)}</div>${s2}<div class="d"><span class="mut">${esc(sg?'分组':PROXIES[n]?.type||'')}</span> <span class="${dcls(d)}">${dtxt(d)}</span></div>${unh}</div>`}).join('')}</div></div></div>`}).join('')||(filt?'<div class="card mut">没有匹配的节点</div>':'<div class="card mut">还没有节点，先去“订阅”添加订阅或导入节点</div>');
+        <div class="n">${hIcon(n)}${sg?'📁 ':''}${esc(n)}</div>${s2}<div class="d"><span class="mut">${esc(sg?'分组':PROXIES[n]?.type||'')}</span> <span class="${dcls(d)}">${dtxt(d)}</span></div>${unh}</div>`}).join('')}</div>`:''}</div></div>`}).join('')||(filt?'<div class="card mut">没有匹配的节点</div>':'<div class="card mut">还没有节点，先去“订阅”添加订阅或导入节点</div>');
   $('#hidedead').classList.toggle('on',HIDEDEAD);$('#hidedead').textContent=HIDEDEAD?'显示超时':'隐藏超时';
   renderPolicies()}
 function renderPolicies(){const sel=GL.filter(g=>g!=='GLOBAL'&&PROXIES[g].type==='Selector'&&(PROXIES[g].all||[]).length>1);

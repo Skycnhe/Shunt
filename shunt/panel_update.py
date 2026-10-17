@@ -94,6 +94,19 @@ def self_rollback():
     return True, "已回滚到更新前的版本，面板正在重启"
 
 
+def _undo_replace(done, bak):
+    for f in done:
+        dst, src = local_file(f), os.path.join(bak, f)
+        try:
+            if os.path.isfile(src):
+                shutil.copy2(src, dst + ".new")
+                os.replace(dst + ".new", dst)
+            else:  # 新增的文件：删掉
+                os.remove(dst)
+        except OSError as e:
+            log_err("面板更新失败后恢复 " + f, e)
+
+
 def remote_version(src):
     m = re.search(rb'^PANEL_VERSION = "([^"]+)"', src, re.M)
     return m.group(1).decode() if m else "?"
@@ -157,12 +170,19 @@ def self_update(apply=False, gh=""):
                 log_err("面板在线更新", "更新前自动备份失败：%s" % name)
         except Exception as e:
             log_err("面板在线更新：更新前自动备份异常", e)
-        for f in changed:
-            dst = local_file(f)
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            shutil.copyfile(os.path.join(tmpd, f), dst + ".new")
-            os.chmod(dst + ".new", 0o755 if (f.endswith(".sh") or f.startswith("init.d/")) else 0o644)
-            os.replace(dst + ".new", dst)
+        done = []
+        try:
+            for f in changed:
+                dst = local_file(f)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copyfile(os.path.join(tmpd, f), dst + ".new")
+                os.chmod(dst + ".new", 0o755 if (f.endswith(".sh") or f.startswith("init.d/")) else 0o644)
+                os.replace(dst + ".new", dst)
+                done.append(f)
+        except Exception as e:
+            # 替换到一半失败（磁盘满等）：已替换的文件放回旧版，不留下新 server.py + 旧 index.html 这样的混合版本
+            _undo_replace(done, bak)
+            raise ValueError(f"替换文件失败，已恢复原文件：{e}")
         shutil.rmtree(tmpd, ignore_errors=True)
         start_update_guard(flist)
         restart_self()

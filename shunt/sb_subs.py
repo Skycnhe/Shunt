@@ -12,6 +12,7 @@ from .sysopt import proxy_opener
 from .notify import core_alive
 
 _DEBUG_LOCK = threading.Lock()  # sub-debug.txt 并发写保护
+SUBS_WAIT = 180  # 并发更新订阅整体最多等这么多秒
 
 
 def _yaml_full(text):
@@ -103,15 +104,18 @@ def parse_sub_text(text, fetch=None, depth=0):
     if t.startswith("{"):
         try:
             j = json.loads(t)
-            if isinstance(j.get("outbounds"), list):
-                return [{"_sb": o, "name": o.get("tag"), "type": o.get("type")} for o in j["outbounds"]
-                        if o.get("type") not in ("selector", "urltest", "direct", "block", "dns") and o.get("tag") and o.get("server")], []
+            if isinstance(j, dict) and isinstance(j.get("outbounds"), list):
+                return [{"_sb": o, "name": str(o["tag"]), "type": o.get("type")} for o in j["outbounds"]
+                        if isinstance(o, dict) and o.get("type") not in ("selector", "urltest", "direct", "block", "dns")
+                        and o.get("tag") and o.get("server")], []
         except ValueError:
             pass
     if re.search(r"(?m)^[\"']?(proxies|proxy-providers)[\"']?\s*:", t):
         y = sub_yaml(t)
         ps = y.get("proxies") if isinstance(y.get("proxies"), list) else []
-        out = [p for p in ps if isinstance(p, dict) and p.get("name") and p.get("type")]
+        # 名称统一成文本：YAML 里 name: 2024 会解析成数字，后面的筛选正则 / 去重遇到数字会抛 TypeError，整个订阅更新失败
+        out = [dict(p, name=str(p["name"]).strip()) for p in ps
+               if isinstance(p, dict) and p.get("name") not in (None, "") and p.get("type") and str(p["name"]).strip()]
         errs = []
         pv = y.get("proxy-providers") if isinstance(y.get("proxy-providers"), dict) else {}
         # 聚合配置：mihomo 自己会去拉 proxy-providers，sing-box 不会，这里由面板逐个下载展开
@@ -243,9 +247,13 @@ def sb_update_subs(names=None, d=None):
     ths = [threading.Thread(target=one, args=(s,)) for s in subs]
     for t in ths:
         t.start()
+    end = time.time() + SUBS_WAIT  # 整体最多等 SUBS_WAIT 秒（以前逐个 join(180)，几个订阅都卡住时要等 N×180 秒）
     for t in ths:
-        t.join(180)
+        t.join(max(0.1, end - time.time()))
+    with res_lock:  # 超时还没结束的线程之后再写结果也不影响这里返回的快照
+        ok_out = list(ok)
+        bad_out = list(bad) + [f"{s['name']}：下载超时" for s, t in zip(subs, ths) if t.is_alive()]
     PROV.update(t=0, data=None)
-    return ok, bad
+    return ok_out, bad_out
 
 

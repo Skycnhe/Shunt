@@ -24,25 +24,29 @@ from .webapi import H
 def tp_env():
     """供 tproxy.sh eval：绕过列表、IPv6 开关、本机 IPv6 网段（值均经过正则过滤）"""
     d = load()
-    items = [x.strip() for x in d["bypass"] if x.strip()]
-    macs = [x.lower().replace("-", ":") for x in items if re.fullmatch(r"([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}", x)]
+    items = [x.strip() for x in d["bypass"] if isinstance(x, str) and x.strip()]
+    macs = list(dict.fromkeys(x.lower().replace("-", ":") for x in items if re.fullmatch(r"([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}", x)))
     ips, ip6s = [], []
     for x in items:
         try:
             n = ipaddress.ip_network(x, strict=False)
-            (ips if n.version == 4 else ip6s).append(str(n))
+            (ips if n.version == 4 else ip6s).append(n)
         except ValueError:
             pass
+    # nftables 的 interval 集合不接受重叠 / 重复的元素（192.168.1.0/24 和 192.168.1.5 同时在列表里会报 conflicting intervals，
+    # 整份透明代理规则加载失败），先合并
+    ips, ip6s = [str(n) for n in ipaddress.collapse_addresses(ips)], [str(n) for n in ipaddress.collapse_addresses(ip6s)]
     local6 = []
     _, out = sh("ip -o -6 addr show scope global 2>/dev/null")
     for m in re.finditer(r"inet6 ([0-9a-fA-F:]+/\d+)", out):
         try:
-            local6.append(str(ipaddress.ip_interface(m.group(1)).network))
+            local6.append(ipaddress.ip_interface(m.group(1)).network)
         except ValueError:
             pass
+    local6 = [str(n) for n in ipaddress.collapse_addresses(local6)]
     return (f"B_IP='{','.join(ips)}'\nB_MAC='{','.join(macs)}'\nB_IP6='{','.join(ip6s)}'\n"
-            f"LOCAL6='{','.join(sorted(set(local6)))}'\nIPV6={1 if d.get('ipv6') else 0}\n"
-            f"MODE={d['proxy_mode']}\nDNS_ALL={1 if dns_cfg(d)['block_bypass'] else 0}")
+            f"LOCAL6='{','.join(local6)}'\nIPV6={1 if d.get('ipv6') else 0}\n"
+            f"MODE={shlex.quote(str(d.get('proxy_mode') or ''))}\nDNS_ALL={1 if dns_cfg(d)['block_bypass'] else 0}")
 
 
 def default_tz():

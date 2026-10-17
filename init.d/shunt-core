@@ -23,6 +23,7 @@ output_log="/var/log/mihomo.log"
 error_log="/var/log/mihomo.log"
 
 depend() { need net; after firewall; }
-start_pre() { : > /var/log/mihomo.log; modprobe tun 2>/dev/null; mkdir -p /etc/sing-box; python3 /opt/mihomo-panel/server.py --gen >/dev/null; }
+# 生成配置失败（如 data.json 有坏数据）时不阻止启动：配置是原子写入的，沿用上一次的配置照常启动
+start_pre() { : > /var/log/mihomo.log; modprobe tun 2>/dev/null; mkdir -p /etc/sing-box; python3 /opt/mihomo-panel/server.py --gen >/dev/null || ewarn "生成配置失败，沿用上一次的配置启动"; return 0; }
 start_post() { sleep 1; /opt/mihomo-panel/tproxy.sh apply || ewarn "透明代理规则加载失败（内核缺少 nftables / TProxy 模块？），核心照常运行，可改用 TUN 模式"; return 0; }  # 按代理方式：TProxy 全量规则 / TUN 仅 DNS 重定向 / 关闭
 stop_post() { /opt/mihomo-panel/tproxy.sh stop; }

@@ -16,7 +16,7 @@ function renderAB(){const a=AB;$('#ab-on').checked=a.enabled;$('#ab-on').onchang
     <td>${l.count!=null?Number(l.count).toLocaleString('zh-CN',{hour12:false}):'-'}${l.allow?`<div class="mut" style="font-size:11px">例外 ${l.allow}</div>`:''}${a.enabled&&l.enabled&&ld==null&&l.count?'<div class="warn" style="font-size:11px">未加载</div>':''}</td>
     <td>${(l.hits||0).toLocaleString('zh-CN',{hour12:false})}</td>
     <td class="w" style="font-size:12px;min-width:90px">${l.error?`<span class="bad" title="${esc(l.error)}">失败：${esc(l.error.slice(0,40))}</span>`:ago(l.updated)}</td>
-    <td style="text-align:right;white-space:nowrap"><button class="btn g sm" onclick="abUpdate('${l.id}')">更新</button> <button class="btn r sm" onclick="abDel(${i})">删除</button></td></tr>`}).join('')
+    <td style="text-align:right;white-space:nowrap"><button class="btn g sm" onclick="abUpdate(${jsq(l.id)})">更新</button> <button class="btn r sm" onclick="abDel(${i})">删除</button></td></tr>`}).join('')
     +(a.black.length?`<tr><td></td><td><b style="font-weight:600">自定义黑名单</b></td><td>${(a.loaded['ad-custom']??a.black.length).toLocaleString('zh-CN',{hour12:false})}</td><td>${(a.custom_hits||0).toLocaleString('zh-CN',{hour12:false})}</td><td></td><td></td></tr>`:'')
     ||'<tr><td colspan="6" class="mut">还没有列表，点下方内置规则一键添加</td></tr>';
   const cats=[...new Set(a.presets.map(p=>p.cat||'其他'))];

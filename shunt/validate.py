@@ -5,6 +5,7 @@ data.json 里一条坏数据（规则集缺 url、节点缺 proxy、绕过列表
 import ipaddress, re
 
 from .base import DNS_LISTS, G_SEL, PROXY_MODES
+from .data import safe
 from .groups import NAME_BAD, clean_custom_group
 from .devroute import clean_device_routes
 
@@ -104,6 +105,12 @@ def clean_rules(v):
         if x:
             out.append(x)
     return out
+
+
+def sub_name_clash(name, others):
+    """订阅名只差符号（「机场 A」和「机场_A」）时会共用同一个节点缓存文件，互相覆盖：返回冲突的那个名字"""
+    k = safe(name)
+    return next((o for o in others if o != name and safe(o) == k), None)
 
 
 def clean_subs(v):

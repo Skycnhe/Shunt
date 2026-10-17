@@ -44,10 +44,14 @@ def open_url(url, gh, timeout=20):
     """GitHub 下载：先走加速地址，再经 mihomo 代理，最后直连"""
     tries = [(gh.rstrip("/") + "/" + url, False)] if gh else []
     tries += [(url, True), (url, False)]
-    err = ""
+    err, alive = "", None
     for u, use_proxy in tries:
+        if use_proxy:
+            alive = core_alive()
+            if not alive:  # 核心没在跑：「经代理」等于直连，跳过，免得同一个地址直连两遍（失败时多等一个超时）
+                continue
         try:
-            eff_proxy = use_proxy and core_alive()
+            eff_proxy = use_proxy and alive
             dl_check(u, via_proxy=eff_proxy)  # SSRF 防护：直连时校验 DNS，走代理时由代理解析（字面内网 IP 永远拦截）
             req = urllib.request.Request(u, headers={"User-Agent": UA})
             return proxy_opener(eff_proxy).open(req, timeout=timeout)
@@ -148,10 +152,18 @@ def _core_swap_and_restart(src, label, kind="mihomo"):
             return True, ""
     if had_old and src != bak:  # 新核心起不来 → 自动恢复
         _cu("自动回滚", 95, "新核心 30 秒内未响应，正在恢复原核心")
-        shutil.copy2(bak, B)
+        copy_replace(bak, B)
         svc_restart(timeout=90)
         return False, "新核心启动失败，已自动恢复为原核心。日志：" + sh(f"tail -n 5 '{MIHOMO_LOG}'")[1][-300:]
     return False, "核心重启后 30 秒内未响应，请查看日志"
+
+
+def copy_replace(src, dst):
+    """复制到临时文件再改名替换：dst 可能是正在运行（卡住 / 反复重启）的程序，直接覆盖写会因 ETXTBSY（Text file busy）失败，
+    回滚恰恰在新程序起不来时发生，以前这一步失败会让回滚落空"""
+    tmp = dst + ".rb"
+    shutil.copy2(src, tmp)
+    os.replace(tmp, dst)
 
 
 def mh_fetch(kind, channel, gh, prog=None):

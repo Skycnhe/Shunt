@@ -108,6 +108,38 @@ def _y_flow(s, i=0):
     return scalar(i, "")
 
 
+FLOW_MAX = 200  # 一个流式集合最多跨这么多行，超过就当它没闭合，不再往后吞
+
+
+def _y_depth(s):
+    """括号深度变化：引号里的不算（引号只在值的开头才算引号，Bob's 这种普通文字里的撇号不算）"""
+    q, n, prev = None, 0, ","
+    for i, ch in enumerate(s):
+        if q:
+            if ch == q and (q == "'" or s[i - 1] != "\\"):
+                q, prev = None, ch
+            continue
+        if ch in "'\"" and prev in "{[,:":
+            q = ch
+        elif ch in "{[":
+            n += 1
+        elif ch in "}]":
+            n -= 1
+        if ch not in " \t":
+            prev = ch
+    return n
+
+
+_FLOW_KEY = re.compile(r"""^\s*(?:-\s+)*(?:(?:"(?:[^"\\]|\\.)*"|'[^']*'|[^\s'"{}\[\],:#-][^:#]*?|-[^\s:#][^:#]*?)\s*:\s+)?""")
+
+
+def _y_flow_start(c):
+    """行内流式集合（{..} / [..]）开始的位置：「- {a: 1}」「key: [a, b]」「[a]」；没有返回 -1"""
+    m = _FLOW_KEY.match(c)
+    i = m.end() if m else 0
+    return i if c[i:i + 1] in ("{", "[") else -1
+
+
 def yaml_lite(text):
     """块状 / 流式映射与列表、引号字符串、注释；不支持锚点等高级语法"""
     raw = []
@@ -115,17 +147,26 @@ def yaml_lite(text):
         if line.strip() in ("---", "...") or not line.strip() or line.lstrip().startswith("#"):
             continue
         raw.append(line)
-    lines, buf = [], ""
+    lines, buf, depth, nbuf = [], "", 0, 0
     for line in raw:  # 跨行的流式集合合并成一行
-        buf = buf + " " + line.strip() if buf else line
-        c = _y_strip_comment(buf)
-        depth = sum(1 for ch in c if ch in "{[") - sum(1 for ch in c if ch in "}]")
-        if depth <= 0:
-            lines.append((len(c) - len(c.lstrip(" ")), c.strip()))
+        c = _y_strip_comment(line)
+        if buf:
+            buf += " " + c.strip()
+            depth += _y_depth(c)
+            nbuf += 1
+        else:
+            st = _y_flow_start(c)
+            if st < 0:  # 这一行没有流式集合（块状写法里的 HK[01 之类不算括号）
+                lines.append((len(c) - len(c.lstrip(" ")), c.strip()))
+                continue
+            buf, depth, nbuf = c, _y_depth(c[st:]), 1
+        # 以前每行都对整段已合并的内容重新去注释、数括号，且引号里的 [ 也计数：
+        # 一个节点名带「[」就让后面所有行并成一行，2000 个节点要十几秒（平方级）。现在逐行累计，最多合并 FLOW_MAX 行
+        if depth <= 0 or nbuf >= FLOW_MAX:
+            lines.append((len(buf) - len(buf.lstrip(" ")), buf.strip()))
             buf = ""
     if buf:
-        c = _y_strip_comment(buf)
-        lines.append((len(c) - len(c.lstrip(" ")), c.strip()))
+        lines.append((len(buf) - len(buf.lstrip(" ")), buf.strip()))
 
     def split_kv(t):
         if t[:1] in "'\"":

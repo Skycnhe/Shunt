@@ -45,7 +45,7 @@ bgApply();
 
 async function api(path,method='GET',body){
   const r=await fetch(path,{method,headers:{'X-Shunt':'1','Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
-  const t=await r.text();let j;try{j=t?JSON.parse(t):{}}catch{j={message:t}}
+  const t=await r.text();let j;try{j=t?JSON.parse(t):{}}catch{j={message:r.ok?t:t.replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim().slice(0,200)}}  // 出错时反代 / 网关返回的 HTML 错误页：去标签截断，不把整页塞进提示
   if(!r.ok)throw new Error(j.message||('HTTP '+r.status));return j}
 const core=(p,m,b)=>api('/api/core'+p,m,b);
 
