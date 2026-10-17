@@ -27,7 +27,7 @@ from .core_update import (
     lgbm_fetch, lgbm_fetch_reload
 )
 from .sysopt import SVC_OP, core_procs, delay_test, favicon, kill_core_procs, nft_ok, opt_apply, opt_status, rc_run, sh, speed_test, svc_restart
-from .notify import WD, core_alive, core_proc_alive, set_manual_stop, tg_send
+from .notify import WD, WD_EVENTS_MAX, core_alive, core_proc_alive, set_manual_stop, tg_send, wd_counts
 from .latency import BG_FILE, RETEST, bg_fetch, bg_meta, bg_meta_save, bg_save, bg_type, fix_global, proxies_merged, retest_soon
 from .stats import arp_table
 from .unlock import unlock_test
@@ -954,7 +954,8 @@ class H(BaseHTTPRequestHandler):
         out = {"running": "started" in st or code == 200, "version": version, "groups": groups, "group_meta": gmeta,
                "nodes": state_nodes(d), "default_exclude": DEFAULT_EXCLUDE, "sched_events": list(SCHED["events"])[:20],
                "panel_version": PANEL_VERSION, "core": active_core(d),
-               "wd": {"status": WD["status"], "last_check": WD["last_check"], "events": list(WD["events"])[:20]}}
+               "wd": {"status": WD["status"], "last_check": WD["last_check"], "events": list(WD["events"]),
+                      "counts": wd_counts(), "max": WD_EVENTS_MAX}}
         for k in ("mode", "subs", "rules", "rulesets", "bypass", "tests", "sub_interval", "ipv6", "https", "watchdog", "tg_token",
                   "tg_chat", "proxy_mode", "tun", "log_limit", "schedule", "devices", "device_routes", "sniffer", "gh_proxy"):
             out[k] = d.get(k)
