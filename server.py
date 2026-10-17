@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "10.2.5"
+PANEL_VERSION = "10.2.6"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -311,7 +311,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "10.2.5"
+PANEL_VERSION = "10.2.6"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -4046,8 +4046,8 @@ def _pid_alive(pid):
         return False
 
 
-SB_RELOAD_WAIT = 10.0  # 最多等 10 秒
-SB_RELOAD_NOMARK = 6.0  # 日志里一直没有标记（旧版本 / 日志被清）时，控制端口应答且进程在，等满 6 秒也算成功
+SB_RELOAD_WAIT = 60.0  # 最多等 60 秒：小路由上 SIGHUP 后先 check 新配置（大订阅 / 规则集要好几秒），再关旧实例、启动新实例
+SB_RELOAD_NOMARK = 40.0  # 日志里一直没有「sing-box started」（日志被清）时，控制端口应答且进程在，等满 40 秒才算成功
 
 
 def sb_hot_reload():
@@ -4055,11 +4055,14 @@ def sb_hot_reload():
 
     以前 SIGHUP 后 0.5 秒控制端口一应答就算成功，应答的可能还是没来得及关闭的旧实例。现在以日志为准：
     SIGHUP 之后出现「sing-box started」且控制端口应答 → 成功；出现「reload service」错误（新配置被拒，旧实例继续跑）
-    或进程退出 → 失败，交给 reload_core 回滚"""
+    或进程退出 → 失败，交给 reload_core 回滚。
+    v10.2.6 / v8.3.8：以前没等到标记 6 秒后控制端口一应答就算成功，可 sing-box 收到 SIGHUP 后要先 check 新配置，
+    这几秒里应答的是旧实例；面板随即把看门狗暂停缩短到 5 秒，旧实例关闭、新实例启动期间控制端口不通，
+    看门狗就误判「控制接口无响应（进程仍在）」把核心重启（更新广告规则、订阅后最常见）"""
     pid = core_pid()
     if pid:
         try:
-            wd_hold(45, "sing-box 重载配置")  # 重载期间控制端口短暂不可用，看门狗不要当成故障
+            wd_hold(SB_RELOAD_WAIT + 30, "sing-box 重载配置")  # 重载期间控制端口短暂不可用，看门狗不要当成故障
             off = _log_size()
             os.kill(pid, signal.SIGHUP)
             t0 = time.time()
@@ -6053,7 +6056,7 @@ def favicon(url, allowed=None):
     return None, None
 '''
 _SRC['shunt.notify'] = '''"""Telegram 通知"""
-import json, os, socket, threading, time, urllib.request, urllib.error
+import json, os, signal, socket, threading, time, urllib.request, urllib.error
 from collections import deque
 from urllib.parse import quote
 
@@ -6163,6 +6166,59 @@ def core_fd_usage():
         return ""
 
 
+HANG_LOG = os.environ.get("PANEL_HANG_LOG", "/var/log/shunt-core-hang.log")
+
+
+def core_hang_dump(why):
+    """控制接口无响应、进程仍在：重启前把核心日志末尾和 Go 协程栈（SIGQUIT）存进 HANG_LOG。
+    start_pre 会清空核心日志，不存下来就无从知道核心当时卡在哪。只保留最近一次（最多约 512KB）"""
+    try:
+        with open(CORE_PID) as f:
+            pid = int(f.read().strip())
+        os.kill(pid, 0)
+    except Exception:
+        return False
+    def tail(n):
+        try:
+            with open(MIHOMO_LOG, "rb") as f:
+                f.seek(0, 2)
+                end = f.tell()
+                f.seek(max(0, end - n))
+                return end, f.read()
+        except OSError:
+            return 0, b""
+    off, before = tail(64 * 1024)
+    try:
+        os.kill(pid, signal.SIGQUIT)  # Go 运行时收到 SIGQUIT 把所有协程栈打到 stderr（即核心日志）后退出
+    except OSError:
+        pass
+    for _ in range(20):
+        time.sleep(0.25)
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            break
+    time.sleep(0.3)
+    end, _ = tail(0)
+    dump = b""
+    if end > off:
+        try:
+            with open(MIHOMO_LOG, "rb") as f:
+                f.seek(off)
+                dump = f.read(448 * 1024)
+        except OSError:
+            pass
+    try:
+        with open(HANG_LOG, "wb") as f:
+            f.write(("===== %s %s =====\\n----- 核心日志末尾 -----\\n" % (time.strftime("%F %T"), why)).encode())
+            f.write(before)
+            f.write("\\n----- SIGQUIT 协程栈 -----\\n".encode())
+            f.write(dump)
+        return True
+    except OSError:
+        return False
+
+
 def core_last_error():
     """核心日志末尾 16KB 里最后一条 FATAL / ERROR / panic，写进看门狗事件，便于事后查原因"""
     for line in reversed(log_tail(MIHOMO_LOG) or []):
@@ -6215,6 +6271,8 @@ def watchdog_tick():
         fd = core_fd_usage() if core_proc_alive() else ""
         if fd:
             why += f"，文件句柄 {fd}"
+        if fd and core_hang_dump(why):
+            why += f"，现场已存到 {HANG_LOG}"
         wd_event(f"{cname} 核心{why}，第 {WD['fails']} 次自动重启" + (f"；日志最后一条错误：{err}" if err else ""),
                  push=WD["fails"] == 1)
         svc_restart(timeout=60, why="看门狗重启核心", cancel=lambda: WD["manual_stop"])
