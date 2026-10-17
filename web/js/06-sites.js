@@ -1,7 +1,8 @@
 // 站点延迟：每个站点一张卡片，图标 + 最近 30 次延迟柱状图 + 当前值；柱高按 max(300ms, 近期最大值) 缩放，超时为满高红柱
 const SITE_SVG='<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.8 3.2 2.8 14.8 0 18M12 3c-2.8 3.2-2.8 14.8 0 18"/></svg>';
 function favFail(im){const p=im.parentNode;p.classList.add('nf');p.innerHTML=esc(p.dataset.l)||SITE_SVG}
-async function testSites(force){const el=$('#sites');if(!el.children.length)el.innerHTML='<div class="card mut" style="margin:0;padding:16px">站点延迟检测中…</div>';
+let SITES_T=0; // 上次站点测速的时间：切到概览时超过 55 秒才重测
+async function testSites(force){SITES_T=Date.now();const el=$('#sites');if(!el.children.length)el.innerHTML='<div class="card mut" style="margin:0;padding:16px">站点延迟检测中…</div>';
   try{const r=await api('/api/delay'+(force?'?force=1':''));if(!r.length){el.innerHTML='<div class="card mut" style="margin:0;padding:16px">没有检测站点，在 设置 → 测试站点 中添加</div>';return}
     el.innerHTML=r.map(s=>{const h=(s.hist&&s.hist.length?s.hist:[s.ms]).slice(-30),mx=Math.max(300,...h.filter(v=>v>0)),ok=s.ms>0;
       const bars=Array(30-h.length).fill('<i class="e"></i>').join('')+h.map(v=>`<i class="${dcls(v)}" style="height:${v>0?Math.max(8,v/mx*100):100}%" title="${dtxt(v)}"></i>`).join('');

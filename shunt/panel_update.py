@@ -2,7 +2,7 @@
 import hashlib, os, re, shlex, shutil, time, urllib.request, urllib.error
 
 from .errlog import log_err
-from .base import BASE, PANEL_VERSION, UA, UPD_STATE, dl_check, local_file
+from .base import BASE, PANEL_VERSION, UA, UPD_STATE, dl_check, local_file, upd_begin, upd_busy_msg
 from .core_update import gh_api
 from .sysopt import proxy_opener, sh
 from .https import restart_self
@@ -81,11 +81,16 @@ def self_rollback():
     bak = os.path.join(BASE, ".backup")
     if not os.path.isfile(os.path.join(bak, "server.py")):
         return False, "没有可回滚的备份"
-    for root, _, names in os.walk(bak):
-        for n in names:
-            src = os.path.join(root, n)
-            shutil.copy2(src, local_file(os.path.relpath(src, bak)))
-    restart_self()
+    if not upd_begin("panel"):
+        return False, upd_busy_msg()
+    try:
+        for root, _, names in os.walk(bak):
+            for n in names:
+                src = os.path.join(root, n)
+                shutil.copy2(src, local_file(os.path.relpath(src, bak)))
+        restart_self()
+    finally:
+        UPD_STATE["busy"] = False
     return True, "已回滚到更新前的版本，面板正在重启"
 
 
@@ -96,9 +101,9 @@ def remote_version(src):
 
 def self_update(apply=False, gh=""):
     """检查 / 应用 GitHub 上的新版面板：下载全部文件 → 校验 → 备份 → 替换 → 重启面板"""
-    if UPD_STATE["busy"]:
-        return False, {"message": "正在更新中"}
-    UPD_STATE["busy"] = True
+    # 只检查不替换时不占用忙标志；真正更新时与内核更新 / 切换 / 回滚互斥（内核替换到一半时重启面板会留下半截二进制）
+    if apply and not upd_begin("panel"):
+        return False, {"message": upd_busy_msg()}
     try:
         files, changed = {}, []
         commit, shas = panel_manifest()
@@ -149,9 +154,9 @@ def self_update(apply=False, gh=""):
             from . import backup as backup_mod
             ok, name = backup_mod.create()
             if not ok:
-                log_err("更新前自动备份失败：%s" % name)
+                log_err("面板在线更新", "更新前自动备份失败：%s" % name)
         except Exception as e:
-            log_err("更新前自动备份异常：%s" % e)
+            log_err("面板在线更新：更新前自动备份异常", e)
         for f in changed:
             dst = local_file(f)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
@@ -167,5 +172,6 @@ def self_update(apply=False, gh=""):
     except Exception as e:
         return False, {"message": str(e)}
     finally:
-        UPD_STATE["busy"] = False
+        if apply:
+            UPD_STATE["busy"] = False
 

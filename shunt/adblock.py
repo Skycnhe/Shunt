@@ -261,7 +261,36 @@ def adblock_update(ids=None, apply=True):
         AB_STATE["updating"] = False
 
 
-AB_CACHE = {}
+AB_CACHE = {}  # 列表路径 → (mtime, 后缀集合, 精确集合)：只给「查询域名」用，空闲 AB_IDLE 秒后整体释放
+AB_IDLE = 300
+_AB_GC = {"last": 0.0, "timer": None}
+_AB_GC_LOCK = threading.Lock()
+
+
+def _ab_touch():
+    """记一次使用；没有待执行的释放定时器就起一个。几十万条的 HaGeZi / anti-AD 列表转成 set 要占几十 MB，
+    以前查一次就常驻到下次更新，现在 5 分钟没人查就释放"""
+    with _AB_GC_LOCK:
+        _AB_GC["last"] = time.time()
+        if _AB_GC["timer"] is None:
+            _ab_arm(AB_IDLE)
+
+
+def _ab_arm(delay):
+    t = threading.Timer(delay, _ab_gc)
+    t.daemon = True
+    _AB_GC["timer"] = t
+    t.start()
+
+
+def _ab_gc():
+    with _AB_GC_LOCK:
+        left = _AB_GC["last"] + AB_IDLE - time.time()
+        if left > 1:
+            _ab_arm(left)
+            return
+        _AB_GC["timer"] = None
+        AB_CACHE.clear()
 
 
 def ab_sets(path):
@@ -269,6 +298,7 @@ def ab_sets(path):
         mt = os.path.getmtime(path)
     except OSError:
         return set(), set()
+    _ab_touch()
     c = AB_CACHE.get(path)
     if c and c[0] == mt:
         return c[1], c[2]
@@ -295,6 +325,8 @@ def ab_match(host, sets):
 
 
 def ab_check(target):
+    if not isinstance(target, str):
+        raise ValueError("请输入有效域名")
     host = clean_target(target)
     if not norm_domain(host):
         raise ValueError("请输入有效域名")

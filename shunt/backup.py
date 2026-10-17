@@ -23,7 +23,19 @@ _FILES = [
 
 
 def _ensure_dir():
-    os.makedirs(BACKUP_DIR, exist_ok=True)
+    os.makedirs(BACKUP_DIR, mode=0o700, exist_ok=True)
+
+
+def _fix_perms():
+    """备份里有 data.json（订阅 URL、节点密码、TG token）：旧版按默认 umask 建成 644 的收紧为 600"""
+    try:
+        os.chmod(BACKUP_DIR, 0o700)
+        for fn in os.listdir(BACKUP_DIR):
+            fp = os.path.join(BACKUP_DIR, fn)
+            if fn.endswith(".tar.gz") and os.path.isfile(fp) and os.stat(fp).st_mode & 0o077:
+                os.chmod(fp, 0o600)
+    except OSError:
+        pass
 
 
 def _backup_name(version, ts=None):
@@ -56,13 +68,22 @@ def create(version=None, auto=False):
             name = _backup_name(version)[:-7] + "-%d.tar.gz" % i
             path = os.path.join(BACKUP_DIR, name)
             i += 1
-        with tarfile.open(path, "w:gz") as tf:
-            for kind, rel in _FILES:
-                src = os.path.join(BASE, rel) if kind == "base" else rel
-                if os.path.isfile(src):
-                    tf.add(src, arcname=rel)
-            if os.path.isfile(DATA_FILE):
-                tf.add(DATA_FILE, arcname="data.json")
+        # 一开始就以 600 创建（不经过默认 umask 的 644 窗口）；O_EXCL 防止同名覆盖
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(fd, "wb") as fo, tarfile.open(fileobj=fo, mode="w:gz") as tf:
+                for kind, rel in _FILES:
+                    src = os.path.join(BASE, rel) if kind == "base" else rel
+                    if os.path.isfile(src):
+                        tf.add(src, arcname=rel)
+                if os.path.isfile(DATA_FILE):
+                    tf.add(DATA_FILE, arcname="data.json")
+        except BaseException:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            raise
         cleanup()
         return True, name
     except Exception as e:
@@ -73,6 +94,7 @@ def create(version=None, auto=False):
 def list():
     """返回备份列表 [{name, version, size, mtime}]，按时间倒序。"""
     _ensure_dir()
+    _fix_perms()
     out = []
     try:
         for fn in os.listdir(BACKUP_DIR):

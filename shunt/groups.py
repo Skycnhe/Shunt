@@ -8,7 +8,7 @@ from .data import load, read_json, safe, write_json
 from .links import reserved_names
 from .sb_common import SB_SUB_DIR, active_core
 PROV_FILE = os.path.join(PANEL_DIR, "provider_nodes.json")
-PROV = {"t": 0, "data": None}
+PROV = {"t": 0, "data": None, "rev": 0}  # rev：订阅节点名单每变化一次加一（/api/state 的策略组缓存键、/api/ping 版本号用）
 RX_CACHE = {}
 
 
@@ -59,7 +59,7 @@ def provider_nodes(fresh=False):
     data = None
     if active_core() == "singbox":  # sing-box 的订阅由面板下载解析，节点名直接取缓存
         data = sb_provider_nodes(load())
-        PROV.update(t=now, data=data)
+        _prov_set(now, data)
         return data
     j = None if os.environ.get("PANEL_OFFLINE") else core_json("/providers/proxies", timeout=3)
     if j is not None:
@@ -74,8 +74,19 @@ def provider_nodes(fresh=False):
                 log_err("保存订阅节点列表", e)
     if data is None:
         data = read_json(PROV_FILE, {})
-    PROV.update(t=now, data=data)
+    _prov_set(now, data)
     return data
+
+
+def _prov_set(now, data):
+    if PROV["data"] is not None and data != PROV["data"]:
+        PROV["rev"] += 1
+    PROV.update(t=now, data=data)
+
+
+def provider_rev():
+    """订阅节点名单的版本：节点增删 / 改名后变化"""
+    return PROV["rev"]
 
 
 def gcfg(d):

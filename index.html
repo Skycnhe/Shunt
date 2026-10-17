@@ -854,7 +854,7 @@ function renderHdr(l){$('#h-up').textContent=fmt(l.up)+'/s';$('#h-down').textCon
   $('#ov-up').textContent=fmt(l.up)+'/s';$('#ov-down').textContent=fmt(l.down)+'/s';
   $('#ov-tot').textContent=`累计 ↑${fmt(l.upTotal)} ↓${fmt(l.downTotal)} · 内存 ${l.inuse?fmt(l.inuse):'-'}`;
   if(l.running!==undefined&&l.running!==STATE.running){STATE.running=l.running;renderCore(l.running)}}
-function renderOverview(){renderMode();renderWD();renderPMStat();loadDevs();loadAdStat();loadQS();loadIpInfo()}
+function renderOverview(){renderMode();renderWD();renderPMStat();loadDevs();loadAdStat();loadQS();loadIpInfo();if(Date.now()-SITES_T>55e3)testSites()}
 
 // 顶栏版本：面板 / 内核当前版本，有更新时标「有更新」。检查结果按版本缓存 6 小时（检查要访问 GitHub API，
 // 未登录每小时 60 次，不能每次打开都查）；设置页手动检查后也会刷新这里
@@ -951,7 +951,7 @@ async function loadIpInfo(){let j;try{j=await api('/api/ipinfo')}catch(e){IP_FAI
   $('#ipmask-btn').textContent=IPMASK?'显示 IP':'隐藏 IP'}
 function toggleIpMask(){IPMASK=!IPMASK;localStorage.setItem('ipmask',IPMASK?'1':'0');loadIpInfo()}
 // 每秒：/api/live（速率、累计、内存）；概览 / 连接页额外拉取连接列表
-// 页面不可见时全部暂停；连续失败按 2、4、8…最多 30 秒退避；连接列表只在概览（每 3 秒）和连接页（每秒，暂停时不拉）获取
+// 页面不可见时全部暂停；连续失败按 2、4、8…最多 30 秒退避；连接页每秒拉完整连接列表（暂停时不拉），概览每 3 秒只拉连接数 / 设备数
 let _cn=0,_busy=false,_fail=0,_skip=0;
 async function tick(){
   if(document.hidden||_busy)return;if(_skip>0){_skip--;return}_busy=true;
@@ -960,14 +960,17 @@ async function tickOnce(){
   try{LIVE=await api('/api/live');renderHdr(LIVE);pushHist(LIVE.up||0,LIVE.down||0);_fail=0}
   catch(e){['#h-up','#h-down','#h-mem'].forEach(k=>$(k).textContent='-');_fail++;_skip=Math.min(30,2**_fail);return}
   _cn++;
-  if((TAB==='连接'&&!$('#c-pause').checked)||(TAB==='概览'&&_cn%3===0)){
-    try{const c=await api('/api/conns');CONNS=c.connections||[];$('#s-conn').textContent=CONNS.length;
-      $('#s-devs').textContent=new Set(CONNS.map(x=>x.metadata?.sourceIP).filter(Boolean)).size+' 台设备';
-      if(TAB==='连接'&&!$('#c-pause').checked)renderConns(CONNS)}catch(e){$('#s-conn').textContent='-'}}}
+  if(TAB==='连接'&&!$('#c-pause').checked){
+    try{const c=await api('/api/conns');CONNS=c.connections||[];showConnStat(CONNS.length,new Set(CONNS.map(x=>x.metadata?.sourceIP).filter(Boolean)).size);
+      renderConns(CONNS)}catch(e){$('#s-conn').textContent='-'}}
+  else if(TAB==='概览'&&_cn%3===0){ // 概览只要两个数字：走轻量的 /api/conns/stats，不再拉完整连接列表
+    try{const s=await api('/api/conns/stats');showConnStat(s.count,s.devices)}catch(e){$('#s-conn').textContent='-'}}}
+function showConnStat(n,d){$('#s-conn').textContent=n;$('#s-devs').textContent=d+' 台设备'}
 // 站点延迟：每个站点一张卡片，图标 + 最近 30 次延迟柱状图 + 当前值；柱高按 max(300ms, 近期最大值) 缩放，超时为满高红柱
 const SITE_SVG='<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.8 3.2 2.8 14.8 0 18M12 3c-2.8 3.2-2.8 14.8 0 18"/></svg>';
 function favFail(im){const p=im.parentNode;p.classList.add('nf');p.innerHTML=esc(p.dataset.l)||SITE_SVG}
-async function testSites(force){const el=$('#sites');if(!el.children.length)el.innerHTML='<div class="card mut" style="margin:0;padding:16px">站点延迟检测中…</div>';
+let SITES_T=0; // 上次站点测速的时间：切到概览时超过 55 秒才重测
+async function testSites(force){SITES_T=Date.now();const el=$('#sites');if(!el.children.length)el.innerHTML='<div class="card mut" style="margin:0;padding:16px">站点延迟检测中…</div>';
   try{const r=await api('/api/delay'+(force?'?force=1':''));if(!r.length){el.innerHTML='<div class="card mut" style="margin:0;padding:16px">没有检测站点，在 设置 → 测试站点 中添加</div>';return}
     el.innerHTML=r.map(s=>{const h=(s.hist&&s.hist.length?s.hist:[s.ms]).slice(-30),mx=Math.max(300,...h.filter(v=>v>0)),ok=s.ms>0;
       const bars=Array(30-h.length).fill('<i class="e"></i>').join('')+h.map(v=>`<i class="${dcls(v)}" style="height:${v>0?Math.max(8,v/mx*100):100}%" title="${dtxt(v)}"></i>`).join('');
@@ -1262,13 +1265,15 @@ async function abCheck(){const d=$('#ab-check').value.trim();if(!d)return toast(
   catch(e){$('#ab-check-r').innerHTML=`<span class="bad">${esc(e.message)}</span>`}}
 
 // 连接
-const prevConn={};
+let prevConn=new Map(),_prevConnT=0;
 let _lastConnRender=0;
 function renderConns(list){const f=$('#c-filter').value.toLowerCase();const now=Date.now();
   list.sort((a,b)=>new Date(b.start)-new Date(a.start));
-  // 速率基线每秒更新（/s 显示准确），DOM 全量重绘降频到每 2 秒
-  const rates=new Map();
-  for(const c of list){const p=prevConn[c.id];rates.set(c.id,p?[c.download-p.d,c.upload-p.u]:[0,0]);prevConn[c.id]={d:c.download,u:c.upload}}
+  // 速率基线每次拉取都更新，按实际时间差折算成 /s（退避跳过几秒也不会偏大）；DOM 全量重绘降频到每 2 秒。
+  // 基线表每次用本轮的连接重建：已关闭连接的记录随之丢弃，连接页开几个小时也不会越积越多
+  const rates=new Map(),next=new Map(),dt=_prevConnT?Math.max(1,(now-_prevConnT)/1000):1;
+  for(const c of list){const p=prevConn.get(c.id);rates.set(c.id,p?[Math.max(0,c.download-p.d)/dt,Math.max(0,c.upload-p.u)/dt]:[0,0]);next.set(c.id,{d:c.download,u:c.upload})}
+  prevConn=next;_prevConnT=now;
   if(now-_lastConnRender<2000)return;
   _lastConnRender=now;
   $('#conns').innerHTML=list.filter(c=>!f||(JSON.stringify(c)+dname(c.metadata?.sourceIP)).toLowerCase().includes(f)).slice(0,300).map(c=>{const m=c.metadata||{};
@@ -1459,7 +1464,7 @@ async function fillHealthCfg(){try{const j=await api('/api/health/status');const
   const st=j.running?'检查中…':(j.last_run?('上次：'+new Date(j.last_run*1000).toLocaleString('zh-CN',{hour12:false,month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})):'未运行过');
   $('#hc-status').textContent='健康检查：'+(c.enabled?'已启用':'未启用')+'，'+st}catch(e){}}
 async function saveHealthCfg(){try{const j=await api('/api/health/cfg','PUT',{enabled:$('#hc-enabled').checked,time:$('#hc-time').value,warn_days:+$('#hc-warn').value,hide_days:+$('#hc-hide').value});if(!j.ok)toast(j.message||'保存失败');fillHealthCfg()}catch(e){toast(e.message)}}
-async function runHealthCheck(){try{toast('开始检查…');const j=await api('/api/health/check','POST');toast(j.message);const poll=setInterval(async()=>{try{const s=await api('/api/health/status');fillHealthCfg();if(!s.running){clearInterval(poll);if(TAB==='nodes')loadProxies()}}catch(e){clearInterval(poll)}},3000)}catch(e){toast(e.message)}}
+async function runHealthCheck(){try{toast('开始检查…');const j=await api('/api/health/check','POST');toast(j.message);const poll=setInterval(async()=>{try{const s=await api('/api/health/status');fillHealthCfg();if(!s.running){clearInterval(poll);if(TAB==='节点')loadProxies()}}catch(e){clearInterval(poll)}},3000)}catch(e){toast(e.message)}}
 async function loadHistory(){try{const h=await api('/api/history');
   $('#hist').innerHTML=h.map(x=>`<div class="row ev" style="padding:6px 0"><span class="mut" style="min-width:118px">${new Date(x.t*1000).toLocaleString('zh-CN',{hour12:false,month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</span><span class="sp">修改前：${x.changed.map(esc).join('、')}</span><button class="btn g sm" onclick="restoreHist('${x.id}')">恢复</button></div>`).join('')||'<span class="mut">还没有快照</span>'}catch(e){}}
 async function restoreHist(id){if(!confirm('恢复到这份快照？当前设置会先保存为新快照。'))return;try{toast('正在校验并应用…');const j=await api('/api/history','POST',{id});toast(j.message);await loadState();renderSettings()}catch(e){toast(e.message)}}
@@ -1625,9 +1630,11 @@ async function start(){
   try{await loadState()}catch(e){if(e.message==='未登录')return;toast('面板服务连接失败：'+e.message)}
   $('#app').classList.remove('hide');nav();go(TAB);
   const vis=f=>()=>{if(!document.hidden)f()};
-  timers.forEach(clearInterval);timers=[setInterval(tick,1000),setInterval(vis(testSites),60000),setInterval(vis(()=>loadState().catch(()=>{})),15000),setInterval(vis(loadDevs),30000),
+  // 设备名单只在用得到它的概览 / 连接 / 统计页轮询（统计页 loadStats 自带）；站点延迟卡片只在概览，测速也只在概览跑
+  timers.forEach(clearInterval);timers=[setInterval(tick,1000),setInterval(vis(()=>{if(TAB==='概览')testSites()}),60000),setInterval(vis(()=>loadState().catch(()=>{})),15000),
+    setInterval(vis(()=>{if(TAB==='概览'||TAB==='连接')loadDevs()}),30000),
     setInterval(vis(()=>{if(TAB==='统计')loadStats();if(TAB==='概览')loadAdStat();if(TAB==='广告拦截'&&!AB?.updating)loadAB()}),30000)];
-  loadDevs();tick();testSites();bgSync()}
+  loadDevs();tick();bgSync()}
 // 切回前台时立即刷新一次
 document.addEventListener('visibilitychange',()=>{if(document.hidden||$('#app').classList.contains('hide'))return;_skip=0;tick();loadState().catch(()=>{});if(TAB==='节点')loadProxies()});
 placeNav();

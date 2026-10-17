@@ -3,7 +3,7 @@ import json, os, socket, threading, time, urllib.request, urllib.error
 from collections import deque
 from urllib.parse import quote
 
-from .base import CORE_UPD, G_MANUAL, HC, MASS_TEST, MIHOMO_LOG, NOTIFY_FILE, PANEL_DIR, TPROXY_SH, WD_HOLD
+from .base import CORE_UPD, G_MANUAL, HC, MIHOMO_LOG, NOTIFY_FILE, PANEL_DIR, TPROXY_SH, WD_HOLD, mass_testing
 from .data import load, read_json, write_json
 from .corehttp import core, core_json
 from .sb_common import CORE_PID, CORES, active_core
@@ -118,7 +118,7 @@ def watchdog_tick():
     if not d.get("watchdog", True):
         WD["status"] = "off"
         return
-    if MASS_TEST["n"] > 0:  # 全节点测速进行中：核心高负载，/version 可能超时，暂停故障判定
+    if mass_testing():  # 全节点测速进行中：核心高负载，/version 可能超时，暂停故障判定
         return
     redirecting = d["proxy_mode"] != "off"  # TProxy 或 TUN（TUN 模式下 tproxy.sh 仍负责 DNS 重定向）
     cname = CORES.get(active_core(d), "mihomo")
@@ -160,9 +160,12 @@ def watchdog_tick():
         wd_event(f"{cname} 核心重启 2 次仍无响应，已关闭透明代理，局域网暂时直连上网")
     elif WD["fails"] % 10 == 0:  # 直连状态下每 5 分钟再尝试拉起一次
         svc_restart(timeout=60, why="看门狗重启核心", cancel=lambda: WD["manual_stop"])
-        if redirecting and core_alive():
-            sh(TPROXY_SH + " stop")  # rc 的 start_post 会重新挂上规则，等下一轮确认恢复后再开
+        if redirecting:
+            # rc 的 start_post 不管核心是否真的起来都会重新挂上规则（command_background 下启动总算成功）：
+            # 一律撤掉，局域网保持直连；核心若已恢复，下一轮确认后再重新开启
             # TUN 模式下核心一启动就接管路由，无法“暂不接管”，下一轮检查会正常恢复
+            sh(TPROXY_SH + " stop")
+            WD["tp_off"] = True
 
 
 def load_notified():

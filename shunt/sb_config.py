@@ -471,16 +471,63 @@ def sb_log_error():
     return ""
 
 
+def _log_size():
+    try:
+        return os.path.getsize(MIHOMO_LOG)
+    except OSError:
+        return 0
+
+
+def _log_since(off):
+    """日志从 off 起新增的内容（文件被截断 / 清理过则从头读），最多读 64KB"""
+    try:
+        with open(MIHOMO_LOG, "rb") as f:
+            f.seek(0, 2)
+            end = f.tell()
+            if end < off:
+                off = 0
+            f.seek(max(off, end - 64 * 1024))
+            return f.read().decode("utf-8", "ignore")
+    except OSError:
+        return ""
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+SB_RELOAD_WAIT = 10.0  # 最多等 10 秒
+SB_RELOAD_NOMARK = 6.0  # 日志里一直没有标记（旧版本 / 日志被清）时，控制端口应答且进程在，等满 6 秒也算成功
+
+
 def sb_hot_reload():
-    """sing-box 收到 SIGHUP 会重新读取配置（透明代理规则不受影响）；进程不在时重启服务"""
+    """sing-box 收到 SIGHUP 会先 check 新配置，通过则关闭旧实例、按新配置重建（透明代理规则不受影响）；进程不在时重启服务。
+
+    以前 SIGHUP 后 0.5 秒控制端口一应答就算成功，应答的可能还是没来得及关闭的旧实例。现在以日志为准：
+    SIGHUP 之后出现「sing-box started」且控制端口应答 → 成功；出现「reload service」错误（新配置被拒，旧实例继续跑）
+    或进程退出 → 失败，交给 reload_core 回滚"""
     pid = core_pid()
     if pid:
         try:
             wd_hold(45, "sing-box 重载配置")  # 重载期间控制端口短暂不可用，看门狗不要当成故障
+            off = _log_size()
             os.kill(pid, signal.SIGHUP)
-            for _ in range(20):
+            t0 = time.time()
+            while time.time() - t0 < SB_RELOAD_WAIT:
                 time.sleep(0.5)
-                if core_alive():
+                if not _pid_alive(pid):
+                    return False, "sing-box 重载后进程已退出，请查看日志"
+                new = _log_since(off)
+                m = re.search(r"(?:ERROR|FATAL)[^\n]*reload service[^\n]*", new)
+                if m:
+                    return False, "sing-box 拒绝了新配置：" + m.group(0)[-200:]
+                started = "sing-box started" in new
+                if (started or time.time() - t0 >= SB_RELOAD_NOMARK) and core_alive():
+                    wd_hold(5, "sing-box 重载配置", reset=True)  # 已确认恢复：缩短看门狗暂停期
                     return True, "配置已重载"
             return False, "sing-box 重载后未响应，请查看日志"
         except OSError:

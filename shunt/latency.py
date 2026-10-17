@@ -33,34 +33,41 @@ def _hist_last(p):
     return best
 
 
-def delay_merge(px):
-    """用核心的最新记录更新缓存，并给每个节点写入 _d（延迟）/ _dt（测速时间）"""
-    if DELAYS["data"] is None:
-        DELAYS["data"] = read_json(DELAY_FILE, {}) or {}
-    data, now = DELAYS["data"], int(time.time())
-    for name, p in px.items():
-        if p.get("all") is not None:  # 策略组的延迟取当前节点，前端处理
-            continue
-        r = _hist_last(p)
-        if r:
-            old = data.get(name)
-            if not old or old.get("ts") != r[1]:
-                data[name] = {"d": r[0], "ts": r[1], "at": now}
+def delay_merge(px, prov_ok=True):
+    """用核心的最新记录更新缓存，并给每个节点写入 _d（延迟）/ _dt（测速时间）。
+    多个 /api/px 请求与 retest_soon 后台线程会同时调用：缓存的读改写和落盘都在 _DELAY_LOCK 内，
+    不再出现「dictionary changed size during iteration」和两个线程同写一个 .tmp。
+    prov_ok=False（订阅节点列表没取到）时不清理「已不存在」的节点，免得把订阅节点的缓存延迟全删掉"""
+    with _DELAY_LOCK:
+        if DELAYS["data"] is None:
+            DELAYS["data"] = read_json(DELAY_FILE, {}) or {}
+        data, now = DELAYS["data"], int(time.time())
+        for name, p in px.items():
+            if p.get("all") is not None:  # 策略组的延迟取当前节点，前端处理
+                continue
+            r = _hist_last(p)
+            if r:
+                old = data.get(name)
+                if not old or old.get("ts") != r[1]:
+                    data[name] = {"d": r[0], "ts": r[1], "at": now}
+                    DELAYS["dirty"] = True
+            c = data.get(name)
+            if c:
+                p["_d"], p["_dt"] = c["d"], c["at"]
+        if px and prov_ok:
+            for n in [n for n in data if n not in px]:  # 节点已不存在
+                data.pop(n)
                 DELAYS["dirty"] = True
-        c = data.get(name)
-        if c:
-            p["_d"], p["_dt"] = c["d"], c["at"]
-    if px:
-        for n in [n for n in data if n not in px]:  # 节点已不存在
-            data.pop(n)
-            DELAYS["dirty"] = True
-    if DELAYS["dirty"] and now - DELAYS["saved"] > 30:
-        try:
-            write_json(DELAY_FILE, data)
-            DELAYS.update(saved=now, dirty=False)
-        except OSError as e:
-            log_err("保存延迟缓存", e)
+        if DELAYS["dirty"] and now - DELAYS["saved"] > 30:
+            try:
+                write_json(DELAY_FILE, data)
+                DELAYS.update(saved=now, dirty=False)
+            except OSError as e:
+                log_err("保存延迟缓存", e)
     return px
+
+
+_DELAY_LOCK = threading.Lock()
 
 
 def fix_global():
@@ -194,9 +201,10 @@ def proxies_merged():
         return None
     px = dict(a.get("proxies") or {})
     try:
-        prov = prov_json().get("providers") or {}
+        pj = prov_json()
+        prov, prov_ok = pj.get("providers") or {}, bool(pj)  # 核心没应答时 prov_json() 返回 {}
     except Exception:
-        prov = {}
+        prov, prov_ok = {}, False
     for pv in prov.values():
         for n in pv.get("proxies") or []:
             if n and n.get("name"):
@@ -205,7 +213,7 @@ def proxies_merged():
                     px[n["name"]] = n
                 elif not _hist_last(cur) and _hist_last(n):  # 同名节点：保留有测速记录的那份
                     cur["history"], cur["extra"] = n.get("history") or [], n.get("extra") or {}
-    delay_merge(px)
+    delay_merge(px, prov_ok)
     nodes = [p for p in px.values() if p.get("all") is None and p.get("type") not in ("Direct", "Reject", "RejectDrop", "Pass", "Compatible", "Dns")]
     if nodes and not any("_d" in p for p in nodes):  # 一个延迟都没有（刚启动 / 刚重载）：后台补测
         retest_soon(1)

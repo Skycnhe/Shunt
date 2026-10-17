@@ -17,6 +17,7 @@ MODULES = [
     "ruleutil",
     "groups",
     "mihomo",
+    "validate",
     "core",
     "corehttp",
     "sb_common",

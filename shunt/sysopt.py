@@ -703,20 +703,57 @@ FAV_FAIL = {}
 FAV_FAIL_MAX = 2000  # 失败记录上限：超限淘汰最旧的，防止无界增长
 
 
+def img_type(b):
+    """按魔数识别位图图标，返回 Content-Type；SVG、HTML 等可执行脚本的格式一律不认（防 XSS）"""
+    if b[:4] == b"\x00\x00\x01\x00":
+        return "image/x-icon"
+    if b[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if b[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if b[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if b[:4] == b"RIFF" and b[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
 def _is_img(b):
-    return b[:4] in (b"\x00\x00\x01\x00", b"\x89PNG") or b[:3] == b"GIF" or b[:2] == b"\xff\xd8" or b[:4] == b"RIFF" or b.lstrip()[:4] == b"<svg"
+    return img_type(b) is not None
 
 
-def favicon(url):
-    host = (urlsplit(url).hostname or "").lower()
+def fav_hosts(d=None):
+    """允许取图标的站点：只限「延迟站点」列表里出现过的 host，防止面板被当作任意 URL 的同源代理"""
+    tests = (d or load()).get("tests") or TESTS
+    out = set()
+    for t in tests:
+        try:
+            h = (urlsplit(str(t.get("url") or "")).hostname or "").lower()
+        except (AttributeError, ValueError):
+            continue
+        if h:
+            out.add(h)
+    return out
+
+
+def favicon(url, allowed=None):
+    try:
+        host = (urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return None, None
     if not re.fullmatch(r"[a-z0-9.-]{1,253}", host):
+        return None, None
+    if host not in (fav_hosts() if allowed is None else allowed):
         return None, None
     path = os.path.join(FAV_DIR, host)
     try:
         if time.time() - os.path.getmtime(path) < 7 * 86400:
             with open(path, "rb") as f:
                 b = f.read()
-            return b, ("image/svg+xml" if b.lstrip()[:4] == b"<svg" else "image/x-icon" if b[:4] == b"\x00\x00\x01\x00" else "image/png")
+            ct = img_type(b)
+            if ct:
+                return b, ct
+            os.remove(path)  # 旧版本缓存的 SVG 等非位图：删掉重新获取
     except OSError:
         pass
     if time.time() - FAV_FAIL.get(host, 0) < 3600:
@@ -733,7 +770,7 @@ def favicon(url):
                 os.makedirs(FAV_DIR, exist_ok=True)
                 with open(path, "wb") as f:
                     f.write(b)
-                return favicon(url)
+                return b, img_type(b)
         except Exception:
             pass
     if len(FAV_FAIL) >= FAV_FAIL_MAX:

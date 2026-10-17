@@ -1,15 +1,16 @@
 """核心交互"""
-import os, threading, time
+import itertools, os, threading, time
 
 from .base import CONF_DIR, LOCK, wd_hold
+from .errlog import log_err
 from .corehttp import core, core_json
-from .data import load, read_json, save
+from .data import config_version, load, read_json, save
 from .groups import provider_nodes
 from .mihomo import build_config, check_config, write_config
 from .sb_common import SB_CONF, active_core
 from .sb_config import build_singbox, check_sb_config, sb_hot_reload, sb_log_error, sb_rule_need, sb_sync_assets, write_sb_config
 from .sysopt import svc_restart
-from .notify import core_alive, set_manual_stop
+from .notify import WD, core_alive
 
 
 _CONN_SNAP = {}
@@ -35,39 +36,97 @@ def conns_snapshot(timeout=5, ttl=2):
 
 
 def reload_core(prev=None):
-    """写配置 → mihomo -t 校验 → 热重载；校验失败时回滚 data.json"""
+    """写配置 → mihomo -t / sing-box check 校验 → 热重载。
+
+    prev（修改前的 data.json）给出时，任何一步失败都回滚到它：校验失败、生成配置抛异常（如残缺的规则集）、
+    mihomo 热重载被拒、sing-box 重载后起不来。坏数据不会留在 data.json 里让 /api/state 一直 500"""
+    try:
+        return _reload_core(prev)
+    except Exception as e:
+        log_err("重载核心配置", e, tb=True)  # 临时配置文件已由 _reload_core 清理
+        if prev is None:
+            return False, "生成配置失败：" + str(e)[:300]
+        _rollback(prev)
+        return False, "生成配置失败，已撤销本次修改：" + str(e)[:300]
+
+
+def _rollback(prev, sb=None):
+    """data.json 恢复为 prev，并按它重写当前内核的配置文件；返回 (内核是否 sing-box, 配置路径)"""
     with LOCK:
+        save(prev)
         d = load()
-        sb = active_core(d) == "singbox"
-        if sb:
-            final = SB_CONF
-            try:  # 广告 / 白名单列表改动后，先把对应的 sing-box 规则集文件转换好，否则这些规则会被跳过
-                need = {k: v for k, v in sb_rule_need(d).items() if v.get("kind") == "adblock"}
-                if need:
-                    sb_sync_assets(d, need=need)
-            except Exception as e:
-                print("sb adblock sync", e, flush=True)
-            tmp = write_sb_config(d, final + ".new")
-            ok, err = check_sb_config(tmp)
-        else:
-            final = os.path.join(CONF_DIR, "config.yaml")
-            tmp = write_config(d, final + ".new")
-            ok, err = check_config(tmp)
-        if not ok:
-            os.remove(tmp)
-            if prev is not None:
-                save(prev)
-            return False, "配置校验失败，已撤销本次修改：" + err
-        os.replace(tmp, final)
-    set_manual_stop(False)
+        if sb is None:
+            sb = active_core(d) == "singbox"
+        final = SB_CONF if sb else os.path.join(CONF_DIR, "config.yaml")
+        try:
+            (write_sb_config if sb else write_config)(d, final)
+        except Exception as e:  # 旧数据本身也生成不了：保留磁盘上原来的配置文件
+            log_err("回滚后重写配置", e)
+    return sb, final
+
+
+_TMP_SEQ = itertools.count(1)
+RELOAD_TRIES = 3  # 校验期间配置又被改了：重新生成再校验，最后一次在锁内校验（退回旧做法，保证能结束）
+
+
+def _gen_config(d, sb, tmp):
+    """生成待校验的配置到临时文件 tmp"""
+    if sb:
+        try:  # 广告 / 白名单列表改动后，先把对应的 sing-box 规则集文件转换好，否则这些规则会被跳过
+            need = {k: v for k, v in sb_rule_need(d).items() if v.get("kind") == "adblock"}
+            if need:
+                sb_sync_assets(d, need=need)
+        except Exception as e:
+            print("sb adblock sync", e, flush=True)
+        return write_sb_config(d, tmp)
+    return write_config(d, tmp)
+
+
+def _reload_core(prev):
+    """mihomo -t / sing-box check 最长 90 秒：以前整段持有全局 LOCK，期间所有 update()（设备备注、定时任务设置等）都被卡住。
+    现在锁内只生成配置并记下 config_version，校验在锁外做；校验完再拿锁，版本没变才替换正式配置，变了就按最新数据重来"""
+    tmp = None
+    try:
+        for i in range(RELOAD_TRIES):
+            last = i == RELOAD_TRIES - 1
+            with LOCK:
+                d = load()
+                ver = config_version()
+                sb = active_core(d) == "singbox"
+                final = SB_CONF if sb else os.path.join(CONF_DIR, "config.yaml")
+                tmp = f"{final}.new{next(_TMP_SEQ)}"  # 唯一临时文件：并发重载各用各的，不互相覆盖
+                _gen_config(d, sb, tmp)
+                check = check_sb_config if sb else check_config
+                if last:
+                    ok, err = check(tmp)
+            if not last:
+                ok, err = check(tmp)  # 锁外校验
+            with LOCK:
+                if not ok:
+                    if prev is not None:
+                        save(prev)
+                    return False, "配置校验失败，已撤销本次修改：" + err
+                if config_version() != ver and not last:
+                    os.remove(tmp)  # 校验期间 data.json 被改过：这份配置已过时，丢掉重来
+                    tmp = None
+                    continue
+                os.replace(tmp, final)
+                tmp = None
+                break
+    finally:
+        if tmp:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+    if WD["manual_stop"]:  # 用户手动停止了核心：只写配置，不替用户把核心拉起来（与 refresh_regions 一致）
+        return True, "配置已保存；核心已手动停止，下次启动时生效"
     retest_soon()
     if sb:
         ok, msg = sb_hot_reload()
         if not ok and prev is not None:  # 配置能通过 sing-box check 但运行时启动失败（如内核缺少模块）：撤销并恢复
             tail = sb_log_error()
-            with LOCK:
-                save(prev)
-                write_sb_config(load(), SB_CONF)
+            _rollback(prev, sb=True)
             svc_restart(timeout=90)
             return False, "sing-box 启动失败，已撤销本次修改" + ("：" + tail if tail else "")
         return ok, msg
@@ -76,7 +135,15 @@ def reload_core(prev=None):
     if code == 502:  # 核心没在跑，尝试启动
         svc_restart()
         return True, "已写入配置并重启 mihomo"
-    return code < 300, body.decode(errors="ignore") or "配置已重载"
+    text = body.decode(errors="ignore") if isinstance(body, (bytes, bytearray)) else str(body or "")
+    if code >= 300:
+        if prev is None:
+            return False, text or f"mihomo 重载失败（{code}）"
+        # 核心拒绝了新配置、还在跑旧配置：data.json 和 config.yaml 也退回去，界面与实际生效的配置保持一致
+        _, final = _rollback(prev, sb=False)
+        core("PUT", "/configs?force=true", {"path": final}, timeout=30)
+        return False, "mihomo 重载失败，已撤销本次修改：" + (text[:300] or str(code))
+    return True, text or "配置已重载"
 
 
 def group_sig(cfg):

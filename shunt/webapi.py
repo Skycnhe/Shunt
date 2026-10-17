@@ -9,11 +9,11 @@ from . import adblock, stats
 from .base import (
     AB_DIR, AB_PRESETS, BUILTIN_POLICIES, CERT, DEFAULT_EXCLUDE, DNS_DEFAULT, DNS_LISTS, GROUP_TYPES, G_MANUAL, G_SEL, HC, KEY,
     LB_STRATEGIES, LOCK, MAX_BODY, MIHOMO_BIN, MIHOMO_LOG, PANEL_VERSION, PRIMARY_REGIONS, PROXY_MODES, REGIONS, SMART_BIN, SVC, TPROXY_SH,
-    TUN_STACKS, wd_hold
+    TUN_STACKS, upd_begin, upd_busy_msg, wd_hold
 )
 from .data import HISTORY_FILE, HISTORY_SKIP, auto_name, config_version, lb_names, load, migrate_names, read_json, region_lb_set, save, update
 from .links import add_links, q1, reserved_names
-from .groups import all_node_names, clean_custom_group, gcfg, region_plan, rx
+from .groups import all_node_names, clean_custom_group, gcfg, provider_nodes, provider_rev, region_plan, rx
 from .mihomo import bad_rule_policies, build_config, dns_cfg, safe_dev, validate_dns
 from .core import conns_snapshot, refresh_after_sub, refresh_regions, reload_core
 from .corehttp import core, core_json
@@ -43,6 +43,7 @@ from .dnsleak import antileak_dns, dns_route, leak_check
 from .https import gen_cert, restart_self
 from .access import acl_cfg, host_name, host_ok, ip_is_lan
 from .update_guard import group_meta, rename_policy
+from .validate import clean_fields
 from .static import MANIFEST, STATIC_TYPES, static_file
 ROUTES = {}  # (方法, 路径) → H 的处理函数；api() 先处理前缀 / 条件路由，再查这张表
 
@@ -53,6 +54,14 @@ _SVC_CACHE = {}  # {"v": (t, st, code, version)}：rc-service 状态 + 核心 /v
 _SVC_LOCK = threading.Lock()  # 启动 / 停止 / 重启同一时间只允许一个
 SVC_JOB = {"busy": False, "act": "", "ok": None, "message": "", "t": 0}  # 最近一次启停操作，GET /api/service 返回给前端轮询
 SVC_NAMES = {"start": "启动", "stop": "停止", "restart": "重启"}
+
+
+def tp_apply():
+    """按当前代理方式重载 nftables 规则。核心被手动停止时不挂规则：否则局域网流量会被导向不存在的核心端口
+    （init.d 的 start_post 会在下次启动核心时自动加载）"""
+    if WD["manual_stop"]:
+        return 0, ""
+    return sh(TPROXY_SH + " apply")
 
 
 def _svc_do(act):
@@ -120,7 +129,7 @@ def _svc_job(act):
         _SVC_CACHE.pop("v", None)  # 状态缓存作废，前端马上拿到真实运行状态
     SVC_JOB.update(busy=False, ok=ok, message=msg, t=time.time())
     _SVC_LOCK.release()
-_GRP_CACHE = {}  # {"v": (cfgver, groups, gmeta)}：策略组名单按配置版本缓存，避免每次完整 build_config
+_GRP_CACHE = {}  # {"v": ((配置版本, 订阅节点名单版本), groups, gmeta)}：避免每次 /api/state 完整 build_config
 
 
 def _svc_status():
@@ -155,6 +164,38 @@ def _mask_val(v):
     """敏感值掩盖中间：长值露头 3 + 尾 2，短值全打码"""
     s = str(v)
     return f"{s[:3]}******{s[-2:]}" if len(s) > 6 else "******"
+
+
+def mask_secret(v):
+    """/api/state 里的 TG token：空值保持空（前端据此显示「未配置」），非空打码"""
+    return _mask_val(v) if isinstance(v, str) and v else (v or "")
+
+
+def mask_url(u):
+    """订阅 URL 打码：保留协议和主机（去掉 user:pass@），路径与查询串（通常带 token）打码"""
+    if not isinstance(u, str) or not u:
+        return u or ""
+    try:
+        sp = urlparse(u)
+    except ValueError:
+        return _mask_val(u)
+    head = f"{sp.scheme}://{sp.netloc}"
+    if not sp.scheme or not sp.netloc or not u.startswith(head):
+        return _mask_val(u)
+    rest = u[len(head):]
+    host = f"{sp.scheme}://{sp.netloc.rpartition('@')[2]}"
+    return host + ("/" + _mask_val(rest.lstrip("/")) if rest.strip("/") else rest)
+
+
+def unmask(new, cur, masker):
+    """前端把打码后的占位值原样提交回来 = 没改：换回服务端保存的原值"""
+    if isinstance(new, str) and isinstance(cur, str) and cur and new.strip() == masker(cur):
+        return cur
+    return new
+
+
+def state_subs(subs):
+    return [dict(s, url=mask_url(s.get("url"))) if isinstance(s, dict) else s for s in subs or []]
 
 
 def _mask_cfg(o):
@@ -242,8 +283,79 @@ def ad_today():
     return adblock.AD_STATS.today() if adblock.AD_STATS else 0
 
 
+def state_groups(d):
+    """/api/state 的策略组名单与元数据。按（配置版本, 订阅节点名单版本）缓存：订阅下载完成、节点增删后地区组会变，
+    只按配置版本缓存会让「目标策略」下拉框一直缺新地区组。生成失败时返回空名单（记日志），不让整个面板 500"""
+    provider_nodes()  # 先刷新订阅节点名单（60 秒内存缓存），名单变化会推进 provider_rev()
+    key = (config_version(), provider_rev())
+    gv = _GRP_CACHE.get("v")
+    if gv is not None and gv[0] == key:
+        return gv[1], gv[2]
+    try:
+        cfg = build_config(d)
+        groups = [g["name"] for g in cfg["proxy-groups"]]
+        gmeta = group_meta(d, cfg)
+        if active_core(d) == "singbox":  # 地区负载均衡并入自动优选；负载均衡 / 故障转移按自动测速运行
+            lbs = region_lb_set()
+            groups = [g for g in groups if g not in lbs]
+            for n, mt in list(gmeta.items()):
+                if n in lbs:
+                    gmeta.pop(n)
+                elif mt["type"] in ("load-balance", "fallback"):
+                    mt.update(sb_from=mt["type"], type="url-test")
+    except Exception as e:
+        log_err("/api/state：生成策略组", e, tb=True)
+        return [], {}
+    _GRP_CACHE["v"] = (key, groups, gmeta)
+    return groups, gmeta
+
+
+def state_nodes(d):
+    """手动节点的摘要；残缺的条目跳过，不让整个 /api/state 500"""
+    out = []
+    for n in d.get("nodes") or []:
+        try:
+            px = n["proxy"]
+            out.append({"name": px["name"], "type": px["type"], "server": px["server"], "port": px["port"]})
+        except (KeyError, TypeError):
+            continue
+    return out
+
+
+def probe_data(d):
+    """按生成配置与 /api/state 的方式完整走一遍：会抛异常的数据不让写进 data.json。返回错误提示或 None"""
+    try:
+        cfg = build_config(d)
+        group_meta(d, cfg)
+        dns_cfg(d)
+        for n in d.get("nodes") or []:
+            n["proxy"]["name"], n["proxy"]["type"], n["proxy"]["server"], n["proxy"]["port"]
+        if active_core(d) == "singbox":
+            build_singbox(d)
+    except Exception as e:
+        log_err("保存前检查配置", e)
+        return f"数据格式不正确，未保存：{type(e).__name__}: {e}"[:300]
+    return None
+
+
 class H(BaseHTTPRequestHandler):
-    timeout = 30  # 读请求/TLS 握手的超时：卡住不发数据的连接不再永久占用线程（日志流只写不读，不受影响）
+    # HTTP/1.1 长连接：每秒的 /api/live 等轮询复用同一条 TCP / TLS 连接，不再每次握手。
+    # 约定：每个响应都带准确的 Content-Length（204 / 304 无 body），流式响应发 Connection: close；
+    # 请求体在路由前完整读掉，读不了的（超限、chunked）回应后关闭连接，避免残留字节被当成下一个请求
+    protocol_version = "HTTP/1.1"
+    timeout = 30  # 读请求/TLS 握手的超时：空闲的长连接 30 秒后关闭，卡住不发数据的连接不再永久占用线程（日志流只写不读，不受影响）
+    _want_close = False  # 本次响应后关闭连接（end_headers 时补发 Connection: close）
+    _started = False  # 本次响应的状态行是否已发出
+    _raw = b""  # 本次请求已读入的请求体
+
+    def send_response(self, code, message=None):
+        self._started = True
+        super().send_response(code, message)
+
+    def end_headers(self):
+        if self._want_close and not self.close_connection:
+            self.send_header("Connection", "close")  # send_header 会同时置 close_connection
+        super().end_headers()
 
     def log_message(self, *a):
         pass
@@ -258,6 +370,12 @@ class H(BaseHTTPRequestHandler):
 
     def send(self, code, obj, ctype="application/json"):
         body = obj if isinstance(obj, bytes) else json.dumps(obj, ensure_ascii=False).encode()
+        if code < 200 or code in (204, 304):  # 这些状态码不允许带 body：写了会污染长连接上的下一个响应
+            self.send_response(code)
+            self.send_header("Cache-Control", "no-store")
+            self.sec_headers()
+            self.end_headers()
+            return
         zipped = len(body) > 1400 and ctype in ("application/json", "text/html", "text/plain") and self.gzip_ok()
         if zipped:  # 连接列表、节点列表等较大的 JSON 压缩后通常只有 1/5～1/10
             body = gzip.compress(body, 5)
@@ -298,18 +416,46 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def body(self):
+    def pending_body(self):
+        """请求声明的 body 长度；无法按长度读取（chunked 等）返回 -1，Content-Length 非法返回 -2"""
+        te = (self.headers.get("Transfer-Encoding") or "").strip().lower()
+        if te and te != "identity":
+            return -1
         try:
             n = int(self.headers.get("Content-Length") or 0)
         except ValueError:
-            n = 0
-        if n <= 0:
-            return {}
+            return -2
+        return n if n >= 0 else -2
+
+    def read_body(self):
+        """把请求体完整读掉（长连接上不能留下未读字节）。返回错误响应已发出时为 False"""
+        self._raw = b""
+        n = self.pending_body()
+        if n == 0:
+            return True
+        self._want_close = True  # 下面任何一条错误路径都不再复用这条连接
+        if n == -1:
+            self.send(411, {"message": "不支持分块传输的请求体，请带上 Content-Length"})
+            return False
+        if n == -2:
+            self.send(400, {"message": "Content-Length 无效"})
+            return False
         if n > MAX_BODY:  # 防止超大 body 耗尽路由器内存
-            raise ValueError("请求体过大")
+            self.send(413, {"message": "请求体过大"})
+            return False
         raw = self.rfile.read(n)
+        if len(raw) < n:  # 客户端中途断开
+            self.close_connection = True
+            return False
+        self._raw = raw
+        self._want_close = False
+        return True
+
+    def body(self):
+        if not self._raw:
+            return {}
         try:
-            return json.loads(raw)
+            return json.loads(self._raw)
         except Exception:
             return {}
 
@@ -353,11 +499,16 @@ class H(BaseHTTPRequestHandler):
         return ""
 
     def route(self, m):
+        self._want_close, self._started, self._raw = False, False, b""
         u = urlparse(self.path)
         p = u.path
         why = self.guard(m, p)
         if why:
+            if self.pending_body():  # 被拒绝的请求不读它的 body，回应后直接关闭连接
+                self._want_close = True
             return self.deny(why)
+        if not self.read_body():
+            return
         if m == "GET" and (p in ("/", "/index.html") or p.lstrip("/") in STATIC_TYPES):
             return self.send_static("index.html" if p == "/" else p.lstrip("/"))
         if m == "GET" and p == "/manifest.webmanifest":
@@ -388,6 +539,9 @@ class H(BaseHTTPRequestHandler):
             raise
         except Exception as e:
             log_err(f"{m} {p}", e, tb=True)  # 堆栈只写服务端日志
+            if self._started:  # 响应头已发出一半：无法再回 500，关闭连接让客户端知道响应不完整
+                self.close_connection = True
+                return
             return self.send(500, {"message": "内部错误"})
 
     def logstream(self, level):
@@ -397,6 +551,7 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Accel-Buffering", "no")
+        self._want_close = True  # 事件流没有长度，结束即关闭连接
         self.end_headers()
         q, stop = deque(), {}
         ev = threading.Event()
@@ -463,10 +618,10 @@ class H(BaseHTTPRequestHandler):
         if not ok:
             return self.send(500, {"message": msg})
         WD["tp_off"] = False
-        code, out = sh(TPROXY_SH + " apply")
+        code, out = tp_apply()
         label = {"tproxy": "TProxy", "tun": "TUN", "off": "关闭"}[mode]
         note = ""
-        if mode == "tun":  # mihomo -t 只做语法校验；TUN 网卡创建失败时核心照常运行，需要单独确认
+        if mode == "tun" and not WD["manual_stop"]:  # 核心手动停止时不检查（TUN 网卡要等核心启动才创建）；mihomo -t 只做语法校验；TUN 网卡创建失败时核心照常运行，需要单独确认
             err = tun_runtime_error(safe_dev(load()["tun"].get("device")))
             if active_core() == "singbox" and load()["tun"].get("auto_redirect", True) and not nft_ok():
                 note = "（内核不支持 nftables，auto-redirect 未启用）"
@@ -479,9 +634,11 @@ class H(BaseHTTPRequestHandler):
             if err:  # TUN 起不来时局域网会断网：恢复为原来的代理方式
                 save(prev)
                 reload_core()
-                sh(TPROXY_SH + " apply")
+                tp_apply()
                 return self.send(500, {"message": "TUN 启动失败，已恢复原来的代理方式：" + err +
                                        "。可尝试：关闭 auto-redirect、换用 gvisor 协议栈、确认以 root 运行并已加载 tun 模块（modprobe tun）"})
+        if WD["manual_stop"]:
+            note += "（核心已手动停止，启动后生效）"
         if code != 0:
             return self.send(500, {"message": f"核心已切换为 {label}，但 nftables 规则处理失败：{out[-200:]}"})
         return self.send(200, {"message": f"代理方式：{label}{note}。" + (out.splitlines()[-1] if out else "")})
@@ -566,7 +723,7 @@ class H(BaseHTTPRequestHandler):
         prev = update(fn)
         ok, msg = reload_core(prev)
         if ok and dns_cfg(prev)["block_bypass"] != dc["block_bypass"] and prev.get("proxy_mode") != "off":
-            sh(TPROXY_SH + " apply")  # 重新加载 nftables：是否劫持发往任意服务器的 53 端口
+            tp_apply()  # 重新加载 nftables：是否劫持发往任意服务器的 53 端口
         if ok:
             core("POST", "/cache/dns/flush")
             core("POST", "/cache/fakeip/flush") if dc["mode"] == "fake-ip" else None
@@ -690,7 +847,7 @@ class H(BaseHTTPRequestHandler):
         return self.send(200, {"message": f"已删除 {name}{extra}"})
 
     def api(self, m, p, q):
-        b = self.body() if m in ("POST", "PUT", "PATCH", "DELETE") else {}
+        b = self.body() if m in ("POST", "PUT", "PATCH", "DELETE") else {}  # 请求体已在 route() 里完整读入
         # 透传到 mihomo external-controller
         if p.startswith("/api/core/") and active_core() == "singbox":
             sub = p[len("/api/core"):]
@@ -738,12 +895,17 @@ class H(BaseHTTPRequestHandler):
             if b.get("action") == "rollback":
                 if not sb_version(SB_BIN + ".bak"):
                     return self.send(400, {"message": "没有可回滚的 sing-box 备份"})
-                tmp = SB_BIN + ".swap"
-                shutil.copy2(SB_BIN, tmp)
-                os.replace(SB_BIN + ".bak", SB_BIN)
-                os.replace(tmp, SB_BIN + ".bak")
-                if active_core() == "singbox":
-                    svc_restart(timeout=90)
+                if not upd_begin("core"):
+                    return self.send(409, {"message": upd_busy_msg()})
+                try:
+                    tmp = SB_BIN + ".swap"
+                    shutil.copy2(SB_BIN, tmp)
+                    os.replace(SB_BIN + ".bak", SB_BIN)
+                    os.replace(tmp, SB_BIN + ".bak")
+                    if active_core() == "singbox":
+                        svc_restart(timeout=90)
+                finally:
+                    CORE_UPD["busy"] = False
                 return self.reply(True, f"已回滚到 sing-box {sb_version()}")
             ch = b.get("channel") or "stable"
             ok, msg = core_job_start(sb_update_job, ch, load().get("gh_proxy") or "", bool(b.get("force")))
@@ -758,6 +920,9 @@ class H(BaseHTTPRequestHandler):
             self.send_header("Content-Type", ct)
             self.send_header("Content-Length", str(len(b)))
             self.send_header("Cache-Control", "max-age=86400")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", "default-src 'none'; sandbox")  # 远端内容：即使被当作文档打开也不能执行脚本
+            self.sec_headers()
             self.end_headers()
             return self.wfile.write(b)
         if p == "/api/unlock":
@@ -774,44 +939,31 @@ class H(BaseHTTPRequestHandler):
     def api_state_get(self, m, p, b, q):
         d = load()
         st, code, version = _svc_status()
-        cfgver = config_version()
-        gv = _GRP_CACHE.get("v")
-        if gv is None or gv[0] != cfgver:  # 配置未变时复用策略组名单，不再完整 build_config
-            cfg = build_config(d)
-            groups = [g["name"] for g in cfg["proxy-groups"]]
-            gmeta = group_meta(d, cfg)
-            if active_core(d) == "singbox":  # 地区负载均衡并入自动优选；负载均衡 / 故障转移按自动测速运行
-                lbs = region_lb_set()
-                groups = [g for g in groups if g not in lbs]
-                for n, mt in list(gmeta.items()):
-                    if n in lbs:
-                        gmeta.pop(n)
-                    elif mt["type"] in ("load-balance", "fallback"):
-                        mt.update(sb_from=mt["type"], type="url-test")
-            _GRP_CACHE["v"] = (cfgver, groups, gmeta)
-        else:
-            _, groups, gmeta = gv
-        return self.send(200, {"mode": d["mode"], "subs": d["subs"], "rules": d["rules"],
-                               "running": "started" in st or code == 200, "version": version, "groups": groups,
-                               "nodes": [{"name": n["proxy"]["name"], "type": n["proxy"]["type"],
-                                                            "server": n["proxy"]["server"], "port": n["proxy"]["port"]} for n in d["nodes"]],
-                               "rulesets": d["rulesets"], "bypass": d["bypass"], "tests": d["tests"],
-                               "sub_interval": d["sub_interval"],
-                               "ipv6": d["ipv6"], "https": d["https"],
-                               "watchdog": d["watchdog"], "tg_token": d["tg_token"], "tg_chat": d["tg_chat"],
-                               "default_exclude": DEFAULT_EXCLUDE, "proxy_mode": d["proxy_mode"], "tun": d["tun"],
-                               "log_limit": d["log_limit"], "dns": dns_cfg(d),
-                               "schedule": d["schedule"], "devices": d["devices"], "adblock_on": d["adblock"]["enabled"],
-                               "sched_events": list(SCHED["events"])[:20], "group_meta": gmeta,
-                               "sniffer": d["sniffer"],
-                               "gh_proxy": d["gh_proxy"], "panel_version": PANEL_VERSION, "core": active_core(d),
-                               "wd": {"status": WD["status"], "last_check": WD["last_check"],
-                                      "events": list(WD["events"])[:20]}})
+        groups, gmeta = state_groups(d)
+        out = {"running": "started" in st or code == 200, "version": version, "groups": groups, "group_meta": gmeta,
+               "nodes": state_nodes(d), "default_exclude": DEFAULT_EXCLUDE, "sched_events": list(SCHED["events"])[:20],
+               "panel_version": PANEL_VERSION, "core": active_core(d),
+               "wd": {"status": WD["status"], "last_check": WD["last_check"], "events": list(WD["events"])[:20]}}
+        for k in ("mode", "subs", "rules", "rulesets", "bypass", "tests", "sub_interval", "ipv6", "https", "watchdog", "tg_token",
+                  "tg_chat", "proxy_mode", "tun", "log_limit", "schedule", "devices", "sniffer", "gh_proxy"):
+            out[k] = d.get(k)
+        # 与 /api/config 一致：订阅 URL（常带 token）和 TG token 打码；前端原样提交回来时由 unmask() 换回原值
+        out["subs"] = state_subs(d.get("subs"))
+        out["tg_token"] = mask_secret(d.get("tg_token"))
+        try:
+            out["dns"] = dns_cfg(d)
+        except Exception as e:
+            log_err("/api/state：DNS 设置", e)
+            out["dns"] = copy.deepcopy(DNS_DEFAULT)
+        out["adblock_on"] = bool((d.get("adblock") or {}).get("enabled")) if isinstance(d.get("adblock"), dict) else False
+        return self.send(200, out)
 
     @api_route("/api/ping", "GET")
     def api_ping_get(self, m, p, b, q):
-        """轻量心跳：前端 15 秒轮询，version（data.json 每次 save 自增）变化时才拉全量 /api/state"""
-        return self.send(200, {"ok": True, "core": active_core(), "version": config_version(), "ad_today": ad_today()})
+        """轻量心跳：前端 15 秒轮询，version 变化时才拉全量 /api/state。
+        version = 配置版本（data.json 每次 save 自增）+ 订阅节点名单版本（新订阅下载完、节点增删时地区组会变）"""
+        return self.send(200, {"ok": True, "core": active_core(), "version": f"{config_version()}.{provider_rev()}",
+                               "ad_today": ad_today()})
 
     @api_route("/api/groups", "GET")
     def api_groups_get(self, m, p, b, q):
@@ -1023,6 +1175,9 @@ class H(BaseHTTPRequestHandler):
     @api_route("/api/subs", "POST")
     def api_subs_post(self, m, p, b, q):
         name, url = (b.get("name") or "").strip(), (b.get("url") or "").strip()
+        cur = next((s for s in load()["subs"] if isinstance(s, dict) and s.get("name") == name), None)
+        if cur:  # 编辑订阅时表单里是打码后的 URL：没改就沿用原链接
+            url = unmask(url, cur.get("url"), mask_url)
         if not name or not url.startswith("http"):
             return self.send(400, {"message": "名称或订阅链接无效"})
         flt, exc = (b.get("filter") or "").strip(), (b["exclude"] if "exclude" in b else DEFAULT_EXCLUDE).strip()
@@ -1107,6 +1262,18 @@ class H(BaseHTTPRequestHandler):
                 "metadata": {k: (x.get("metadata") or {}).get(k) for k in keep}} for x in c.get("connections") or []]
         return self.send(200, {"connections": out})
 
+    @api_route("/api/conns/stats", "GET")
+    def api_conns_stats_get(self, m, p, b, q):
+        """概览只要两个数字：连接数和来源设备数，不必把整份连接列表（几十到几百 KB）传给前端"""
+        c = conns_snapshot(timeout=5)
+        if c is None:
+            return self.send(502, {"message": "mihomo 未运行或无法连接"})
+        conns = c.get("connections") or []
+        devs = {(x.get("metadata") or {}).get("sourceIP") for x in conns}
+        devs.discard(None)
+        devs.discard("")
+        return self.send(200, {"count": len(conns), "devices": len(devs)})
+
     @api_route("/api/live", "GET")
     def api_live_get(self, m, p, b, q):
         out = dict(LIVE)
@@ -1157,7 +1324,10 @@ class H(BaseHTTPRequestHandler):
 
     @api_route("/api/adblock/check", "POST")
     def api_adblock_check_post(self, m, p, b, q):
-        return self.send(200, ab_check(b.get("domain") or ""))
+        try:
+            return self.send(200, ab_check(b.get("domain") or ""))
+        except ValueError as e:  # 无效域名：给出原因，不再 500「内部错误」
+            return self.send(400, {"message": str(e)})
 
     @api_route("/api/dns", "PUT")
     def api_dns_put(self, m, p, b, q):
@@ -1186,7 +1356,7 @@ class H(BaseHTTPRequestHandler):
         ab_compose(load())
         ok, msg = reload_core(prev)
         if ok:
-            sh(TPROXY_SH + " apply")
+            tp_apply()
         return self.reply(ok, ("已恢复到 " + time.strftime("%m-%d %H:%M", time.localtime(snap["t"])) + " 的配置") if ok else msg)
 
     @api_route("/api/dnsquery", "POST")
@@ -1214,7 +1384,7 @@ class H(BaseHTTPRequestHandler):
             with stats.STATS.lock:
                 for b2 in stats.STATS.data["days"].values():
                     ips |= set(b2.get("dev", {}))
-        c = core_json("/connections", timeout=5) or {}
+        c = conns_snapshot(timeout=5) or {}  # 与连接页 / 统计共用 2 秒快照，不再单独全量抓取
         ips |= {(x.get("metadata") or {}).get("sourceIP") for x in c.get("connections") or []}
         return self.send(200, {"map": device_map(sorted(i for i in ips if i)), "custom": load()["devices"]})
 
@@ -1295,11 +1465,22 @@ class H(BaseHTTPRequestHandler):
                 return self.send(400, {"message": "GitHub 加速地址格式应为 https://ghfast.top/"})
             if b["gh_proxy"] and not b["gh_proxy"].endswith("/"):
                 b["gh_proxy"] += "/"
+        if "tg_token" in b:  # 打码的 token 原样提交回来 = 没改
+            b["tg_token"] = unmask(b["tg_token"], load().get("tg_token"), mask_secret)
         if "sniffer" in b:
             b["sniffer"] = bool(b["sniffer"])
         if "log_limit" in b and b["log_limit"] not in (1, 2, 5, 10, 20):
             return self.send(400, {"message": "日志上限只能是 1 / 2 / 5 / 10 / 20 MB"})
-        prev = update(lambda d: d.update({k: v for k, v in b.items() if k in allowed}))
+        try:  # 形状校验：残缺的规则集 / 绕过设备 / 延迟站点直接 400，不写进 data.json
+            new = clean_fields(b, allowed)
+        except ValueError as e:
+            return self.send(400, {"message": str(e)})
+        test = load()
+        test.update(new)
+        err = probe_data(test)
+        if err:
+            return self.send(400, {"message": err})
+        prev = update(lambda d: d.update(new))
         d = load()
         msg = "已保存"
         if set(b) & {"rulesets", "sub_interval", "region_groups", "ipv6", "sniffer"} or ("bypass" in b and d["proxy_mode"] == "tun"):
@@ -1307,7 +1488,7 @@ class H(BaseHTTPRequestHandler):
             if not ok:
                 return self.send(500, {"message": msg})
         if set(b) & {"bypass", "ipv6"} and d["proxy_mode"] != "off":
-            sh(TPROXY_SH + " apply")
+            tp_apply()
         if "watchdog" in b and not b["watchdog"]:
             WD["status"] = "off"
         return self.send(200, {"message": msg})
@@ -1327,7 +1508,7 @@ class H(BaseHTTPRequestHandler):
     def api_tg_test_post(self, m, p, b, q):
         d = load()
         if "tg_token" in b:
-            d.update(tg_token=b.get("tg_token", ""), tg_chat=b.get("tg_chat", ""))
+            d.update(tg_token=unmask(b.get("tg_token", ""), d.get("tg_token"), mask_secret), tg_chat=b.get("tg_chat", ""))
         return self.reply(*tg_send("✅ 测试消息：通知已配置成功", d))
 
     @api_route("/api/backup", "GET")
@@ -1390,8 +1571,7 @@ class H(BaseHTTPRequestHandler):
             cfg["enabled"] = bool(b["enabled"])
         if "time" in b:
             t = str(b["time"]).strip()
-            import re
-            if not re.match(r"^\d{2}:\d{2}$", t):
+            if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", t):
                 return self.send(400, {"ok": False, "message": "时间格式应为 HH:MM"})
             cfg["time"] = t
         for k in ("warn_days", "hide_days"):
@@ -1414,16 +1594,30 @@ class H(BaseHTTPRequestHandler):
                 "nodes", "ipv6", "watchdog", "tg_token", "tg_chat", "proxy_mode", "tun", "log_limit", "adblock", "dns",
                 "devices", "schedule", "groups_cfg", "custom_groups", "sniffer", "gh_proxy")
 
+        try:  # 恢复残缺 / 旧格式的备份：任何一项形状不对都整体拒绝，不写进 data.json
+            vals = clean_fields(b, keys)
+        except ValueError as e:
+            return self.send(400, {"message": "备份内容无效：" + str(e)})
+        if not vals:
+            return self.send(400, {"message": "备份内容无效：没有可恢复的设置"})
+
         def apply_backup(d):
-            d.update({k: b[k] for k in keys if k in b})
-            if "proxy_mode" not in b and "tproxy" in b:
-                d["proxy_mode"] = "tproxy" if b["tproxy"] else "off"
+            d.update(copy.deepcopy(vals))
+            if "proxy_mode" not in vals and "tproxy" in vals:
+                d["proxy_mode"] = "tproxy" if vals["tproxy"] else "off"
+            if d.get("proxy_mode") not in PROXY_MODES:
+                d["proxy_mode"] = "tproxy" if d.get("tproxy", True) else "off"
             migrate_names(d)  # 旧版备份里的地区组名自动换成新名称
+        test = load()
+        apply_backup(test)
+        err = probe_data(test)
+        if err:
+            return self.send(400, {"message": "备份内容无效：" + err})
         prev = update(apply_backup)
         ab_compose(load())
         ok, msg = reload_core(prev)
         if ok:
-            sh(TPROXY_SH + " apply")
+            tp_apply()
         return self.reply(ok, ("已恢复，" if ok else "") + msg)
 
     @api_route("/api/logticket", "POST")
