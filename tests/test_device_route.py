@@ -32,9 +32,8 @@ class Base(unittest.TestCase):
         DR._LOGGED.clear()
         self.d = copy.deepcopy(server.load())
         self.d.update(nodes=[copy.deepcopy(NODE)], rules=["DOMAIN-SUFFIX,example.com,DIRECT"], device_routes=[])
-        self.arp, self.leases, self.n6 = {}, {}, {}
+        self.arp, self.n6 = {}, {}
         ps = [mock.patch.object(DR, "arp_table", lambda: dict(self.arp)),
-              mock.patch.object(DR, "read_leases", lambda: dict(self.leases)),
               mock.patch.object(DR, "neigh6", lambda: dict(self.n6))]
         for p in ps:
             p.start()
@@ -104,11 +103,10 @@ class MihomoTest(Base):
 
 
 class MacResolveTest(Base):
-    def test_arp_and_leases(self):
+    def test_arp_only(self):
         self.arp.update({"192.168.1.20": MAC, "192.168.1.21": "11:22:33:44:55:66"})
-        self.leases.update({"192.168.1.30": (MAC, "phone"), "192.168.1.21": (MAC, "old")})  # .21 已被别的设备占用
         rules = self.rules(device_routes=[entry(mac="AA-BB-CC-DD-EE-01", target="REJECT")])
-        self.assertEqual(self.dev_rules(rules), ["SRC-IP-CIDR,192.168.1.20/32,REJECT", "SRC-IP-CIDR,192.168.1.30/32,REJECT"])
+        self.assertEqual(self.dev_rules(rules), ["SRC-IP-CIDR,192.168.1.20/32,REJECT"])
 
     def test_ipv6_neighbors_only_when_ipv6_on(self):
         self.arp.update({"192.168.1.20": MAC})

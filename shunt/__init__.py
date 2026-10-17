@@ -4,7 +4,7 @@
 模块之间直接 from-import，依赖无环（tools/build.py 生成前可用文末的 SCC 脚本验证）。
 例外是末尾的 _link()：core.reload_core() 需要 latency.retest_soon()，
 而 latency 的定时器又需要 core.refresh_regions()，真互递归，只能延迟绑定这一个名字；
-devroute（排在 mihomo 前）解析 MAC 要用 stats.arp_table / devices.read_leases，同样延迟绑定。
+devroute（排在 mihomo 前）解析 MAC 要用 stats.arp_table，同样延迟绑定。
 """
 import importlib
 import os

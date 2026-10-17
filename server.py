@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "10.2.0"
+PANEL_VERSION = "10.2.1"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -14,7 +14,7 @@ _SRC['shunt'] = '''"""Shunt 分流面板后端。
 模块之间直接 from-import，依赖无环（tools/build.py 生成前可用文末的 SCC 脚本验证）。
 例外是末尾的 _link()：core.reload_core() 需要 latency.retest_soon()，
 而 latency 的定时器又需要 core.refresh_regions()，真互递归，只能延迟绑定这一个名字；
-devroute（排在 mihomo 前）解析 MAC 要用 stats.arp_table / devices.read_leases，同样延迟绑定。
+devroute（排在 mihomo 前）解析 MAC 要用 stats.arp_table，同样延迟绑定。
 """
 import importlib
 import os
@@ -300,7 +300,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "10.2.0"
+PANEL_VERSION = "10.2.1"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -1276,7 +1276,7 @@ _SRC['shunt.devroute'] = '''"""按设备分流：把指定设备（IP / 网段 /
 
 data.json 的 device_routes：[{name, ip, mac, target, enabled}]，ip 与 mac 二选一。
 生成配置时转换成排在规则前部的 SRC-IP-CIDR 规则（sing-box 由 sb_config 按同一份 mihomo 规则翻译成 source_ip_cidr）；
-MAC 在生成时按 ARP 表 / DHCP 租约（开启 IPv6 时再加 IPv6 邻居表）解析成当前 IP。
+MAC 在生成时按 ARP 表（开启 IPv6 时再加 IPv6 邻居表）解析成当前 IP：设备以旁路由为网关就一定在 ARP 表里，不读 DHCP 租约。
 设备换了 IP 时，定时任务循环（schedule.sched_loop，每分钟）发现解析结果与上次写入配置时不同就重载核心。"""
 import ipaddress, json, os, re, subprocess, threading
 
@@ -1360,14 +1360,10 @@ def neigh6():
 
 
 def _tables(d):
-    """(ARP {ip: mac}, DHCP 租约 {ip: (mac, 名称)}, IPv6 邻居 {ip: mac})"""
-    arp, leases, n6 = {}, {}, {}
+    """(ARP {ip: mac}, IPv6 邻居 {ip: mac})"""
+    arp, n6 = {}, {}
     try:
         arp = arp_table()
-    except Exception:
-        pass
-    try:
-        leases = read_leases()
     except Exception:
         pass
     if d.get("ipv6"):
@@ -1375,15 +1371,12 @@ def _tables(d):
             n6 = neigh6()
         except Exception:
             pass
-    return arp, leases, n6
+    return arp, n6
 
 
-def resolve_mac(mac, arp, leases, n6):
-    """MAC 的当前 IP：ARP 表 + DHCP 租约（租约里的 IP 已在 ARP 表中属于别的设备时不算）+ IPv6 邻居表"""
+def resolve_mac(mac, arp, n6):
+    """MAC 的当前 IP：ARP 表 + IPv6 邻居表"""
     ips = [ip for ip, m in arp.items() if str(m).lower() == mac]
-    for ip, v in leases.items():
-        if str(v[0]).lower() == mac and ip not in ips and str(arp.get(ip, mac)).lower() == mac:
-            ips.append(ip)
     ips += [ip for ip, m in n6.items() if str(m).lower() == mac and ip not in ips]
     return sorted(ips, key=lambda x: (":" in x, x))
 
@@ -1393,11 +1386,11 @@ def mac_mapping(d, tables=None):
     macs = [e["mac"] for e in _entries(d) if e["mac"]]
     if not macs:
         return {}
-    arp, leases, n6 = tables or _tables(d)
+    arp, n6 = tables or _tables(d)
     owner = {ip: str(m).lower() for ip, m in list(arp.items()) + list(n6.items())}
     out = {}
     for mac in macs:
-        ips = resolve_mac(mac, arp, leases, n6)
+        ips = resolve_mac(mac, arp, n6)
         with _LOCK:
             if ips:
                 SEEN[mac] = ips
@@ -1497,9 +1490,8 @@ def mac_changed(d):
 
 
 def _link():
-    global arp_table, read_leases
+    global arp_table
     from .stats import arp_table
-    from .devices import read_leases
 '''
 _SRC['shunt.mihomo'] = '''"""生成配置"""
 import ipaddress, json, os, re
