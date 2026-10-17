@@ -109,6 +109,8 @@ def sb_dns(d, cfg, policies, rs, alias, v6):
         servers.append({"type": "hosts", "tag": "dns-hosts", "predefined": exact})
         rules.append({"domain": sorted(exact), "action": "route", "server": "dns-hosts"})
     cn_cond = {"rule_set": [rs.use_geo("geosite", "cn"), rs.use_geo("geosite", "private")]}
+    if "cn-apps" in rs.rule_sets:  # 内置国内 App 名单与 geosite:cn 一样走直连 DNS
+        cn_cond["rule_set"].insert(0, "cn-apps")
     if dc["mode"] == "fake-ip":
         # v7.5.9 曾把范围从 198.18.0.0/15 缩小到 /16，导致老版本分配的 198.19.x.x 映射变孤儿
         # （sing-box 不认识 → missing fakeip record）。/15 是 /16 的超集，含 198.18.x 和 198.19.x
