@@ -3,14 +3,17 @@ import http.client, json, os, re, ssl, subprocess, threading, time, urllib.reque
 from collections import deque
 from urllib.parse import urlsplit
 
-from .base import MIHOMO_BIN, MIXED, PANEL_DIR, SMART_BIN, SVC, TESTS, UA, SafeRedirectHandler, dl_check, wd_hold
+from .base import CORE_SVC, MIHOMO_BIN, MIXED, PANEL_DIR, SMART_BIN, SVC, TESTS, UA, SafeRedirectHandler, dl_check, wd_hold
 from .data import load, update
 PROC_SYS = os.environ.get("PANEL_PROC_SYS", "/proc/sys")
 SYS_ROOT = os.environ.get("PANEL_SYS_ROOT", "/sys")
 ETC = os.environ.get("PANEL_ETC", "/etc")
 OPT_SYSCTL = os.path.join(ETC, "sysctl.d", "98-shunt-optimize.conf")
 OPT_LOCALD = os.path.join(ETC, "local.d", "shunt-optimize.start")
-OPT_CONFD = os.path.join(ETC, "conf.d", "mihomo")
+# OpenRC 只读 /etc/conf.d/<服务名>：v7.7.6 核心服务改名 shunt-core 后，旧的 conf.d/mihomo 不再生效，
+# 「系统优化 → 文件句柄」写的 rc_ulimit 对核心失效，sing-box 停在默认 1024 个句柄，连接一多控制接口就卡死
+OPT_CONFD = os.path.join(ETC, "conf.d", CORE_SVC)
+OPT_CONFD_OLD = os.path.join(ETC, "conf.d", "mihomo")
 OPT_LOCK = threading.Lock()
 
 
@@ -232,6 +235,18 @@ def opt_status():
             "why": "" if it["ok"] else it.get("why", ""), "enabled": it["id"] in on, "active": live, "show": show,
             "part": it.get("part", "") if it["ok"] else ""})
     return {"items": out, "mem": mem_mb(), "cpu": os.cpu_count() or 1, "kernel": os.uname().release, "container": in_container()}
+
+
+def opt_migrate_confd():
+    """服务改名后把旧 conf.d/mihomo 里的 rc_ulimit 搬到 conf.d/shunt-core（已迁移的设备每次面板启动时补一次）"""
+    if OPT_CONFD == OPT_CONFD_OLD:
+        return False
+    old, cur = rfile(OPT_CONFD_OLD), rfile(OPT_CONFD)
+    m = re.search(r'^rc_ulimit="[^"\n]*"', old, re.M)
+    if not m or re.search(r"^rc_ulimit=", cur, re.M):
+        return False
+    wfile(OPT_CONFD, (cur + ("" if not cur or cur.endswith("\n") else "\n")) + m.group(0) + "\n")
+    return True
 
 
 def opt_fix_ulimit():
