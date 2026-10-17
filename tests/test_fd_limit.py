@@ -4,8 +4,10 @@ import tempfile
 import unittest
 from unittest import mock
 
-from tests.helper import server  # noqa: F401  确保离线导入
+from tests.helper import server  # 确保离线导入
 from shunt import notify, sysopt
+
+__all__ = ["server"]
 
 
 class TestConfdMigrate(unittest.TestCase):
