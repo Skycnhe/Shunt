@@ -6,6 +6,7 @@ import ipaddress, re
 
 from .base import DNS_LISTS, G_SEL, PROXY_MODES
 from .groups import NAME_BAD, clean_custom_group
+from .devroute import clean_device_routes
 
 RS_BEHAVIORS = ("domain", "ipcidr", "classical")
 RS_FORMATS = ("yaml", "text", "mrs")
@@ -238,6 +239,7 @@ def _dns(v):
 CLEANERS = {
     "rulesets": clean_rulesets, "bypass": clean_bypass, "tests": clean_tests, "rules": clean_rules, "subs": clean_subs,
     "nodes": clean_nodes, "custom_groups": clean_custom_groups, "adblock": clean_adblock, "devices": clean_devices,
+    "device_routes": clean_device_routes,
     "schedule": clean_schedule, "dns": _dns, "tun": _dict("TUN 设置"), "groups_cfg": _dict("地区分组设置"),
     "sub_interval": _int("订阅更新间隔", 0, 10**8), "log_limit": _int("日志上限", 1, 100),
     "region_groups": _bool, "ipv6": _bool, "watchdog": _bool, "sniffer": _bool, "tproxy": _bool,

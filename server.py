@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "10.1.3"
+PANEL_VERSION = "10.2.0"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -12,8 +12,9 @@ _SRC['shunt'] = '''"""Shunt 分流面板后端。
 
 设备上运行的是仓库根目录的 server.py：它由 tools/build.py 生成，内嵌了本目录全部模块的源码，所以部署时仍然只有一个文件。
 模块之间直接 from-import，依赖无环（tools/build.py 生成前可用文末的 SCC 脚本验证）。
-唯一的例外是 core.py 末尾的 _link()：core.reload_core() 需要 latency.retest_soon()，
-而 latency 的定时器又需要 core.refresh_regions()，真互递归，只能延迟绑定这一个名字。
+例外是末尾的 _link()：core.reload_core() 需要 latency.retest_soon()，
+而 latency 的定时器又需要 core.refresh_regions()，真互递归，只能延迟绑定这一个名字；
+devroute（排在 mihomo 前）解析 MAC 要用 stats.arp_table / devices.read_leases，同样延迟绑定。
 """
 import importlib
 import os
@@ -26,6 +27,7 @@ MODULES = [
     "links",
     "ruleutil",
     "groups",
+    "devroute",
     "mihomo",
     "validate",
     "core",
@@ -279,7 +281,7 @@ DEFAULT = {"secret": "", "mode": "rule", "tproxy": True, "subs": [], "rules": []
            "rulesets": [], "bypass": [], "tests": None, "sub_interval": 86400, "region_groups": True,
            "nodes": [], "ipv6": False, "https": False, "allow_public": False, "allow_hosts": [], "watchdog": True, "tg_token": "", "tg_chat": "",
            "proxy_mode": "", "tun": TUN_DEFAULT, "log_limit": 5, "adblock": AB_DEFAULT, "dns": DNS_DEFAULT,
-           "devices": {}, "schedule": SCHED_DEFAULT, "groups_cfg": GROUPS_DEFAULT, "custom_groups": [], "sniffer": True,
+           "devices": {}, "device_routes": [], "schedule": SCHED_DEFAULT, "groups_cfg": GROUPS_DEFAULT, "custom_groups": [], "sniffer": True,
            "gh_proxy": "", "core": "mihomo", "schema": 0, "sysopt": [], "sysopt_orig": {}, "sysopt_mods": []}
 TESTS = [
     {"name": "Google", "url": "https://www.google.com/generate_204"},
@@ -298,7 +300,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "10.1.3"
+PANEL_VERSION = "10.2.0"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -614,6 +616,10 @@ def map_refs(d, mp, drop=()):
         if r.get("target") in mp:
             r["target"] = mp[r["target"]]
             n += 1
+    for e in d.get("device_routes") or []:
+        if isinstance(e, dict) and e.get("target") in mp:
+            e["target"] = mp[e["target"]]
+            n += 1
     for g in d.get("custom_groups") or []:
         old = list(g.get("proxies") or [])
         new = []
@@ -692,7 +698,7 @@ HISTORY_SKIP = {"tests_rev", "core", "secret", "devices", "https", "schema", "sy
 KEY_LABEL = {"subs": "订阅", "nodes": "节点", "rules": "自定义规则", "rulesets": "规则集", "dns": "DNS", "adblock": "广告拦截",
              "custom_groups": "自定义策略组", "groups_cfg": "地区分组", "region_groups": "地区分组", "proxy_mode": "代理方式",
              "tun": "TUN", "ipv6": "IPv6", "bypass": "绕过设备", "mode": "代理模式", "sniffer": "域名嗅探", "schedule": "定时任务",
-             "tests": "延迟站点", "sub_interval": "订阅间隔", "tg_token": "Telegram", "tg_chat": "Telegram", "watchdog": "看门狗",
+             "tests": "延迟站点", "device_routes": "按设备分流", "sub_interval": "订阅间隔", "tg_token": "Telegram", "tg_chat": "Telegram", "watchdog": "看门狗",
              "log_limit": "日志上限", "gh_proxy": "GitHub 加速", "tproxy": "代理方式"}
 
 
@@ -1266,6 +1272,235 @@ def clean_custom_group(b):
             g["strategy"] = "consistent-hashing"  # 只支持一致性哈希
     return g
 '''
+_SRC['shunt.devroute'] = '''"""按设备分流：把指定设备（IP / 网段 / MAC）的全部流量交给某个策略组、直连或拦截。
+
+data.json 的 device_routes：[{name, ip, mac, target, enabled}]，ip 与 mac 二选一。
+生成配置时转换成排在规则前部的 SRC-IP-CIDR 规则（sing-box 由 sb_config 按同一份 mihomo 规则翻译成 source_ip_cidr）；
+MAC 在生成时按 ARP 表 / DHCP 租约（开启 IPv6 时再加 IPv6 邻居表）解析成当前 IP。
+设备换了 IP 时，定时任务循环（schedule.sched_loop，每分钟）发现解析结果与上次写入配置时不同就重载核心。"""
+import ipaddress, json, os, re, subprocess, threading
+
+from .base import PANEL_DIR
+from .groups import NAME_BAD
+
+ROUTES_MAX = 500
+MAC_RX = re.compile(r"([0-9a-f]{2}:){5}[0-9a-f]{2}")
+TARGET_DIRECT, TARGET_REJECT = "DIRECT", "REJECT"
+APPLIED_FILE = os.path.join(PANEL_DIR, "devroute_applied.json")
+SEEN = {}  # mac -> 上次解析到的 IP 列表：设备暂时不在 ARP 表里（休眠）时沿用，不让规则时有时无、核心反复重载
+STATE = {"last": None, "applied": None, "loaded": False}  # last：最近一次生成配置时的 MAC 解析结果；applied：写入正式配置时的
+_LOGGED = set()  # 已记过日志的跳过原因（生成配置很频繁，同一原因只记一次）
+_LOCK = threading.Lock()
+
+
+def norm_mac(v):
+    v = str(v or "").strip().lower().replace("-", ":")
+    return v if MAC_RX.fullmatch(v) else ""
+
+
+def norm_ip(v):
+    """IP / 网段 → 规范写法（单个地址不带前缀）；无效返回空串"""
+    try:
+        n = ipaddress.ip_network(str(v or "").strip(), strict=False)
+    except ValueError:
+        return ""
+    return str(n.network_address) if n.prefixlen == n.max_prefixlen else str(n)
+
+
+def clean_device_routes(v):
+    """/api/settings、/api/restore 的形状校验：坏条目抛 ValueError（提示可直接给用户看）"""
+    if not isinstance(v, list):
+        raise ValueError("按设备分流应为列表")
+    if len(v) > ROUTES_MAX:
+        raise ValueError(f"按设备分流最多 {ROUTES_MAX} 条")
+    out, seen = [], set()
+    for i, e in enumerate(v):
+        if not isinstance(e, dict):
+            raise ValueError(f"按设备分流第 {i + 1} 项格式不正确")
+        ip_raw, mac_raw = str(e.get("ip") or "").strip(), str(e.get("mac") or "").strip()
+        if bool(ip_raw) == bool(mac_raw):
+            raise ValueError(f"按设备分流第 {i + 1} 项：IP 和 MAC 填且只填一个")
+        ip, mac = norm_ip(ip_raw) if ip_raw else "", norm_mac(mac_raw) if mac_raw else ""
+        if ip_raw and not ip:
+            raise ValueError(f"按设备分流第 {i + 1} 项的 IP / 网段无效：{ip_raw[:60]}")
+        if mac_raw and not mac:
+            raise ValueError(f"按设备分流第 {i + 1} 项的 MAC 无效：{mac_raw[:60]}")
+        key = ip or mac
+        if key in seen:
+            raise ValueError(f"按设备分流重复：{key}")
+        seen.add(key)
+        name = e.get("name")
+        if name is not None and not isinstance(name, str):
+            raise ValueError(f"按设备分流「{key}」的名称应为文本")
+        target = e.get("target")
+        if not isinstance(target, str) or not target.strip():
+            raise ValueError(f"按设备分流「{key}」没有选择目标")
+        target = target.strip()
+        if NAME_BAD.search(target) or len(target) > 80:
+            raise ValueError(f"按设备分流「{key}」的目标无效：{target[:60]}")
+        out.append({"name": (name or "").strip()[:40] or key, "ip": ip, "mac": mac, "target": target,
+                    "enabled": bool(e.get("enabled", True))})
+    return out
+
+
+def neigh6():
+    """IPv6 邻居表 {ip: mac}（ip -6 neigh）；没有 ip 命令或出错时返回空"""
+    out = {}
+    try:
+        r = subprocess.run(["ip", "-6", "neigh", "show"], capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return out
+    for line in r.stdout.splitlines():
+        p = line.split()
+        if "lladdr" in p and p.index("lladdr") + 1 < len(p) and "FAILED" not in p:
+            ip, mac = p[0], p[p.index("lladdr") + 1].lower()
+            if not ip.lower().startswith("fe80:"):  # 链路本地地址不会出现在转发流量的源地址里
+                out[ip] = mac
+    return out
+
+
+def _tables(d):
+    """(ARP {ip: mac}, DHCP 租约 {ip: (mac, 名称)}, IPv6 邻居 {ip: mac})"""
+    arp, leases, n6 = {}, {}, {}
+    try:
+        arp = arp_table()
+    except Exception:
+        pass
+    try:
+        leases = read_leases()
+    except Exception:
+        pass
+    if d.get("ipv6"):
+        try:
+            n6 = neigh6()
+        except Exception:
+            pass
+    return arp, leases, n6
+
+
+def resolve_mac(mac, arp, leases, n6):
+    """MAC 的当前 IP：ARP 表 + DHCP 租约（租约里的 IP 已在 ARP 表中属于别的设备时不算）+ IPv6 邻居表"""
+    ips = [ip for ip, m in arp.items() if str(m).lower() == mac]
+    for ip, v in leases.items():
+        if str(v[0]).lower() == mac and ip not in ips and str(arp.get(ip, mac)).lower() == mac:
+            ips.append(ip)
+    ips += [ip for ip, m in n6.items() if str(m).lower() == mac and ip not in ips]
+    return sorted(ips, key=lambda x: (":" in x, x))
+
+
+def mac_mapping(d, tables=None):
+    """启用的 MAC 条目 → {mac: [IP]}（找不到时沿用上次见到的、仍未被别的设备占用的 IP）"""
+    macs = [e["mac"] for e in _entries(d) if e["mac"]]
+    if not macs:
+        return {}
+    arp, leases, n6 = tables or _tables(d)
+    owner = {ip: str(m).lower() for ip, m in list(arp.items()) + list(n6.items())}
+    out = {}
+    for mac in macs:
+        ips = resolve_mac(mac, arp, leases, n6)
+        with _LOCK:
+            if ips:
+                SEEN[mac] = ips
+            else:
+                ips = [ip for ip in SEEN.get(mac, []) if owner.get(ip, mac) == mac]
+        out[mac] = ips
+    return out
+
+
+def _entries(d):
+    """data.json 里启用的、形状正确的条目（坏条目忽略，不让生成配置失败）"""
+    out = []
+    for e in d.get("device_routes") or []:
+        if not isinstance(e, dict) or not e.get("enabled", True):
+            continue
+        ip, mac = norm_ip(e.get("ip")) if e.get("ip") else "", norm_mac(e.get("mac"))
+        target = str(e.get("target") or "").strip()
+        if (ip or mac) and target and not NAME_BAD.search(target):
+            out.append({"name": str(e.get("name") or ip or mac), "ip": ip, "mac": mac, "target": target})
+    return out
+
+
+def _log_once(key, msg):
+    if key not in _LOGGED:
+        _LOGGED.add(key)
+        print("[device-route]", msg, flush=True)
+
+
+def device_route_rules(d, policies, tables=None):
+    """按设备分流 → mihomo 规则列表（SRC-IP-CIDR,<ip>/32|/128|网段,<目标>）。
+    目标策略组不存在、MAC 解析不到 IP 的条目跳过（记日志），不会生成无法加载的配置。同一地址只取第一条"""
+    entries = _entries(d)
+    mapping = mac_mapping(d, tables) if any(e["mac"] for e in entries) else {}
+    STATE["last"] = _sig(mapping)
+    rules, used = [], set()
+    for e in entries:
+        tgt = e["target"]
+        if tgt not in policies:
+            _log_once(("tgt", e["name"], tgt), f"「{e['name']}」的目标「{tgt}」不存在，已跳过")
+            continue
+        if e["ip"]:
+            nets = [e["ip"]]
+        else:
+            nets = mapping.get(e["mac"]) or []
+            if not nets:
+                _log_once(("mac", e["mac"]), f"「{e['name']}」（{e['mac']}）当前找不到 IP，暂不生效")
+                continue
+        for x in nets:
+            n = ipaddress.ip_network(x, strict=False)
+            if n in used:
+                continue
+            used.add(n)
+            rules.append(f"SRC-IP-CIDR,{n},{tgt}")
+    return rules
+
+
+def route_targets(d):
+    return [e["target"] for e in _entries(d)]
+
+
+def _sig(mapping):
+    return {m: list(v) for m, v in sorted(mapping.items())}
+
+
+def mark_applied():
+    """写入正式配置后调用：记下这份配置里 MAC → IP 的解析结果（落盘，开机时 --gen 进程写的面板进程也能读到）"""
+    sig = STATE["last"]
+    STATE.update(applied=sig, loaded=True)
+    try:
+        if sig or os.path.isfile(APPLIED_FILE):
+            os.makedirs(os.path.dirname(APPLIED_FILE), exist_ok=True)
+            with open(APPLIED_FILE + ".tmp", "w") as f:
+                json.dump(sig or {}, f)
+            os.replace(APPLIED_FILE + ".tmp", APPLIED_FILE)
+    except OSError:
+        pass
+
+
+def applied_sig():
+    if not STATE["loaded"]:
+        STATE["loaded"] = True
+        try:
+            with open(APPLIED_FILE) as f:
+                v = json.load(f)
+            STATE["applied"] = v if isinstance(v, dict) else None
+        except (OSError, ValueError):
+            STATE["applied"] = None
+    return STATE["applied"]
+
+
+def mac_changed(d):
+    """MAC 条目解析出的 IP 与当前配置里的不同 → 返回新的解析结果 {mac: [IP]}，没变返回 None（定时任务循环据此重载核心）"""
+    if not any(e["mac"] for e in _entries(d)):
+        return None
+    cur = _sig(mac_mapping(d))
+    return cur if cur != (applied_sig() or {}) else None
+
+
+def _link():
+    global arp_table, read_leases
+    from .stats import arp_table
+    from .devices import read_leases
+'''
 _SRC['shunt.mihomo'] = '''"""生成配置"""
 import ipaddress, json, os, re
 
@@ -1275,6 +1510,7 @@ from .base import (
     TUN_DEFAULT, TUN_STACKS
 )
 from .data import LB_KINDS, auto_name, lb_name, region_label, safe
+from .devroute import device_route_rules, mark_applied
 from .groups import clean_custom_group, gcfg, group_opts, region_plan, rx
 from .ruleutil import DOMAIN_RX, adblock_providers, dns_policy_of, rule_policy_index
 from .sb_common import active_core
@@ -1458,7 +1694,11 @@ def mihomo_rules(d, policies, dc):
         guard = [f"AND,(({LAN_IN}),(DST-PORT,853)),REJECT",
                  f"AND,(({LAN_IN}),(DST-PORT,443),(RULE-SET,dns-bypass-ip,no-resolve)),REJECT",
                  f"AND,(({LAN_IN}),(RULE-SET,dns-bypass-domain)),REJECT"]
-    rules = pre + guard + ab_rules + [x for x in custom if x] + rs_rules + [
+    # 按设备分流：排在 TUN 绕过、DNS 防绕过、广告拦截之后，其余规则之前；前面先放局域网直连，
+    # 被分流到代理 / 拦截的设备仍能访问局域网（TUN 模式下局域网流量也会进核心）
+    dev = device_route_rules(d, policies)
+    lan = ["GEOSITE,private,DIRECT", "GEOIP,private,DIRECT,no-resolve"] if dev else []
+    rules = pre + guard + lan + ab_rules + dev + [x for x in custom if x] + rs_rules + [
         "GEOSITE,private,DIRECT", "GEOIP,private,DIRECT,no-resolve",
         f"GEOSITE,category-ai-!cn,{G_AI}", f"GEOSITE,netflix,{G_NF}", f"GEOIP,netflix,{G_NF},no-resolve",
         f"GEOSITE,youtube,{G_YT}", f"GEOSITE,google,{G_GG}", f"GEOIP,google,{G_GG},no-resolve",
@@ -1702,6 +1942,7 @@ def write_config(d, path=None):
     path = path or os.path.join(CONF_DIR, "config.yaml")
     with open(path, "w") as f:  # JSON 是 YAML 的子集，mihomo 可直接读取
         json.dump(build_config(d), f, ensure_ascii=False, indent=2)
+    mark_applied()
     return path
 
 
@@ -1730,6 +1971,7 @@ import ipaddress, re
 
 from .base import DNS_LISTS, G_SEL, PROXY_MODES
 from .groups import NAME_BAD, clean_custom_group
+from .devroute import clean_device_routes
 
 RS_BEHAVIORS = ("domain", "ipcidr", "classical")
 RS_FORMATS = ("yaml", "text", "mrs")
@@ -1962,6 +2204,7 @@ def _dns(v):
 CLEANERS = {
     "rulesets": clean_rulesets, "bypass": clean_bypass, "tests": clean_tests, "rules": clean_rules, "subs": clean_subs,
     "nodes": clean_nodes, "custom_groups": clean_custom_groups, "adblock": clean_adblock, "devices": clean_devices,
+    "device_routes": clean_device_routes,
     "schedule": clean_schedule, "dns": _dns, "tun": _dict("TUN 设置"), "groups_cfg": _dict("地区分组设置"),
     "sub_interval": _int("订阅更新间隔", 0, 10**8), "log_limit": _int("日志上限", 1, 100),
     "region_groups": _bool, "ipv6": _bool, "watchdog": _bool, "sniffer": _bool, "tproxy": _bool,
@@ -3205,6 +3448,7 @@ from .data import auto_name, lb_dropped_names, lb_names, lb_old_name, load, safe
 from .groups import PROV, gcfg, rx
 from .mihomo import BUILTIN_GEO, build_config, build_rule_providers, dns_cfg, policy_parts, tun_params, write_config
 from .corehttp import core_json
+from .devroute import mark_applied
 from .sb_common import CORE_PID, SB_BIN, SB_CONF, SB_DIR, SB_RULE_DIR, SB_STATE, active_core
 from .sb_yaml import yaml_lite
 from .groups import sb_provider_nodes, sb_sub_cache, sb_sub_outbounds
@@ -3624,6 +3868,7 @@ def write_sb_config(d, path=None):
     path = path or SB_CONF
     with open(path, "w") as f:
         json.dump(conf, f, ensure_ascii=False, indent=2)
+    mark_applied()
     return path
 
 
@@ -7318,6 +7563,7 @@ from .notify import WD
 from .latency import bg_fetch, bg_meta, bg_meta_save
 from .adblock import AB_STATE, ab_meta, adblock_update
 from .health import health_cfg, run_check as health_run_check
+from .devroute import mac_changed
 SCHED = {"events": deque(maxlen=30), "done": {}}
 # 每天定点任务的最近执行记录 {任务: {"date": 日期, "at": 当时的设定时刻}}，落盘到 sched_done.json：
 # 面板重启后不会把今天已跑过的任务再跑一遍
@@ -7467,6 +7713,8 @@ def sched_loop():
             if ab.get("enabled") and ab.get("lists") and int(ab.get("interval") or 0):
                 if time.time() - max(AB_STATE["last"], ab_last_update()) >= int(ab["interval"]):
                     due.append("adblock")
+            if n % 3 == 0:  # 每分钟：按设备分流里 MAC 对应的 IP 变了就重新生成配置
+                devroute_tick(d)
             for k in due:
                 if k == "latency":
                     SCHED["done"][k] = time.time()
@@ -7477,6 +7725,22 @@ def sched_loop():
                     sched_event(f"{TASK_NAMES[k]}：{'✓' if ok else '✗'} {msg}")
         except Exception as e:
             print("schedule error", e, flush=True)
+
+
+_DEVROUTE = {"tried": None}  # 上次因 MAC 解析变化而重载时的解析结果：重载失败也不对同一结果反复重试
+
+
+def devroute_tick(d):
+    """按设备分流的 MAC 条目：ARP / DHCP / IPv6 邻居表解析出的 IP 与当前配置不同时重载核心。
+    只读 /proc/net/arp 和租约文件（开 IPv6 时多跑一次 ip -6 neigh），没有 MAC 条目时什么都不做"""
+    if WD["manual_stop"]:
+        return
+    cur = mac_changed(d)
+    if cur is None or cur == _DEVROUTE["tried"]:
+        return
+    _DEVROUTE["tried"] = cur
+    ok, msg = reload_core()
+    sched_event(f"按设备分流：设备 IP 有变化，{'已更新配置' if ok else '更新配置失败 ' + str(msg)[:120]}")
 
 
 def ab_last_update():
@@ -8932,6 +9196,17 @@ def probe_data(d):
     return None
 
 
+def device_route_missing(d):
+    """按设备分流里目标策略组已不存在的条目名（生成配置时会跳过它们）"""
+    try:
+        pol = {g["name"] for g in build_config(d)["proxy-groups"]} | {n["proxy"]["name"] for n in d.get("nodes") or []}
+    except Exception:
+        return []
+    pol |= BUILTIN_POLICIES
+    return [str(e.get("name") or e.get("ip") or e.get("mac")) for e in d.get("device_routes") or []
+            if isinstance(e, dict) and e.get("enabled", True) and e.get("target") not in pol]
+
+
 class H(BaseHTTPRequestHandler):
     # HTTP/1.1 长连接：每秒的 /api/live 等轮询复用同一条 TCP / TLS 连接，不再每次握手。
     # 约定：每个响应都带准确的 Content-Length（204 / 304 无 body），流式响应发 Connection: close；
@@ -9539,7 +9814,7 @@ class H(BaseHTTPRequestHandler):
                "panel_version": PANEL_VERSION, "core": active_core(d),
                "wd": {"status": WD["status"], "last_check": WD["last_check"], "events": list(WD["events"])[:20]}}
         for k in ("mode", "subs", "rules", "rulesets", "bypass", "tests", "sub_interval", "ipv6", "https", "watchdog", "tg_token",
-                  "tg_chat", "proxy_mode", "tun", "log_limit", "schedule", "devices", "sniffer", "gh_proxy"):
+                  "tg_chat", "proxy_mode", "tun", "log_limit", "schedule", "devices", "device_routes", "sniffer", "gh_proxy"):
             out[k] = d.get(k)
         # 与 /api/config 一致：订阅 URL（常带 token）和 TG token 打码；前端原样提交回来时由 unmask() 换回原值
         out["subs"] = state_subs(d.get("subs"))
@@ -10052,7 +10327,7 @@ class H(BaseHTTPRequestHandler):
     @api_route("/api/settings", "PUT")
     def api_settings_put(self, m, p, b, q):
         allowed = {"rulesets", "bypass", "tests", "sub_interval", "region_groups", "ipv6", "watchdog", "tg_token", "tg_chat",
-                   "log_limit", "sniffer", "gh_proxy"}
+                   "log_limit", "sniffer", "gh_proxy", "device_routes"}
         if "gh_proxy" in b:
             b["gh_proxy"] = str(b["gh_proxy"] or "").strip()
             if b["gh_proxy"] and not re.match(r"^https?://[\\w.\\-:]+/?$", b["gh_proxy"]):
@@ -10077,12 +10352,16 @@ class H(BaseHTTPRequestHandler):
         prev = update(lambda d: d.update(new))
         d = load()
         msg = "已保存"
-        if set(b) & {"rulesets", "sub_interval", "region_groups", "ipv6", "sniffer"} or ("bypass" in b and d["proxy_mode"] == "tun"):
+        if set(b) & {"rulesets", "sub_interval", "region_groups", "ipv6", "sniffer", "device_routes"} or ("bypass" in b and d["proxy_mode"] == "tun"):
             ok, msg = reload_core(prev)
             if not ok:
                 return self.send(500, {"message": msg})
         if set(b) & {"bypass", "ipv6"} and d["proxy_mode"] != "off":
             tp_apply()
+        if "device_routes" in b:
+            miss = device_route_missing(d)
+            if miss:
+                msg = (msg or "已保存") + "；以下设备的目标策略组不存在，暂不生效：" + "、".join(miss[:5])
         if "watchdog" in b and not b["watchdog"]:
             WD["status"] = "off"
         return self.send(200, {"message": msg})
@@ -10186,7 +10465,7 @@ class H(BaseHTTPRequestHandler):
     def api_restore_post(self, m, p, b, q):
         keys = ("mode", "tproxy", "subs", "rules", "rulesets", "bypass", "tests", "sub_interval", "region_groups",
                 "nodes", "ipv6", "watchdog", "tg_token", "tg_chat", "proxy_mode", "tun", "log_limit", "adblock", "dns",
-                "devices", "schedule", "groups_cfg", "custom_groups", "sniffer", "gh_proxy")
+                "devices", "device_routes", "schedule", "groups_cfg", "custom_groups", "sniffer", "gh_proxy")
 
         try:  # 恢复残缺 / 旧格式的备份：任何一项形状不对都整体拒绝，不写进 data.json
             vals = clean_fields(b, keys)

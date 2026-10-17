@@ -17,6 +17,7 @@ from .notify import WD
 from .latency import bg_fetch, bg_meta, bg_meta_save
 from .adblock import AB_STATE, ab_meta, adblock_update
 from .health import health_cfg, run_check as health_run_check
+from .devroute import mac_changed
 SCHED = {"events": deque(maxlen=30), "done": {}}
 # 每天定点任务的最近执行记录 {任务: {"date": 日期, "at": 当时的设定时刻}}，落盘到 sched_done.json：
 # 面板重启后不会把今天已跑过的任务再跑一遍
@@ -166,6 +167,8 @@ def sched_loop():
             if ab.get("enabled") and ab.get("lists") and int(ab.get("interval") or 0):
                 if time.time() - max(AB_STATE["last"], ab_last_update()) >= int(ab["interval"]):
                     due.append("adblock")
+            if n % 3 == 0:  # 每分钟：按设备分流里 MAC 对应的 IP 变了就重新生成配置
+                devroute_tick(d)
             for k in due:
                 if k == "latency":
                     SCHED["done"][k] = time.time()
@@ -176,6 +179,22 @@ def sched_loop():
                     sched_event(f"{TASK_NAMES[k]}：{'✓' if ok else '✗'} {msg}")
         except Exception as e:
             print("schedule error", e, flush=True)
+
+
+_DEVROUTE = {"tried": None}  # 上次因 MAC 解析变化而重载时的解析结果：重载失败也不对同一结果反复重试
+
+
+def devroute_tick(d):
+    """按设备分流的 MAC 条目：ARP / DHCP / IPv6 邻居表解析出的 IP 与当前配置不同时重载核心。
+    只读 /proc/net/arp 和租约文件（开 IPv6 时多跑一次 ip -6 neigh），没有 MAC 条目时什么都不做"""
+    if WD["manual_stop"]:
+        return
+    cur = mac_changed(d)
+    if cur is None or cur == _DEVROUTE["tried"]:
+        return
+    _DEVROUTE["tried"] = cur
+    ok, msg = reload_core()
+    sched_event(f"按设备分流：设备 IP 有变化，{'已更新配置' if ok else '更新配置失败 ' + str(msg)[:120]}")
 
 
 def ab_last_update():

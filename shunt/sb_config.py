@@ -7,6 +7,7 @@ from .data import auto_name, lb_dropped_names, lb_names, lb_old_name, load, safe
 from .groups import PROV, gcfg, rx
 from .mihomo import BUILTIN_GEO, build_config, build_rule_providers, dns_cfg, policy_parts, tun_params, write_config
 from .corehttp import core_json
+from .devroute import mark_applied
 from .sb_common import CORE_PID, SB_BIN, SB_CONF, SB_DIR, SB_RULE_DIR, SB_STATE, active_core
 from .sb_yaml import yaml_lite
 from .groups import sb_provider_nodes, sb_sub_cache, sb_sub_outbounds
@@ -426,6 +427,7 @@ def write_sb_config(d, path=None):
     path = path or SB_CONF
     with open(path, "w") as f:
         json.dump(conf, f, ensure_ascii=False, indent=2)
+    mark_applied()
     return path
 
 

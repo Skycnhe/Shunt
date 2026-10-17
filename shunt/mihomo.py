@@ -7,6 +7,7 @@ from .base import (
     TUN_DEFAULT, TUN_STACKS
 )
 from .data import LB_KINDS, auto_name, lb_name, region_label, safe
+from .devroute import device_route_rules, mark_applied
 from .groups import clean_custom_group, gcfg, group_opts, region_plan, rx
 from .ruleutil import DOMAIN_RX, adblock_providers, dns_policy_of, rule_policy_index
 from .sb_common import active_core
@@ -190,7 +191,11 @@ def mihomo_rules(d, policies, dc):
         guard = [f"AND,(({LAN_IN}),(DST-PORT,853)),REJECT",
                  f"AND,(({LAN_IN}),(DST-PORT,443),(RULE-SET,dns-bypass-ip,no-resolve)),REJECT",
                  f"AND,(({LAN_IN}),(RULE-SET,dns-bypass-domain)),REJECT"]
-    rules = pre + guard + ab_rules + [x for x in custom if x] + rs_rules + [
+    # 按设备分流：排在 TUN 绕过、DNS 防绕过、广告拦截之后，其余规则之前；前面先放局域网直连，
+    # 被分流到代理 / 拦截的设备仍能访问局域网（TUN 模式下局域网流量也会进核心）
+    dev = device_route_rules(d, policies)
+    lan = ["GEOSITE,private,DIRECT", "GEOIP,private,DIRECT,no-resolve"] if dev else []
+    rules = pre + guard + lan + ab_rules + dev + [x for x in custom if x] + rs_rules + [
         "GEOSITE,private,DIRECT", "GEOIP,private,DIRECT,no-resolve",
         f"GEOSITE,category-ai-!cn,{G_AI}", f"GEOSITE,netflix,{G_NF}", f"GEOIP,netflix,{G_NF},no-resolve",
         f"GEOSITE,youtube,{G_YT}", f"GEOSITE,google,{G_GG}", f"GEOIP,google,{G_GG},no-resolve",
@@ -434,6 +439,7 @@ def write_config(d, path=None):
     path = path or os.path.join(CONF_DIR, "config.yaml")
     with open(path, "w") as f:  # JSON 是 YAML 的子集，mihomo 可直接读取
         json.dump(build_config(d), f, ensure_ascii=False, indent=2)
+    mark_applied()
     return path
 
 

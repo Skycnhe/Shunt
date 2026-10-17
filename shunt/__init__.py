@@ -2,8 +2,9 @@
 
 设备上运行的是仓库根目录的 server.py：它由 tools/build.py 生成，内嵌了本目录全部模块的源码，所以部署时仍然只有一个文件。
 模块之间直接 from-import，依赖无环（tools/build.py 生成前可用文末的 SCC 脚本验证）。
-唯一的例外是 core.py 末尾的 _link()：core.reload_core() 需要 latency.retest_soon()，
-而 latency 的定时器又需要 core.refresh_regions()，真互递归，只能延迟绑定这一个名字。
+例外是末尾的 _link()：core.reload_core() 需要 latency.retest_soon()，
+而 latency 的定时器又需要 core.refresh_regions()，真互递归，只能延迟绑定这一个名字；
+devroute（排在 mihomo 前）解析 MAC 要用 stats.arp_table / devices.read_leases，同样延迟绑定。
 """
 import importlib
 import os
@@ -16,6 +17,7 @@ MODULES = [
     "links",
     "ruleutil",
     "groups",
+    "devroute",
     "mihomo",
     "validate",
     "core",

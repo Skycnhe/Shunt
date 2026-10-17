@@ -193,6 +193,10 @@ def map_refs(d, mp, drop=()):
         if r.get("target") in mp:
             r["target"] = mp[r["target"]]
             n += 1
+    for e in d.get("device_routes") or []:
+        if isinstance(e, dict) and e.get("target") in mp:
+            e["target"] = mp[e["target"]]
+            n += 1
     for g in d.get("custom_groups") or []:
         old = list(g.get("proxies") or [])
         new = []
@@ -271,7 +275,7 @@ HISTORY_SKIP = {"tests_rev", "core", "secret", "devices", "https", "schema", "sy
 KEY_LABEL = {"subs": "订阅", "nodes": "节点", "rules": "自定义规则", "rulesets": "规则集", "dns": "DNS", "adblock": "广告拦截",
              "custom_groups": "自定义策略组", "groups_cfg": "地区分组", "region_groups": "地区分组", "proxy_mode": "代理方式",
              "tun": "TUN", "ipv6": "IPv6", "bypass": "绕过设备", "mode": "代理模式", "sniffer": "域名嗅探", "schedule": "定时任务",
-             "tests": "延迟站点", "sub_interval": "订阅间隔", "tg_token": "Telegram", "tg_chat": "Telegram", "watchdog": "看门狗",
+             "tests": "延迟站点", "device_routes": "按设备分流", "sub_interval": "订阅间隔", "tg_token": "Telegram", "tg_chat": "Telegram", "watchdog": "看门狗",
              "log_limit": "日志上限", "gh_proxy": "GitHub 加速", "tproxy": "代理方式"}
 
 

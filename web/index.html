@@ -334,6 +334,10 @@
       <div class="mut small" style="margin-bottom:6px">每行一个：<code>IP 或 MAC = 名称</code>。未备注的设备会依次尝试 DHCP 租约、/etc/hosts、反向解析获取名称</div>
       <textarea id="dev-names" rows="4" placeholder="192.168.1.23 = 客厅电视&#10;AA:BB:CC:DD:EE:FF = 书房 NAS"></textarea>
       <div class="row" style="margin-top:8px"><span class="sp"></span><button class="btn" onclick="saveDevNames()">保存</button></div></div>
+    <div data-sg="net" class="card" id="dr-card"><h3>按设备分流</h3>
+      <div class="mut small" style="margin-bottom:8px">把某台设备的全部流量交给指定策略组、直连或拦截，优先于自定义规则和内置分流（仅「规则」模式生效，局域网访问、DNS 防绕过与广告拦截照常）。地址可填 IP、网段或 MAC；MAC 会按 ARP / DHCP 租约换算成当前 IP，设备换 IP 后约 1 分钟内自动更新。也可在「统计 → 按设备」里点 ⇄ 快速添加。</div>
+      <div class="row" style="margin-bottom:10px"><input id="dr-name" placeholder="名称（可留空）" style="width:120px" maxlength="40"><input id="dr-addr" placeholder="IP / 网段 / MAC" class="sp"><select id="dr-target"></select><button class="btn g hide" id="dr-cancel" onclick="drReset()">取消</button><button class="btn" id="dr-add" onclick="drSubmit()">添加</button></div>
+      <div class="tw"><table><thead><tr><th>设备</th><th>地址</th><th>目标</th><th>启用</th><th></th></tr></thead><tbody id="dr-list"></tbody></table></div></div>
     <div data-sg="net" class="card"><h3>订阅与分组</h3><div class="row">
       <span>订阅自动更新间隔</span><select id="sub-int"><option value="3600">1 小时</option><option value="21600">6 小时</option><option value="43200">12 小时</option><option value="86400">24 小时</option><option value="259200">3 天</option></select></div>
       <div class="row mt"><span class="sp mut small">地区分组、负载均衡、自定义策略组在「策略组」页设置</span><button class="btn g" onclick="go('策略组')">策略组</button><button class="btn" onclick="saveGroupOpts()">保存并应用</button></div></div>
@@ -450,6 +454,7 @@
 //@include js/23-traffic.js
 //@include js/24-rulesets.js
 //@include js/25-settings2.js
+//@include js/26-devroute.js
 //@include js/28-backup.js
 </script>
 </body>

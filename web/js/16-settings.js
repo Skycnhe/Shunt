@@ -29,7 +29,7 @@ async function renderSettings(){renderSG();renderLook();await loadState().catch(
   loadSysopt();$('#pv').textContent='当前 v'+(STATE.panel_version||'-');$('#cv').textContent='当前 '+(STATE.version||'-');
   if(!CORE_POLL)api('/api/coreupdate/status').then(j=>{if(j.busy)corePoll()}).catch(()=>{});if(document.activeElement!==$('#gh-proxy'))$('#gh-proxy').value=STATE.gh_proxy||'';
   segv('#log-limit',STATE.log_limit,v=>saveSettings({log_limit:+v},'日志上限已设为 '+v+' MB').then(renderSettings).catch(()=>{}));
-  await loadDevs();$('#dev-names').value=Object.entries(STATE.devices||{}).map(([k,v])=>k+' = '+v).join('\n')}
+  await loadDevs();$('#dev-names').value=Object.entries(STATE.devices||{}).map(([k,v])=>k+' = '+v).join('\n');renderDR()}
 function renderTunForm(){const t=TUNF;segv('#tun-stack',t.stack,v=>{TUNF.stack=v;renderTunForm()});$('#tun-dev').value=t.device||'Meta';
   $('#tun-ar').checked=!!t.auto_redirect;$('#tun-ar').onchange=e=>TUNF.auto_redirect=e.target.checked;
   $('#tun-sr').checked=!!t.strict_route;$('#tun-sr').onchange=e=>TUNF.strict_route=e.target.checked;

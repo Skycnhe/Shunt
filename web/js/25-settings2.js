@@ -1,7 +1,7 @@
 // 设置扩展
 function fillSettings(){$('#bypass').value=(STATE.bypass||[]).join('\n');$('#tests').value=(STATE.tests||[]).map(t=>t.name+'|'+t.url).join('\n');
   $('#sub-int').value=String(STATE.sub_interval||86400);
-  $('#tg-token').value=STATE.tg_token||'';$('#tg-chat').value=STATE.tg_chat||''}
+  $('#tg-token').value=STATE.tg_token||'';$('#tg-chat').value=STATE.tg_chat||'';renderDR()}
 async function saveSettings(o,msg){try{toast('保存中…');const j=await api('/api/settings','PUT',o);toast(msg||j.message);await loadState();fillSettings()}catch(e){toast(e.message);throw e}}
 function saveBypass(){saveSettings({bypass:$('#bypass').value.split('\n').map(s=>s.trim()).filter(Boolean)},'绕过设备已生效').catch(()=>{})}
 function saveTests(){const t=$('#tests').value.split('\n').map(l=>l.split('|')).filter(a=>a.length>=2&&a[1].trim().startsWith('http')).map(a=>({name:a[0].trim(),url:a.slice(1).join('|').trim()}));

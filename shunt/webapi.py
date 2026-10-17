@@ -338,6 +338,17 @@ def probe_data(d):
     return None
 
 
+def device_route_missing(d):
+    """按设备分流里目标策略组已不存在的条目名（生成配置时会跳过它们）"""
+    try:
+        pol = {g["name"] for g in build_config(d)["proxy-groups"]} | {n["proxy"]["name"] for n in d.get("nodes") or []}
+    except Exception:
+        return []
+    pol |= BUILTIN_POLICIES
+    return [str(e.get("name") or e.get("ip") or e.get("mac")) for e in d.get("device_routes") or []
+            if isinstance(e, dict) and e.get("enabled", True) and e.get("target") not in pol]
+
+
 class H(BaseHTTPRequestHandler):
     # HTTP/1.1 长连接：每秒的 /api/live 等轮询复用同一条 TCP / TLS 连接，不再每次握手。
     # 约定：每个响应都带准确的 Content-Length（204 / 304 无 body），流式响应发 Connection: close；
@@ -945,7 +956,7 @@ class H(BaseHTTPRequestHandler):
                "panel_version": PANEL_VERSION, "core": active_core(d),
                "wd": {"status": WD["status"], "last_check": WD["last_check"], "events": list(WD["events"])[:20]}}
         for k in ("mode", "subs", "rules", "rulesets", "bypass", "tests", "sub_interval", "ipv6", "https", "watchdog", "tg_token",
-                  "tg_chat", "proxy_mode", "tun", "log_limit", "schedule", "devices", "sniffer", "gh_proxy"):
+                  "tg_chat", "proxy_mode", "tun", "log_limit", "schedule", "devices", "device_routes", "sniffer", "gh_proxy"):
             out[k] = d.get(k)
         # 与 /api/config 一致：订阅 URL（常带 token）和 TG token 打码；前端原样提交回来时由 unmask() 换回原值
         out["subs"] = state_subs(d.get("subs"))
@@ -1458,7 +1469,7 @@ class H(BaseHTTPRequestHandler):
     @api_route("/api/settings", "PUT")
     def api_settings_put(self, m, p, b, q):
         allowed = {"rulesets", "bypass", "tests", "sub_interval", "region_groups", "ipv6", "watchdog", "tg_token", "tg_chat",
-                   "log_limit", "sniffer", "gh_proxy"}
+                   "log_limit", "sniffer", "gh_proxy", "device_routes"}
         if "gh_proxy" in b:
             b["gh_proxy"] = str(b["gh_proxy"] or "").strip()
             if b["gh_proxy"] and not re.match(r"^https?://[\w.\-:]+/?$", b["gh_proxy"]):
@@ -1483,12 +1494,16 @@ class H(BaseHTTPRequestHandler):
         prev = update(lambda d: d.update(new))
         d = load()
         msg = "已保存"
-        if set(b) & {"rulesets", "sub_interval", "region_groups", "ipv6", "sniffer"} or ("bypass" in b and d["proxy_mode"] == "tun"):
+        if set(b) & {"rulesets", "sub_interval", "region_groups", "ipv6", "sniffer", "device_routes"} or ("bypass" in b and d["proxy_mode"] == "tun"):
             ok, msg = reload_core(prev)
             if not ok:
                 return self.send(500, {"message": msg})
         if set(b) & {"bypass", "ipv6"} and d["proxy_mode"] != "off":
             tp_apply()
+        if "device_routes" in b:
+            miss = device_route_missing(d)
+            if miss:
+                msg = (msg or "已保存") + "；以下设备的目标策略组不存在，暂不生效：" + "、".join(miss[:5])
         if "watchdog" in b and not b["watchdog"]:
             WD["status"] = "off"
         return self.send(200, {"message": msg})
@@ -1592,7 +1607,7 @@ class H(BaseHTTPRequestHandler):
     def api_restore_post(self, m, p, b, q):
         keys = ("mode", "tproxy", "subs", "rules", "rulesets", "bypass", "tests", "sub_interval", "region_groups",
                 "nodes", "ipv6", "watchdog", "tg_token", "tg_chat", "proxy_mode", "tun", "log_limit", "adblock", "dns",
-                "devices", "schedule", "groups_cfg", "custom_groups", "sniffer", "gh_proxy")
+                "devices", "device_routes", "schedule", "groups_cfg", "custom_groups", "sniffer", "gh_proxy")
 
         try:  # 恢复残缺 / 旧格式的备份：任何一项形状不对都整体拒绝，不写进 data.json
             vals = clean_fields(b, keys)

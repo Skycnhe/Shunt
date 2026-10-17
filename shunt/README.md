@@ -11,7 +11,7 @@ python3 tools/build.py --split  # 直接改了 server.py 时，把内嵌源码�
 ## 模块间引用
 
 - 引用**排在前面**的模块：文件开头直接 `from .base import X`
-- 引用**排在后面**的模块：写在文件末尾的 `_link()` 里（`global X` + `from .later import X`），由 `shunt.load()` 在全部模块加载后调用，避免循环导入
+- 引用**排在后面**的模块：写在文件末尾的 `_link()` 里（如 core、devroute）（`global X` + `from .later import X`），由 `shunt.load()` 在全部模块加载后调用，避免循环导入
 - 加载顺序见 `__init__.py` 的 `MODULES`；模块顶层代码只能用到排在前面的模块
 - 运行中需要整体替换的全局对象（如统计实例 `stats.STATS`、`adblock.AD_STATS`）通过模块属性访问，不要 from-import
 - 测试打桩：`server.X = ...` 会同时改掉所有模块里的同名变量（`shunt.setvar`）
@@ -25,6 +25,7 @@ python3 tools/build.py --split  # 直接改了 server.py 时，把内嵌源码�
 | data | 数据读写、迁移、组名 |
 | links | 节点链接解析 |
 | groups | 策略组 |
+| devroute | 按设备分流：设备（IP / 网段 / MAC）→ 策略组 / 直连 / 拦截，MAC 解析成当前 IP，生成 SRC-IP-CIDR 规则 |
 | mihomo | 生成 mihomo 配置、DNS 校验 |
 | validate | /api/settings、/api/restore 的数据形状校验（坏条目 400，不写入） |
 | core | 与内核交互（API、重载） |
