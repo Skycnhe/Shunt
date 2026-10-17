@@ -93,6 +93,22 @@ def core_proc_alive():
         return False
 
 
+def core_fd_usage():
+    """核心进程已用 / 上限文件句柄，如「1021/1024」；读不到返回空串。句柄用尽是控制接口无响应最常见的原因"""
+    try:
+        with open(CORE_PID) as f:
+            pid = int(f.read().strip())
+        used = len(os.listdir(f"/proc/{pid}/fd"))
+        lim = ""
+        with open(f"/proc/{pid}/limits") as f:
+            for line in f:
+                if line.startswith("Max open files"):
+                    lim = line.split()[3]
+        return f"{used}/{lim}" if lim else str(used)
+    except Exception:
+        return ""
+
+
 def core_last_error():
     """核心日志末尾 16KB 里最后一条 FATAL / ERROR / panic，写进看门狗事件，便于事后查原因"""
     for line in reversed(log_tail(MIHOMO_LOG) or []):
@@ -142,6 +158,9 @@ def watchdog_tick():
         WD["status"] = "restarting"
         why = "控制接口无响应（进程仍在）" if core_proc_alive() else "进程已退出"
         err = core_last_error()
+        fd = core_fd_usage() if core_proc_alive() else ""
+        if fd:
+            why += f"，文件句柄 {fd}"
         wd_event(f"{cname} 核心{why}，第 {WD['fails']} 次自动重启" + (f"；日志最后一条错误：{err}" if err else ""),
                  push=WD["fails"] == 1)
         svc_restart(timeout=60, why="看门狗重启核心", cancel=lambda: WD["manual_stop"])
