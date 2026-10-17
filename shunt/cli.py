@@ -9,7 +9,7 @@ from .data import load, update
 from .mihomo import dns_cfg
 from .sb_common import active_core, write_core_file
 from .sb_config import write_active_config
-from .sysopt import opt_fix_ulimit, rfile, sh
+from .sysopt import opt_fix_ulimit, opt_migrate_confd, rfile, sh
 from .latency import monitor_loop
 from .stats import Stats
 from .adblock import AdStats
@@ -139,6 +139,7 @@ def main():
                          (live_loop, ("/memory",)), (log_loop, ()), (sched_loop, ()), (rdns_loop, ()), (startup_migrate, ())):
         threading.Thread(target=target, args=args, daemon=True).start()
     try:
+        opt_migrate_confd()
         opt_fix_ulimit()
     except Exception as e:
         log_err("文件句柄修正", e)
