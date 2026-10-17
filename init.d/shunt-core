@@ -16,6 +16,14 @@ else
   command="/usr/local/bin/mihomo"
   command_args="-d /etc/mihomo"
 fi
+# 文件句柄：conf.d 没设置 rc_ulimit 时按本机硬上限提高（最多 1048576）。默认 1024 在 TUN / TProxy 下连接一多就用完，
+# 核心进程还在但控制接口 accept 失败，看门狗判定「控制接口无响应」反复重启
+if [ -z "$rc_ulimit" ]; then
+  _h=$(ulimit -Hn 2>/dev/null)
+  case "$_h" in ''|unlimited) _h=1048576;; esac
+  [ "$_h" -gt 1048576 ] 2>/dev/null && _h=1048576
+  rc_ulimit="-n $_h"
+fi
 command_background=true
 retry="TERM/15/KILL/5"  # 先给核心 15 秒正常退出：sing-box 只在正常退出时把 Fake-IP 映射写入 cache.db，被直接 kill 会全部丢失
 pidfile="/run/${RC_SVCNAME}.pid"
