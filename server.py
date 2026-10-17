@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "10.2.4"
+PANEL_VERSION = "10.2.5"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -311,7 +311,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "10.2.4"
+PANEL_VERSION = "10.2.5"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -5262,14 +5262,17 @@ import http.client, json, os, re, ssl, subprocess, threading, time, urllib.reque
 from collections import deque
 from urllib.parse import urlsplit
 
-from .base import MIHOMO_BIN, MIXED, PANEL_DIR, SMART_BIN, SVC, TESTS, UA, SafeRedirectHandler, dl_check, wd_hold
+from .base import CORE_SVC, MIHOMO_BIN, MIXED, PANEL_DIR, SMART_BIN, SVC, TESTS, UA, SafeRedirectHandler, dl_check, wd_hold
 from .data import load, update
 PROC_SYS = os.environ.get("PANEL_PROC_SYS", "/proc/sys")
 SYS_ROOT = os.environ.get("PANEL_SYS_ROOT", "/sys")
 ETC = os.environ.get("PANEL_ETC", "/etc")
 OPT_SYSCTL = os.path.join(ETC, "sysctl.d", "98-shunt-optimize.conf")
 OPT_LOCALD = os.path.join(ETC, "local.d", "shunt-optimize.start")
-OPT_CONFD = os.path.join(ETC, "conf.d", "mihomo")
+# OpenRC 只读 /etc/conf.d/<服务名>：v7.7.6 核心服务改名 shunt-core 后，旧的 conf.d/mihomo 不再生效，
+# 「系统优化 → 文件句柄」写的 rc_ulimit 对核心失效，sing-box 停在默认 1024 个句柄，连接一多控制接口就卡死
+OPT_CONFD = os.path.join(ETC, "conf.d", CORE_SVC)
+OPT_CONFD_OLD = os.path.join(ETC, "conf.d", "mihomo")
 OPT_LOCK = threading.Lock()
 
 
@@ -5491,6 +5494,18 @@ def opt_status():
             "why": "" if it["ok"] else it.get("why", ""), "enabled": it["id"] in on, "active": live, "show": show,
             "part": it.get("part", "") if it["ok"] else ""})
     return {"items": out, "mem": mem_mb(), "cpu": os.cpu_count() or 1, "kernel": os.uname().release, "container": in_container()}
+
+
+def opt_migrate_confd():
+    """服务改名后把旧 conf.d/mihomo 里的 rc_ulimit 搬到 conf.d/shunt-core（已迁移的设备每次面板启动时补一次）"""
+    if OPT_CONFD == OPT_CONFD_OLD:
+        return False
+    old, cur = rfile(OPT_CONFD_OLD), rfile(OPT_CONFD)
+    m = re.search(r'^rc_ulimit="[^"\\n]*"', old, re.M)
+    if not m or re.search(r"^rc_ulimit=", cur, re.M):
+        return False
+    wfile(OPT_CONFD, (cur + ("" if not cur or cur.endswith("\\n") else "\\n")) + m.group(0) + "\\n")
+    return True
 
 
 def opt_fix_ulimit():
@@ -6132,6 +6147,22 @@ def core_proc_alive():
         return False
 
 
+def core_fd_usage():
+    """核心进程已用 / 上限文件句柄，如「1021/1024」；读不到返回空串。句柄用尽是控制接口无响应最常见的原因"""
+    try:
+        with open(CORE_PID) as f:
+            pid = int(f.read().strip())
+        used = len(os.listdir(f"/proc/{pid}/fd"))
+        lim = ""
+        with open(f"/proc/{pid}/limits") as f:
+            for line in f:
+                if line.startswith("Max open files"):
+                    lim = line.split()[3]
+        return f"{used}/{lim}" if lim else str(used)
+    except Exception:
+        return ""
+
+
 def core_last_error():
     """核心日志末尾 16KB 里最后一条 FATAL / ERROR / panic，写进看门狗事件，便于事后查原因"""
     for line in reversed(log_tail(MIHOMO_LOG) or []):
@@ -6181,6 +6212,9 @@ def watchdog_tick():
         WD["status"] = "restarting"
         why = "控制接口无响应（进程仍在）" if core_proc_alive() else "进程已退出"
         err = core_last_error()
+        fd = core_fd_usage() if core_proc_alive() else ""
+        if fd:
+            why += f"，文件句柄 {fd}"
         wd_event(f"{cname} 核心{why}，第 {WD['fails']} 次自动重启" + (f"；日志最后一条错误：{err}" if err else ""),
                  push=WD["fails"] == 1)
         svc_restart(timeout=60, why="看门狗重启核心", cancel=lambda: WD["manual_stop"])
@@ -10628,7 +10662,7 @@ from .data import load, update
 from .mihomo import dns_cfg
 from .sb_common import active_core, write_core_file
 from .sb_config import write_active_config
-from .sysopt import opt_fix_ulimit, rfile, sh
+from .sysopt import opt_fix_ulimit, opt_migrate_confd, rfile, sh
 from .latency import monitor_loop
 from .stats import Stats
 from .adblock import AdStats
@@ -10758,6 +10792,7 @@ def main():
                          (live_loop, ("/memory",)), (log_loop, ()), (sched_loop, ()), (rdns_loop, ()), (startup_migrate, ())):
         threading.Thread(target=target, args=args, daemon=True).start()
     try:
+        opt_migrate_confd()
         opt_fix_ulimit()
     except Exception as e:
         log_err("文件句柄修正", e)
