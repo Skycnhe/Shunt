@@ -109,10 +109,14 @@ def sb_install(channel, gh, force=False):
     return nv, True
 
 
+_UNSET = object()
+
+
 def core_switch_job(kind, gh):
     """切换内核：准备程序与数据 → 生成并校验配置 → 写入启动选择 → 重启；失败自动换回原内核"""
     prev = active_core()
     dns_auto_fix = False  # 切到 sing-box 时是否自动开启了「阻止客户端绕过 DNS」
+    bb_prev = _UNSET
     try:
         label = CORES[kind]
         if kind == "singbox":
@@ -121,6 +125,7 @@ def core_switch_job(kind, gh):
                 nv, _ = sb_install("stable", gh)
                 _cu("安装 sing-box", 62, f"已安装 sing-box {nv}")
             d = load()
+            bb_prev = (d.get("dns") or {}).get("block_bypass", _UNSET)  # 回滚时恢复原值（原来没有这一项就删掉）
             if not dns_cfg(d)["block_bypass"]:
                 # sing-box 1.13+ 移除了 sniff_override_destination，设备 DNS 绕过面板时拿到污染 IP 必死；
                 # mihomo 的 sniffer 默认改写目标地址所以不受影响。切到 sing-box 时自动开启防绕过。
@@ -186,7 +191,15 @@ def core_switch_job(kind, gh):
                 break
         else:
             tail = [l for l in sh(f"tail -n 30 '{MIHOMO_LOG}'")[1].splitlines() if re.search(r"FATAL|ERROR|level=(?:error|fatal)", l)]
-            update(lambda x: x.update(core=prev))
+            def _undo(x):
+                x["core"] = prev
+                if dns_auto_fix:  # 切换时自动打开的「阻止客户端绕过 DNS」一并关回去
+                    if bb_prev is _UNSET:
+                        (x.get("dns") or {}).pop("block_bypass", None)
+                    else:
+                        x.setdefault("dns", {})["block_bypass"] = bb_prev
+
+            update(_undo)
             write_core_file(prev)
             svc_restart(timeout=90)
             log = re.sub(r"\x1b\[[0-9;]*m", "", "\n".join(tail[-3:]))[-400:]

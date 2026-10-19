@@ -21,9 +21,10 @@ async function startLive(){stopLive();if(TAB!=='日志'||LOG_SRC!=='live')return
     if(!$('#log-pause').checked)renderLive()}}
 function stopLive(){if(ES){ES.close();ES=null}const s=$('#log-st');if(s)s.textContent=''}
 function clearLive(){LOGS=[];renderLive()}
-let _lr=0;function renderLive(){if(_lr)return;_lr=requestAnimationFrame(()=>{_lr=0;const el=$('#livelog');const kw=$('#log-kw').value.toLowerCase();
+// 高频日志（debug）时合并重绘：最多每 250ms 重建一次（期间到达的行一起显示），最多显示 800 行
+const LIVE_MS=250,LIVE_MAX=800;let _lr=0,_lt=0;function renderLive(){if(_lr)return;_lr=setTimeout(()=>requestAnimationFrame(()=>{_lr=0;_lt=Date.now();const el=$('#livelog');const kw=$('#log-kw').value.toLowerCase();
   const stick=el.scrollTop+el.clientHeight>=el.scrollHeight-30;
-  el.innerHTML=LOGS.filter(x=>!kw||x.p.toLowerCase().includes(kw)).slice(-800).map(x=>`<div><span class="mut">${x.t}</span> <span class="lv ${LVC[x.l]||''}">${esc(x.l)}</span>${esc(x.p)}${x.n?` <span class="mut">（${x.fk?'共 '+x.n+' 条':'已重试 '+x.n+' 次'}，最近 ${x.t2}）</span>`:''}</div>`).join('')||'<span class="mut">等待日志…</span>';
-  if(stick)el.scrollTop=el.scrollHeight})}
+  el.innerHTML=LOGS.filter(x=>!kw||x.p.toLowerCase().includes(kw)).slice(-LIVE_MAX).map(x=>`<div><span class="mut">${x.t}</span> <span class="lv ${LVC[x.l]||''}">${esc(x.l)}</span>${esc(x.p)}${x.n?` <span class="mut">（${x.fk?'共 '+x.n+' 条':'已重试 '+x.n+' 次'}，最近 ${x.t2}）</span>`:''}</div>`).join('')||'<span class="mut">等待日志…</span>';
+  if(stick)el.scrollTop=el.scrollHeight}),Math.max(0,_lt+LIVE_MS-Date.now()))}
 async function loadLogs(){try{const j=await api('/api/logs');const el=$('#logs');el.textContent=j.log||'(空)';el.scrollTop=el.scrollHeight}catch(e){toast(e.message)}}
 

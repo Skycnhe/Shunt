@@ -5,6 +5,7 @@ data.json 里一条坏数据（规则集缺 url、节点缺 proxy、绕过列表
 import ipaddress, re
 
 from .base import DNS_LISTS, G_SEL, PROXY_MODES
+from .data import safe
 from .groups import NAME_BAD, clean_custom_group
 
 RS_BEHAVIORS = ("domain", "ipcidr", "classical")
@@ -103,6 +104,24 @@ def clean_rules(v):
         if x:
             out.append(x)
     return out
+
+
+def rename_sub_clashes(subs):
+    """恢复备份时订阅名只差符号（会共用同一个节点缓存文件）：后出现的自动加 _2、_3… 改名。返回 (新列表, [(原名, 新名)])"""
+    out, renames, keys, names = [], [], set(), {s["name"] for s in subs}
+    for s in subs:
+        name = s["name"]
+        if safe(name) in keys:
+            k = 2
+            while f"{name}_{k}" in names or safe(f"{name}_{k}") in keys:
+                k += 1
+            new = f"{name}_{k}"
+            renames.append((name, new))
+            names.add(new)
+            s = dict(s, name=new)
+        keys.add(safe(s["name"]))
+        out.append(s)
+    return out, renames
 
 
 def clean_subs(v):
