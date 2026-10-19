@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "8.3.11"
+PANEL_VERSION = "8.4.0"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -334,7 +334,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "8.3.11"
+PANEL_VERSION = "8.4.0"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -559,6 +559,21 @@ def normalize(d):
         for k in OLD_PW_KEYS:
             d.pop(k, None)
         dirty = True
+    for s in d.get("subs") or []:  # v8.4.0 订阅的 removed：格式不对的条目去掉（旧版没有这个字段，不补）
+        if isinstance(s, dict) and "removed" in s:
+            v = s["removed"]
+            good = list(dict.fromkeys(x for x in v if isinstance(x, str) and x)) if isinstance(v, list) else []
+            if good != v:
+                s["removed"] = good
+                dirty = True
+    for g in d.get("custom_groups") or []:  # v8.4.0 自定义组勾选的订阅节点 sub_nodes：同上
+        if isinstance(g, dict) and "sub_nodes" in g:
+            v = g["sub_nodes"]
+            good = [{"sub": x["sub"], "name": x["name"]} for x in (v if isinstance(v, list) else [])
+                    if isinstance(x, dict) and isinstance(x.get("sub"), str) and isinstance(x.get("name"), str) and x["sub"] and x["name"]]
+            if good != v:
+                g["sub_nodes"] = good
+                dirty = True
     if not d["secret"]:
         d["secret"] = secrets.token_hex(16)
         dirty = True
@@ -1158,11 +1173,15 @@ def sb_provider_nodes(d):
 
 
 def sb_sub_outbounds(d):
+    """{订阅名: [(去重后的名称, 节点)]}；用户从订阅里删除的节点（removed，按原名精确匹配）在这里跳过，不用重新下载就生效"""
     taken = {n["proxy"]["name"] for n in d.get("nodes", [])} | reserved_names(d)
     out = {}
     for s in d["subs"]:
         lst = []
+        gone = set(sub_removed(s))
         for p in sb_sub_cache(s["name"]).get("nodes") or []:
+            if str(p.get("name") or "") in gone:
+                continue
             base = str(p.get("name") or "").strip() or "node"
             name, k = base, 2
             while name in taken:
@@ -1267,6 +1286,111 @@ def all_node_names(d):
 
 
 NAME_BAD = re.compile(r"[,#\\n\\r\\t\\"]")
+NODE_NAME_MAX = 300  # 订阅节点名长度上限（removed / sub_nodes 校验）
+NODE_LIST_MAX = 5000  # 一个订阅的已删节点 / 一个策略组勾选的订阅节点最多这么多条
+
+
+def sub_removed(s):
+    """订阅里被用户删除的节点名（原名，精确匹配）；字段缺失或格式不对时为空（兼容旧 data.json）"""
+    v = s.get("removed") if isinstance(s, dict) else None
+    return [x for x in v if isinstance(x, str) and x] if isinstance(v, list) else []
+
+
+def node_name_ok(n):
+    return isinstance(n, str) and 0 < len(n) <= NODE_NAME_MAX and "\\n" not in n and "\\r" not in n
+
+
+def clean_removed(v, label="已删除节点"):
+    """校验并规范化订阅的 removed：文本列表，去重，保持顺序"""
+    if v is None:
+        return []
+    if not isinstance(v, list):
+        raise ValueError(f"{label}应为列表")
+    out = []
+    for x in v:
+        if not node_name_ok(x):
+            raise ValueError(f"{label}里有无效的节点名（应为 1–{NODE_NAME_MAX} 字的文本）")
+        if x not in out:
+            out.append(x)
+    if len(out) > NODE_LIST_MAX:
+        raise ValueError(f"{label}过多（最多 {NODE_LIST_MAX} 个）")
+    return out
+
+
+def clean_sub_nodes(v):
+    """自定义组勾选的订阅节点 [{sub, name}]：校验、去重、保持顺序"""
+    if v is None:
+        return []
+    if not isinstance(v, list):
+        raise ValueError("勾选的订阅节点应为列表")
+    out, seen = [], set()
+    for x in v:
+        if not isinstance(x, dict) or not isinstance(x.get("sub"), str) or not x["sub"].strip() or not node_name_ok(x.get("name")):
+            raise ValueError("勾选的订阅节点格式不正确（需要订阅名和节点名）")
+        k = (x["sub"].strip(), x["name"])
+        if k not in seen:
+            seen.add(k)
+            out.append({"sub": k[0], "name": k[1]})
+    if len(out) > NODE_LIST_MAX:
+        raise ValueError(f"勾选的订阅节点过多（最多 {NODE_LIST_MAX} 个）")
+    return out
+
+
+def names_rx(names):
+    """精确匹配这些节点名的正则 ^(?:a|b)$：名字里的 [ ] ( ) | . + 空格等全部转义；
+    反引号写成 \\\\x60（mihomo 把 filter / exclude-filter 里的反引号当作多条正则的分隔符）"""
+    return "^(?:" + "|".join(re.escape(n).replace("`", r"\\x60") for n in names) + ")$"
+
+
+def rx_or(a, b):
+    """两条正则取并集（命中任一条即可）。含反引号的是 mihomo 的多条正则写法，用反引号连接，语义同样是并集"""
+    if not a:
+        return b or ""
+    if not b:
+        return a
+    if "`" in a or "`" in b:
+        return f"{a}`{b}"
+    return f"(?:{a})|{b}"
+
+
+def sub_orig_nodes(d):
+    """{订阅名: 节点原名集合}，只含当前确实可用的节点（已删除的不算）；某订阅还不知道节点（没下载过 / 核心没加载）时不在结果里。
+    sing-box：面板缓存里的原名；mihomo：核心 / 文件缓存里的 provider 节点名（provider 不改名，就是原名）"""
+    out = {}
+    if active_core(d) == "singbox":
+        for s in d["subs"]:
+            c = sb_sub_cache(s["name"])
+            if c.get("updated") or c.get("nodes"):
+                gone = set(sub_removed(s))
+                out[s["name"]] = {str(p.get("name") or "") for p in c.get("nodes") or []} - gone
+        return out
+    pn = provider_nodes()
+    for s in d["subs"]:
+        if s["name"] in pn:
+            out[s["name"]] = set(pn[s["name"]] or []) - set(sub_removed(s))
+    return out
+
+
+def pick_plan(d, cg, orig=None):
+    """自定义组勾选的订阅节点里还有效的部分 → {订阅名: [节点原名]}（按订阅顺序）。
+    订阅已删除、节点已从订阅删除、或订阅里已经没有这个节点（已知节点名单时）都跳过，不让整份配置加载失败"""
+    sn = cg.get("sub_nodes") or []
+    if not sn:
+        return {}
+    if orig is None:
+        orig = sub_orig_nodes(d)
+    subs = {s["name"]: s for s in d["subs"]}
+    want = {}
+    for x in sn:
+        s = subs.get(x["sub"])
+        if not s or x["name"] in sub_removed(s):
+            continue
+        if x["sub"] in orig and x["name"] not in orig[x["sub"]]:
+            continue
+        lst = want.setdefault(x["sub"], [])
+        if x["name"] not in lst:
+            lst.append(x["name"])
+    return {s["name"]: want[s["name"]] for s in d["subs"] if s["name"] in want}
 
 
 def clean_custom_group(b):
@@ -1285,13 +1409,14 @@ def clean_custom_group(b):
     flt = str(b.get("filter") or "").strip()
     if flt and rx(flt) is None:
         raise ValueError(f"筛选正则无效：{flt}")
-    if not members and not flt:
-        raise ValueError("请至少选择一个成员，或填写筛选正则")
+    sub_nodes = clean_sub_nodes(b.get("sub_nodes"))
+    if not members and not flt and not sub_nodes:
+        raise ValueError("请至少选择一个成员（策略组 / 手动节点 / 订阅节点），或填写筛选正则")
     icon = str(b.get("icon") or "").strip()
     if icon and not re.match(r"^https?://\\S{4,500}$", icon):
         raise ValueError("图标必须是 http(s) 图片地址")
     g = {"name": name, "type": t, "proxies": members, "filter": flt, "subs": bool(b.get("subs", True)),
-         "expose": bool(b.get("expose", True)), "icon": icon}
+         "expose": bool(b.get("expose", True)), "icon": icon, "sub_nodes": sub_nodes}
     if t != "select":
         try:
             iv = int(b.get("interval") or 0)
@@ -1316,7 +1441,7 @@ from .base import (
     TUN_DEFAULT, TUN_STACKS
 )
 from .data import LB_KINDS, auto_name, lb_name, region_label, safe
-from .groups import clean_custom_group, gcfg, group_opts, region_plan, rx
+from .groups import clean_custom_group, gcfg, group_opts, names_rx, pick_plan, region_plan, rx, rx_or, sub_orig_nodes, sub_removed
 from .ruleutil import DOMAIN_RX, adblock_providers, dns_policy_of, rule_policy_index
 from .sb_common import active_core
 from .sysopt import sh
@@ -1331,6 +1456,9 @@ def build_config(d, strict=False):
         if s.get("filter"):
             pv["filter"] = s["filter"]
         exc = s.get("exclude", DEFAULT_EXCLUDE)
+        gone = sub_removed(s)
+        if gone:  # 用户从订阅里删除的节点：按原名精确排除，与订阅自己的排除正则取并集
+            exc = rx_or(exc, names_rx(gone))
         if exc:
             pv["exclude-filter"] = exc
         providers[s["name"]] = pv
@@ -1374,6 +1502,7 @@ def build_config(d, strict=False):
     # 自定义策略组
     custom_groups, cnames, exposed = [], [], []
     region_set = set(rnames)
+    orig = None
     for cg in d.get("custom_groups") or []:
         try:
             cg = clean_custom_group(cg)
@@ -1387,8 +1516,17 @@ def build_config(d, strict=False):
         g["_members"] = members
         if cg["icon"]:
             g["icon"] = cg["icon"]
-        if cg["filter"] and cg["subs"] and use:
-            g["use"], g["filter"] = list(use), cg["filter"]
+        uflt = cg["filter"] if cg["filter"] and cg["subs"] and use else ""
+        picks = {}
+        if cg["sub_nodes"] and use:
+            if orig is None:
+                orig = sub_orig_nodes(d)
+            picks = pick_plan(d, cg, orig)
+        if uflt or picks:
+            # mihomo 的 proxies 里不能写订阅节点名：勾选的订阅节点用 use（只引用涉及的订阅）+ 精确匹配的 filter 表达；
+            # filter 只作用于 use 引用的订阅，手动节点照常写在 proxies 里。同时有用户正则时两者取并集，用户正则原有的语义不变
+            g["use"] = list(use) if uflt else [s for s in use if s in picks]
+            g["filter"] = rx_or(uflt, names_rx([n for v in picks.values() for n in v]) if picks else "")
         custom_groups.append(g)
         cnames.append(cg["name"])
         if cg["expose"]:
@@ -1790,7 +1928,7 @@ import ipaddress, re
 
 from .base import DNS_LISTS, G_SEL, PROXY_MODES
 from .data import safe
-from .groups import NAME_BAD, clean_custom_group
+from .groups import NAME_BAD, clean_custom_group, clean_removed
 
 RS_BEHAVIORS = ("domain", "ipcidr", "classical")
 RS_FORMATS = ("yaml", "text", "mrs")
@@ -1914,8 +2052,22 @@ def rename_sub_clashes(subs):
     return out, renames
 
 
+def rename_sub_refs(groups, renames):
+    """恢复时订阅被自动改名：自定义组里勾选的订阅节点 {sub, name} 跟着改指新名字（订阅自己的 removed 名单在订阅对象里，自然随它走）"""
+    m = dict(renames or [])
+    if not m:
+        return groups
+    out = []
+    for g in groups or []:
+        if isinstance(g, dict) and isinstance(g.get("sub_nodes"), list):
+            g = dict(g, sub_nodes=[dict(x, sub=m.get(x.get("sub"), x.get("sub"))) if isinstance(x, dict) else x for x in g["sub_nodes"]])
+        out.append(g)
+    return out
+
+
 def clean_subs(v):
     seen = set()
+    out = []
     for i, s in enumerate(_list(v, "订阅")):
         if not isinstance(s, dict):
             raise ValueError(f"订阅第 {i + 1} 项格式不正确")
@@ -1927,7 +2079,10 @@ def clean_subs(v):
         for k in ("filter", "exclude"):
             if s.get(k) is not None and not isinstance(s[k], str):
                 raise ValueError(f"订阅「{name}」的 {k} 应为文本")
-    return v
+        if "removed" in s:  # 从订阅里删除的节点（v8.4.0）；旧备份没有这个字段
+            s = dict(s, removed=clean_removed(s["removed"], f"订阅「{name}」的已删除节点"))
+        out.append(s)
+    return out
 
 
 def clean_nodes(v):
@@ -2239,6 +2394,18 @@ def refresh_regions():
     ok, msg = reload_core()
     print(time.strftime("%F %T"), "[groups] 订阅节点变化，已重新生成地区分组：", ok, msg[:120], flush=True)
     return ok, "地区分组已按最新订阅节点更新" if ok else msg
+
+
+def refresh_later(delay=8):
+    """过一会儿按核心里最新的订阅节点名单再核对一次策略组（有变化才重载；核心没在运行时什么都不做）"""
+    def run():
+        try:
+            refresh_regions()
+        except Exception as e:
+            print("refresh regions error", e, flush=True)
+    t = threading.Timer(delay, run)
+    t.daemon = True
+    t.start()
 
 
 def refresh_after_sub(name, wait=90):
@@ -3340,7 +3507,7 @@ from .base import (
     AB_DIR, BUILTIN_POLICIES, CN_ECS, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, UA, dl_check, wd_hold)
 from .errlog import log_err
 from .data import auto_name, lb_dropped_names, lb_names, lb_old_name, load, safe, write_json
-from .groups import PROV, gcfg, rx
+from .groups import PROV, clean_custom_group, gcfg, pick_plan, rx, sub_orig_nodes
 from .mihomo import BUILTIN_GEO, build_config, build_rule_providers, dns_cfg, policy_parts, tun_params, write_atomic, write_config
 from .corehttp import core_json
 from .sb_common import CORE_PID, SB_BIN, SB_CONF, SB_DIR, SB_RULE_DIR, SB_STATE, active_core
@@ -3361,7 +3528,8 @@ def build_singbox(d):
     gc = gcfg(d)
     warn = []
     outbounds, node_names, prov_names = sb_node_outbounds(d, cfg, sub_out, warn)
-    alias, group_outs = sb_group_outbounds(cfg, gc, node_names, prov_names, warn)
+    picks = sb_custom_picks(d, sub_out, prov_names)
+    alias, group_outs = sb_group_outbounds(cfg, gc, node_names, prov_names, warn, picks)
     outbounds += group_outs
     group_out = [o for o in outbounds if o["type"] in ("selector", "urltest")]
     outbounds = group_out + [o for o in outbounds if o["type"] not in ("selector", "urltest")] + [{"type": "direct", "tag": "DIRECT"}]
@@ -3530,7 +3698,31 @@ def sb_fix_detour(conv, known=()):
     return [x for x in conv if x[0] not in bad], [x[0] for x in conv if x[0] in bad]
 
 
-def sb_group_outbounds(cfg, gc, node_names, prov_names, warn):
+def sb_custom_picks(d, sub_out, prov_names):
+    """自定义组勾选的订阅节点 → {组名: (用户正则或 "", [出站 tag])}。按「订阅 + 节点原名」映射到本次生成配置里去重改名后的 tag
+    （sb_sub_outbounds 的命名），被 detour / 协议不支持跳过的、已失效的都不列出"""
+    out = {}
+    orig = None
+    for cg in d.get("custom_groups") or []:
+        try:
+            cg = clean_custom_group(cg)
+        except ValueError:
+            continue
+        if not cg["sub_nodes"]:
+            continue
+        if orig is None:
+            orig = sub_orig_nodes(d)
+        plan = pick_plan(d, cg, orig)
+        tags = []
+        for sname, names in plan.items():
+            alive = set(prov_names.get(sname) or [])
+            want = set(names)
+            tags += [tag for tag, p in sub_out.get(sname) or [] if str(p.get("name") or "") in want and tag in alive and tag not in tags]
+        out[cg["name"]] = (cg["filter"] if cg["filter"] and cg["subs"] else "", tags)
+    return out
+
+
+def sb_group_outbounds(cfg, gc, node_names, prov_names, warn, picks=None):
     """策略组：地区负载均衡与自动优选相同 → 去掉并重定向引用；其余 load-balance / fallback 改为 urltest。返回 (别名表, 组 outbounds)"""
     outbounds = []
     alias = {}
@@ -3557,7 +3749,14 @@ def sb_group_outbounds(cfg, gc, node_names, prov_names, warn):
                 m = "DIRECT"
             if (m in known or m == "DIRECT") and m != g["name"] and m not in members:
                 members.append(m)
-        if g.get("use"):
+        pk = (picks or {}).get(g["name"])
+        if pk is not None:  # 勾选了订阅节点的自定义组：mihomo 用的合并 filter 不适用于改名后的 tag，这里按用户正则 + 勾选的 tag 展开
+            uf, tags = pk
+            if uf and g.get("use"):
+                r = rx(uf)
+                members += [n for u in g["use"] for n in prov_names.get(u, []) if r and r.search(n) and n not in members]
+            members += [t for t in tags if t not in members and t != g["name"]]
+        elif g.get("use"):
             pool = [n for u in g["use"] for n in prov_names.get(u, [])]
             f, ex = g.get("filter"), g.get("exclude-filter")
             rf, rex = (rx(f) if f else None), (rx(ex) if ex else None)
@@ -9075,9 +9274,12 @@ from .base import (
 )
 from .data import HISTORY_FILE, HISTORY_SKIP, auto_name, config_version, lb_names, load, migrate_names, normalize, read_json, region_lb_set, save, update
 from .links import add_links, q1, reserved_names
-from .groups import all_node_names, clean_custom_group, gcfg, provider_nodes, provider_rev, region_plan, rx
+from .groups import (
+    NODE_LIST_MAX, all_node_names, clean_custom_group, gcfg, node_name_ok, provider_nodes, provider_rev, region_plan, rx, sb_sub_outbounds,
+    sub_orig_nodes, sub_removed
+)
 from .mihomo import bad_rule_policies, build_config, dns_cfg, safe_dev, validate_dns
-from .core import conns_snapshot, refresh_after_sub, refresh_regions, reload_core
+from .core import conns_snapshot, refresh_after_sub, refresh_later, refresh_regions, reload_core
 from .corehttp import core, core_json
 from .sb_common import CORES, SB_BIN, SB_STATE, active_core, core_conf_path
 from .sb_subs import sb_update_subs
@@ -9105,7 +9307,7 @@ from .dnsleak import antileak_dns, dns_route, leak_check
 from .https import gen_cert, restart_self
 from .access import acl_cfg, host_name, host_ok, ip_is_lan
 from .update_guard import group_meta, rename_policy
-from .validate import clean_fields, rename_sub_clashes, sub_name_clash
+from .validate import clean_fields, rename_sub_clashes, rename_sub_refs, sub_name_clash
 from .static import MANIFEST, STATIC_TYPES, static_file
 ROUTES = {}  # (方法, 路径) → H 的处理函数；api() 先处理前缀 / 条件路由，再查这张表
 
@@ -9382,6 +9584,44 @@ def state_nodes(d):
         except (KeyError, TypeError):
             continue
     return out
+
+
+def parse_node_items(b):
+    """{items: [{sub, name}]} → ([(订阅名, 节点原名)], 错误提示)"""
+    items = b.get("items") if isinstance(b, dict) else None
+    if not isinstance(items, list) or not items:
+        return [], "请选择要删除的节点"
+    if len(items) > NODE_LIST_MAX:
+        return [], f"一次最多删除 {NODE_LIST_MAX} 个节点"
+    out = []
+    for x in items:
+        if not isinstance(x, dict) or not isinstance(x.get("sub"), str) or not x["sub"] or not node_name_ok(x.get("name")):
+            return [], "节点格式不正确（需要订阅名和节点名）"
+        k = (x["sub"], x["name"])
+        if k not in out:
+            out.append(k)
+    return out, ""
+
+
+def sub_nodes_view(d):
+    """/api/subs/nodes：[{name, known, nodes: [{name, orig, groups}], removed}]"""
+    refs = {}
+    for g in d.get("custom_groups") or []:
+        for x in (g.get("sub_nodes") or []) if isinstance(g, dict) else []:
+            if isinstance(x, dict):
+                refs.setdefault((x.get("sub"), x.get("name")), []).append(g.get("name"))
+    if active_core(d) == "singbox":
+        lists = {k: [(tag, str(p.get("name") or "")) for tag, p in v] for k, v in sb_sub_outbounds(d).items()}
+    else:
+        pn = provider_nodes()
+        lists = {k: [(n, n) for n in v or [] if isinstance(n, str)] for k, v in pn.items()}
+    known = sub_orig_nodes(d)
+    out = []
+    for s in d["subs"]:
+        gone = sub_removed(s)
+        nodes = [{"name": disp, "orig": o, "groups": refs.get((s["name"], o), [])} for disp, o in lists.get(s["name"], []) if o not in gone]
+        out.append({"name": s["name"], "known": s["name"] in known, "nodes": nodes, "removed": gone})
+    return {"subs": out, "core": active_core(d)}
 
 
 RESTORE_KEYS = ("mode", "tproxy", "subs", "rules", "rulesets", "bypass", "tests", "sub_interval", "region_groups",
@@ -10262,8 +10502,13 @@ class H(BaseHTTPRequestHandler):
                 re.compile(pat)
             except re.error as e:
                 return self.send(400, {"message": f"正则表达式无效：{pat}（{e}）"})
-        prev = update(lambda d: d.update(subs=[s for s in d["subs"] if s["name"] != name] +
-                                          [{"name": name, "url": url, "filter": flt, "exclude": exc}]))
+        def save_sub(d):
+            old = next((s for s in d["subs"] if s["name"] == name), None)
+            new = {"name": name, "url": url, "filter": flt, "exclude": exc}
+            if old and sub_removed(old):  # 编辑订阅时保留「从订阅删除」的节点名单
+                new["removed"] = sub_removed(old)
+            d["subs"] = [s for s in d["subs"] if s["name"] != name] + [new]
+        prev = update(save_sub)
         if active_core() == "singbox":  # 先由面板下载节点，再生成配置
             okl, bad = sb_update_subs([name])
             ok, msg = reload_core(prev)
@@ -10279,6 +10524,77 @@ class H(BaseHTTPRequestHandler):
     def api_subs_delete(self, m, p, b, q):
         prev = update(lambda d: d.update(subs=[s for s in d["subs"] if s["name"] != b.get("name")]))
         return self.reply(*reload_core(prev))
+
+    @api_route("/api/subs/nodes", "GET")
+    def api_subs_nodes_get(self, m, p, b, q):
+        """订阅节点清单（节点页「从订阅删除」、策略组编辑器勾选订阅节点用）：
+        每个节点给出显示名（sing-box 为去重改名后的名字）与原名（存进 data.json 的就是原名），以及引用它的自定义组"""
+        return self.send(200, sub_nodes_view(load()))
+
+    @api_route("/api/subs/nodes/remove", "POST")
+    def api_subs_nodes_remove(self, m, p, b, q):
+        items, err = parse_node_items(b)
+        if err:
+            return self.send(400, {"message": err})
+        subs = {s["name"]: s for s in load()["subs"]}
+        miss = sorted({x[0] for x in items if x[0] not in subs})
+        if miss:
+            return self.send(404, {"message": "订阅不存在：" + "、".join(miss[:3])})
+        for sname in {x[0] for x in items}:
+            if len(set(sub_removed(subs[sname])) | {n for s2, n in items if s2 == sname}) > NODE_LIST_MAX:
+                return self.send(400, {"message": f"订阅「{sname}」删除的节点过多（最多 {NODE_LIST_MAX} 个）"})
+        info = {"n": 0}
+
+        def fn(d):
+            for s in d["subs"]:
+                add = [n for s2, n in items if s2 == s["name"]]
+                if not add:
+                    continue
+                cur = sub_removed(s)
+                new = [n for n in add if n not in cur]
+                info["n"] += len(new)
+                s["removed"] = cur + new
+        return self.sub_nodes_apply(fn, info, lambda n: f"已从订阅删除 {n} 个节点")
+
+    @api_route("/api/subs/nodes/restore", "POST")
+    def api_subs_nodes_restore(self, m, p, b, q):
+        sname = b.get("sub")
+        if not isinstance(sname, str) or not sname:
+            return self.send(400, {"message": "缺少订阅名"})
+        if not any(s["name"] == sname for s in load()["subs"]):
+            return self.send(404, {"message": f"订阅不存在：{sname}"})
+        allx = bool(b.get("all"))
+        names = b.get("names")
+        if not allx:
+            if not isinstance(names, list) or not names or len(names) > NODE_LIST_MAX or not all(node_name_ok(x) for x in names):
+                return self.send(400, {"message": "请选择要恢复的节点"})
+            names = set(names)
+        info = {"n": 0}
+
+        def fn(d):
+            for s in d["subs"]:
+                if s["name"] != sname:
+                    continue
+                cur = sub_removed(s)
+                keep = [] if allx else [n for n in cur if n not in names]
+                info["n"] = len(cur) - len(keep)
+                if keep:
+                    s["removed"] = keep
+                else:
+                    s.pop("removed", None)
+        return self.sub_nodes_apply(fn, info, lambda n: f"已恢复 {n} 个节点")
+
+    def sub_nodes_apply(self, fn, info, done):
+        """删除 / 恢复订阅节点：锁内改 data.json → 与其他订阅修改一样重载核心（失败回滚；手动停止时只写配置）"""
+        prev = update(fn)
+        if not info["n"]:
+            return self.send(200, {"message": done(0)})
+        ok, msg = reload_core(prev)
+        if ok and active_core() != "singbox":
+            # mihomo 的订阅节点名单要等核心按新 exclude-filter 重新加载 provider 后才变：稍后按新名单再核对一次策略组
+            # （刚恢复的节点被策略组勾选过时补进去）；核心没在运行时 refresh_regions 不会把它拉起来
+            refresh_later(8)
+        return self.reply(ok, done(info["n"]) + ("；" + msg if "手动停止" in msg else "") if ok else msg)
 
     @api_route("/api/nodes", "POST")
     def api_nodes_post(self, m, p, b, q):
@@ -10619,6 +10935,7 @@ class H(BaseHTTPRequestHandler):
             d.update(vals)
             if "subs" in vals:
                 d["subs"], st["renames"] = rename_sub_clashes(vals["subs"])
+                d["custom_groups"] = rename_sub_refs(d.get("custom_groups"), st["renames"])
             try:
                 normalize(d)
             except Exception as e:
@@ -10714,6 +11031,8 @@ class H(BaseHTTPRequestHandler):
         renames = []
         if "subs" in vals:  # 订阅名只差符号会共用同一个节点缓存文件：自动改名
             vals["subs"], renames = rename_sub_clashes(vals["subs"])
+            if "custom_groups" in vals:  # 自定义组勾选的订阅节点跟着改指新订阅名
+                vals["custom_groups"] = rename_sub_refs(vals["custom_groups"], renames)
 
         def apply_backup(d):
             d.update(copy.deepcopy(vals))

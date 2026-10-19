@@ -95,6 +95,11 @@
       <button class="btn g sm" onclick="go('策略组')">管理策略组</button></div>
       <div id="policies" class="pgrid"></div></div>
     <div id="groups"></div>
+    <div class="card"><div class="row"><h3 class="sp" style="margin:0">订阅节点管理</h3><span class="mut small pdesc">勾选不想要的订阅节点「从订阅删除」，订阅更新后也不会再出现；可在「订阅」页恢复</span>
+      <button class="btn g sm" id="sn-toggle" onclick="toggleSN()">选择节点删除</button></div>
+      <div id="sn-box" class="hide"><div class="row mt"><input id="sn-q" class="sp" placeholder="搜索订阅节点" oninput="renderSN()"><span id="sn-cnt" class="mut small">已选 0 个</span>
+        <button class="btn g sm" onclick="snClear()">清空选择</button><button class="btn r sm" id="sn-del" onclick="snDelete(this)">从订阅删除</button></div>
+        <div class="pickbox" style="max-height:420px" id="sn-list"></div></div></div>
   </section>
   <!-- 策略组 -->
   <section data-tab="策略组">
@@ -130,6 +135,10 @@
       <div id="cg-chosen" class="mchips"><span class="mut small">还没有成员</span></div>
       <input id="cg-search" placeholder="搜索节点 / 分组，点击加入" style="width:100%;margin-top:8px" oninput="renderCGPick()">
       <div class="pickbox"><div id="cg-pick" class="mchips"></div></div>
+      <div class="lbl">订阅节点（可多选，与上面的成员混用；负载均衡 / 故障转移只用勾选的节点）</div>
+      <div id="cg-schosen" class="mchips"><span class="mut small">没有勾选订阅节点</span></div>
+      <input id="cg-ssearch" placeholder="搜索订阅节点，点击勾选 / 取消" style="width:100%;margin-top:8px" oninput="renderCGSPick()">
+      <div class="pickbox"><div id="cg-spick"></div></div>
       <div class="lbl">按正则筛选全部节点（可选，匹配的节点追加在成员之后）</div>
       <div class="row"><input id="cg-filter" placeholder="如 (?i)美国|US|日本" class="sp" oninput="previewCG()"><label class="row mut small" style="gap:4px"><input type="checkbox" id="cg-subs" onchange="previewCG()"> 包含订阅节点</label></div>
       <div id="cg-prev" class="mut small" style="margin-top:4px"></div>
@@ -150,7 +159,8 @@
         <input id="sub-exclude" placeholder="排除节点（正则）" class="sp"></div>
       <div class="row" style="margin-top:8px"><span class="sp mut small">排除规则默认过滤“剩余流量 / 到期时间 / 官网”等信息节点；清空表示不排除</span>
         <button class="btn g hide" id="sub-cancel" onclick="resetSubForm()">取消</button><button class="btn" id="sub-btn" onclick="addSub()">添加并应用</button></div></div>
-    <div class="card"><h3>订阅列表</h3><div class="tw"><table><thead><tr><th>名称</th><th>节点数</th><th>过滤</th><th>流量</th><th>到期</th><th>更新时间</th><th></th></tr></thead><tbody id="subs"></tbody></table></div></div>
+    <div class="card"><h3>订阅列表</h3><div class="tw"><table><thead><tr><th>名称</th><th>节点数</th><th>过滤</th><th>流量</th><th>到期</th><th>更新时间</th><th></th></tr></thead><tbody id="subs"></tbody></table></div>
+      <div id="sub-removed" class="hide"></div></div>
     <div class="card"><h3>手动导入单个节点</h3>
       <div class="mut small" style="margin-bottom:6px">每行一个链接，支持 vless:// vmess:// ss:// trojan:// hysteria2:// (hy2://) tuic://；导入的节点会加入「🖐️ 手动选择」「⚡ 全局自动选择」与对应地区的竞技 / 负载均衡组</div>
       <textarea id="node-links" rows="4" placeholder="vless://uuid@host:443?security=reality&...#香港 01"></textarea>

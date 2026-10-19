@@ -173,6 +173,18 @@ def refresh_regions():
     return ok, "地区分组已按最新订阅节点更新" if ok else msg
 
 
+def refresh_later(delay=8):
+    """过一会儿按核心里最新的订阅节点名单再核对一次策略组（有变化才重载；核心没在运行时什么都不做）"""
+    def run():
+        try:
+            refresh_regions()
+        except Exception as e:
+            print("refresh regions error", e, flush=True)
+    t = threading.Timer(delay, run)
+    t.daemon = True
+    t.start()
+
+
 def refresh_after_sub(name, wait=90):
     """新订阅加入后等核心下载完节点，再更新地区分组"""
     def run():

@@ -5,7 +5,7 @@ from .base import (
     AB_DIR, BUILTIN_POLICIES, CN_ECS, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, UA, dl_check, wd_hold)
 from .errlog import log_err
 from .data import auto_name, lb_dropped_names, lb_names, lb_old_name, load, safe, write_json
-from .groups import PROV, gcfg, rx
+from .groups import PROV, clean_custom_group, gcfg, pick_plan, rx, sub_orig_nodes
 from .mihomo import BUILTIN_GEO, build_config, build_rule_providers, dns_cfg, policy_parts, tun_params, write_atomic, write_config
 from .corehttp import core_json
 from .sb_common import CORE_PID, SB_BIN, SB_CONF, SB_DIR, SB_RULE_DIR, SB_STATE, active_core
@@ -26,7 +26,8 @@ def build_singbox(d):
     gc = gcfg(d)
     warn = []
     outbounds, node_names, prov_names = sb_node_outbounds(d, cfg, sub_out, warn)
-    alias, group_outs = sb_group_outbounds(cfg, gc, node_names, prov_names, warn)
+    picks = sb_custom_picks(d, sub_out, prov_names)
+    alias, group_outs = sb_group_outbounds(cfg, gc, node_names, prov_names, warn, picks)
     outbounds += group_outs
     group_out = [o for o in outbounds if o["type"] in ("selector", "urltest")]
     outbounds = group_out + [o for o in outbounds if o["type"] not in ("selector", "urltest")] + [{"type": "direct", "tag": "DIRECT"}]
@@ -195,7 +196,31 @@ def sb_fix_detour(conv, known=()):
     return [x for x in conv if x[0] not in bad], [x[0] for x in conv if x[0] in bad]
 
 
-def sb_group_outbounds(cfg, gc, node_names, prov_names, warn):
+def sb_custom_picks(d, sub_out, prov_names):
+    """自定义组勾选的订阅节点 → {组名: (用户正则或 "", [出站 tag])}。按「订阅 + 节点原名」映射到本次生成配置里去重改名后的 tag
+    （sb_sub_outbounds 的命名），被 detour / 协议不支持跳过的、已失效的都不列出"""
+    out = {}
+    orig = None
+    for cg in d.get("custom_groups") or []:
+        try:
+            cg = clean_custom_group(cg)
+        except ValueError:
+            continue
+        if not cg["sub_nodes"]:
+            continue
+        if orig is None:
+            orig = sub_orig_nodes(d)
+        plan = pick_plan(d, cg, orig)
+        tags = []
+        for sname, names in plan.items():
+            alive = set(prov_names.get(sname) or [])
+            want = set(names)
+            tags += [tag for tag, p in sub_out.get(sname) or [] if str(p.get("name") or "") in want and tag in alive and tag not in tags]
+        out[cg["name"]] = (cg["filter"] if cg["filter"] and cg["subs"] else "", tags)
+    return out
+
+
+def sb_group_outbounds(cfg, gc, node_names, prov_names, warn, picks=None):
     """策略组：地区负载均衡与自动优选相同 → 去掉并重定向引用；其余 load-balance / fallback 改为 urltest。返回 (别名表, 组 outbounds)"""
     outbounds = []
     alias = {}
@@ -222,7 +247,14 @@ def sb_group_outbounds(cfg, gc, node_names, prov_names, warn):
                 m = "DIRECT"
             if (m in known or m == "DIRECT") and m != g["name"] and m not in members:
                 members.append(m)
-        if g.get("use"):
+        pk = (picks or {}).get(g["name"])
+        if pk is not None:  # 勾选了订阅节点的自定义组：mihomo 用的合并 filter 不适用于改名后的 tag，这里按用户正则 + 勾选的 tag 展开
+            uf, tags = pk
+            if uf and g.get("use"):
+                r = rx(uf)
+                members += [n for u in g["use"] for n in prov_names.get(u, []) if r and r.search(n) and n not in members]
+            members += [t for t in tags if t not in members and t != g["name"]]
+        elif g.get("use"):
             pool = [n for u in g["use"] for n in prov_names.get(u, [])]
             f, ex = g.get("filter"), g.get("exclude-filter")
             rf, rex = (rx(f) if f else None), (rx(ex) if ex else None)

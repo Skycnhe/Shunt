@@ -102,6 +102,21 @@ def normalize(d):
         for k in OLD_PW_KEYS:
             d.pop(k, None)
         dirty = True
+    for s in d.get("subs") or []:  # v8.4.0 订阅的 removed：格式不对的条目去掉（旧版没有这个字段，不补）
+        if isinstance(s, dict) and "removed" in s:
+            v = s["removed"]
+            good = list(dict.fromkeys(x for x in v if isinstance(x, str) and x)) if isinstance(v, list) else []
+            if good != v:
+                s["removed"] = good
+                dirty = True
+    for g in d.get("custom_groups") or []:  # v8.4.0 自定义组勾选的订阅节点 sub_nodes：同上
+        if isinstance(g, dict) and "sub_nodes" in g:
+            v = g["sub_nodes"]
+            good = [{"sub": x["sub"], "name": x["name"]} for x in (v if isinstance(v, list) else [])
+                    if isinstance(x, dict) and isinstance(x.get("sub"), str) and isinstance(x.get("name"), str) and x["sub"] and x["name"]]
+            if good != v:
+                g["sub_nodes"] = good
+                dirty = True
     if not d["secret"]:
         d["secret"] = secrets.token_hex(16)
         dirty = True

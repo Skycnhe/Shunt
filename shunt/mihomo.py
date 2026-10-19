@@ -7,7 +7,7 @@ from .base import (
     TUN_DEFAULT, TUN_STACKS
 )
 from .data import LB_KINDS, auto_name, lb_name, region_label, safe
-from .groups import clean_custom_group, gcfg, group_opts, region_plan, rx
+from .groups import clean_custom_group, gcfg, group_opts, names_rx, pick_plan, region_plan, rx, rx_or, sub_orig_nodes, sub_removed
 from .ruleutil import DOMAIN_RX, adblock_providers, dns_policy_of, rule_policy_index
 from .sb_common import active_core
 from .sysopt import sh
@@ -22,6 +22,9 @@ def build_config(d, strict=False):
         if s.get("filter"):
             pv["filter"] = s["filter"]
         exc = s.get("exclude", DEFAULT_EXCLUDE)
+        gone = sub_removed(s)
+        if gone:  # 用户从订阅里删除的节点：按原名精确排除，与订阅自己的排除正则取并集
+            exc = rx_or(exc, names_rx(gone))
         if exc:
             pv["exclude-filter"] = exc
         providers[s["name"]] = pv
@@ -65,6 +68,7 @@ def build_config(d, strict=False):
     # 自定义策略组
     custom_groups, cnames, exposed = [], [], []
     region_set = set(rnames)
+    orig = None
     for cg in d.get("custom_groups") or []:
         try:
             cg = clean_custom_group(cg)
@@ -78,8 +82,17 @@ def build_config(d, strict=False):
         g["_members"] = members
         if cg["icon"]:
             g["icon"] = cg["icon"]
-        if cg["filter"] and cg["subs"] and use:
-            g["use"], g["filter"] = list(use), cg["filter"]
+        uflt = cg["filter"] if cg["filter"] and cg["subs"] and use else ""
+        picks = {}
+        if cg["sub_nodes"] and use:
+            if orig is None:
+                orig = sub_orig_nodes(d)
+            picks = pick_plan(d, cg, orig)
+        if uflt or picks:
+            # mihomo 的 proxies 里不能写订阅节点名：勾选的订阅节点用 use（只引用涉及的订阅）+ 精确匹配的 filter 表达；
+            # filter 只作用于 use 引用的订阅，手动节点照常写在 proxies 里。同时有用户正则时两者取并集，用户正则原有的语义不变
+            g["use"] = list(use) if uflt else [s for s in use if s in picks]
+            g["filter"] = rx_or(uflt, names_rx([n for v in picks.values() for n in v]) if picks else "")
         custom_groups.append(g)
         cnames.append(cg["name"])
         if cg["expose"]:
