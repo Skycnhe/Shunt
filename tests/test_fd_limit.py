@@ -17,9 +17,9 @@ class TestConfdMigrate(unittest.TestCase):
         self.old = os.path.join(self.tmp, "mihomo")
         self.new = os.path.join(self.tmp, "shunt-core")
 
-    def run_mig(self):
+    def run_mig(self, on=("fd",)):
         with mock.patch.object(sysopt, "OPT_CONFD", self.new), mock.patch.object(sysopt, "OPT_CONFD_OLD", self.old):
-            return sysopt.opt_migrate_confd()
+            return sysopt.opt_migrate_confd(on=set(on))
 
     def test_copy_ulimit(self):
         with open(self.old, "w") as f:

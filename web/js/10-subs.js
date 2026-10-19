@@ -10,7 +10,7 @@ async function loadSubs(){await loadState();let prov={};try{prov=(await core('/p
     <td class="subf" title="${esc((s.filter?'保留：'+s.filter+'\n':'')+(exc?'排除：'+exc:'不过滤'))}">${s.filter?'<div>保留：'+esc(s.filter)+'</div>':''}${exc?'<div class="mut">排除：'+esc(exc)+'</div>':'<div class="mut">不过滤</div>'}</td>
     <td>${si.Total?`${fmt(used)} / ${fmt(si.Total)}<div class="ubar"><i class="${pct>90?'bad':pct>70?'warn':''}" style="width:${pct.toFixed(1)}%"></i></div>`:'-'}</td>
     <td>${exp}${days!==null?`<div class="small ${days<=3?'bad':days<=7?'warn':'mut'}">${days<0?'已过期':'剩 '+days+' 天'}</div>`:''}</td><td>${p.updatedAt?new Date(p.updatedAt).toLocaleString('zh-CN',{hour12:false}):'-'}</td>
-    <td><button class="btn g sm" onclick="updSub('${encodeURIComponent(s.name)}',this)">更新</button> <button class="btn g sm" onclick="editSub('${encodeURIComponent(s.name)}')">编辑</button> <button class="btn r sm" onclick="delSub('${encodeURIComponent(s.name)}')">删除</button></td></tr>`}).join('')||'<tr><td class="mut">暂无订阅</td></tr>';
+    <td><button class="btn g sm" onclick="updSub(${jsq(encodeURIComponent(s.name))},this)">更新</button> <button class="btn g sm" onclick="editSub(${jsq(encodeURIComponent(s.name))})">编辑</button> <button class="btn r sm" onclick="delSub(${jsq(encodeURIComponent(s.name))})">删除</button></td></tr>`}).join('')||'<tr><td class="mut">暂无订阅</td></tr>';
   renderNodes(prov)}
 function editSub(n){const s=STATE.subs.find(x=>x.name===decodeURIComponent(n));if(!s)return;EDIT_SUB=s.name;
   $('#sub-name').value=s.name;$('#sub-name').disabled=true;$('#sub-url').value=s.url;$('#sub-filter').value=s.filter||'';
@@ -27,7 +27,7 @@ async function delSub(n){if(!confirm('删除订阅 '+decodeURIComponent(n)+'？'
 async function renderNodes(){let px={};try{px=await loadPX()}catch(e){}
   $('#mynodes').innerHTML=(STATE.nodes||[]).map(n=>{const q=px[n.name]||{},h=q.history||[];const d=q._d!==undefined?q._d:h.length?h[h.length-1].delay:undefined;
     return `<tr><td class="w">${esc(n.name)}</td><td>${esc(n.type)}</td><td class="w">${esc(n.server)}:${esc(n.port)}</td><td class="${dcls(d)}">${dtxt(d)}</td>
-    <td style="text-align:right"><button class="btn g sm" onclick="testNode('${encodeURIComponent(n.name)}',this)">测速</button> <button class="btn r sm" onclick="delNode('${encodeURIComponent(n.name)}')">删除</button></td></tr>`}).join('')||'<tr><td class="mut">暂无手动节点</td></tr>'}
+    <td style="text-align:right"><button class="btn g sm" onclick="testNode(${jsq(encodeURIComponent(n.name))},this)">测速</button> <button class="btn r sm" onclick="delNode(${jsq(encodeURIComponent(n.name))})">删除</button></td></tr>`}).join('')||'<tr><td class="mut">暂无手动节点</td></tr>'}
 async function importNodes(){const links=$('#node-links').value.trim();if(!links)return toast('请粘贴节点链接');
   try{toast('正在导入…');const j=await api('/api/nodes','POST',{links});toast(j.message);$('#node-links').value='';loadSubs()}catch(e){toast(e.message)}}
 async function delNode(n){if(!confirm('删除节点 '+decodeURIComponent(n)+'？'))return;try{await api('/api/nodes','DELETE',{name:decodeURIComponent(n)});toast('已删除');loadSubs()}catch(e){toast(e.message)}}

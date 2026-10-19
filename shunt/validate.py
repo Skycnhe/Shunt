@@ -106,6 +106,12 @@ def clean_rules(v):
     return out
 
 
+def sub_name_clash(name, others):
+    """订阅名只差符号（「机场 A」和「机场_A」）时会共用同一个节点缓存文件，互相覆盖：返回冲突的那个名字"""
+    k = safe(name)
+    return next((o for o in others if o != name and safe(o) == k), None)
+
+
 def rename_sub_clashes(subs):
     """恢复备份时订阅名只差符号（会共用同一个节点缓存文件）：后出现的自动加 _2、_3… 改名。返回 (新列表, [(原名, 新名)])"""
     out, renames, keys, names = [], [], set(), {s["name"] for s in subs}

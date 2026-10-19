@@ -6,7 +6,7 @@ async function loadStats(){try{STATS=await api('/api/stats');await loadDevs()}ca
   $('#st-month').textContent=fmt(m.up)+' / '+fmt(m.down);$('#st-month-sum').textContent=fmt((m.up||0)+(m.down||0));
   document.querySelectorAll('#st-period button').forEach(b=>{b.classList.toggle('on',b.dataset.p===ST_P);b.onclick=()=>{ST_P=b.dataset.p;loadStats()}});
   const p=STATS[ST_P]||{},arp=STATS.arp||{};
-  $('#st-dev').innerHTML=(p.dev||[]).map(([n,u,d])=>`<tr><td class="w">${devCell(n)}${!dname(n)&&arp[n]?'<div class="mut" style="font-size:11px">'+esc(arp[n])+'</div>':''}</td><td>${fmt(u)}</td><td>${fmt(d)}</td><td>${fmt(u+d)} <button class="icon" style="font-size:12px;padding:0 6px;margin-left:4px" title="设置备注" onclick="editDev('${esc(n)}')">✎</button></td></tr>`).join('')||'<tr><td class="mut">暂无数据</td></tr>';
+  $('#st-dev').innerHTML=(p.dev||[]).map(([n,u,d])=>`<tr><td class="w">${devCell(n)}${!dname(n)&&arp[n]?'<div class="mut" style="font-size:11px">'+esc(arp[n])+'</div>':''}</td><td>${fmt(u)}</td><td>${fmt(d)}</td><td>${fmt(u+d)} <button class="icon" style="font-size:12px;padding:0 6px;margin-left:4px" title="设置备注" onclick="editDev(${jsq(n)})">✎</button></td></tr>`).join('')||'<tr><td class="mut">暂无数据</td></tr>';
   $('#st-node').innerHTML=(p.node||[]).map(([n,u,d])=>`<tr><td class="w">${esc(n)}</td><td>${fmt(u)}</td><td>${fmt(d)}</td><td>${fmt(u+d)}</td></tr>`).join('')||'<tr><td class="mut">暂无数据</td></tr>';
   drawDays()}
 function drawDays(){const c=$('#daychart');if(!c||c.offsetParent===null||!STATS)return;const r=devicePixelRatio,w=c.width=c.clientWidth*r,h=c.height=180*r,x=c.getContext('2d');

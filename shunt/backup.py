@@ -52,11 +52,12 @@ def _parse_name(name):
     return m.group(1) if m else None
 
 
-def create(version=None, auto=False):
+def create(version=None, auto=False, keep=None):
     """创建备份。返回 (ok, name_or_message)。
 
     version: 打上的版本号，默认当前 PANEL_VERSION。
     auto: 是否自动备份（更新前调用），失败不抛异常。
+    keep: 清理旧备份时必须保留的文件名（恢复时保住正要恢复的那个）。
     """
     version = version or PANEL_VERSION
     try:
@@ -85,7 +86,7 @@ def create(version=None, auto=False):
             except OSError:
                 pass
             raise
-        cleanup()
+        cleanup(protect=keep)
         return True, name
     except Exception as e:
         # 自动备份失败不阻断调用方
@@ -133,10 +134,11 @@ def delete(name):
         return False, str(e)
 
 
-def cleanup(keep=KEEP_N):
-    """只保留最近 keep 个，删除最旧的。"""
-    items = list()
-    for it in items[keep:]:
+def cleanup(keep=KEEP_N, protect=None):
+    """只保留最近 keep 个，删除最旧的（protect 指定的文件不删）。"""
+    allb = list()
+    items = [it for it in allb if it["name"] != protect]
+    for it in items[keep - (len(allb) - len(items)):]:
         try:
             os.unlink(os.path.join(BACKUP_DIR, it["name"]))
         except OSError:
@@ -180,8 +182,8 @@ def restore(name, check_data=None, apply_data=None):
                         new_data = check_data(raw)
                     except ValueError as e:
                         return False, "备份里的设置无效，未恢复（当前设置未改动）：%s" % e
-                # 防呆：先备份当前
-                ok, cur = create()
+                # 防呆：先备份当前。已有 10 个备份时新备份会挤掉最旧的一个——恰好是要恢复的这个时以前会把它删掉
+                ok, cur = create(keep=name)
                 if not ok:
                     return False, "备份当前版本失败，中止恢复：%s" % cur
                 # 搬文件

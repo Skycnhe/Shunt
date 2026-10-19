@@ -8,7 +8,7 @@ from .mihomo import check_config, dns_cfg, mh_bin, write_config
 from .sb_common import CORES, SB_API, SB_BIN, SB_CONF, SB_REPO, SB_STATE, active_core, write_core_file
 from .sb_subs import sb_update_subs
 from .sb_config import check_sb_config, sb_sync_assets, sb_version, write_sb_config
-from .core_update import LGBM_FILE, _cu, bin_version, lgbm_fetch, mh_fetch, open_url, release_digest
+from .core_update import LGBM_FILE, _cu, bin_version, copy_replace, lgbm_fetch, mh_fetch, open_url, release_digest
 from .sysopt import sh, svc_restart
 from .notify import core_alive, notify, set_manual_stop
 from .migrate import restore_selections, snapshot_selections
@@ -234,7 +234,7 @@ def sb_update_job(channel, gh, force=False):
         if active_core() == "singbox":
             ok, err = check_sb_config(SB_CONF)
             if not ok:
-                shutil.copy2(SB_BIN + ".bak", SB_BIN)
+                copy_replace(SB_BIN + ".bak", SB_BIN)
                 raise ValueError("新版 sing-box 不兼容当前配置，已恢复原版本：" + err)
             _cu("重启核心", 85, "正在重启核心")
             svc_restart(timeout=90)
@@ -243,7 +243,7 @@ def sb_update_job(channel, gh, force=False):
                 if core_alive():
                     break
             else:
-                shutil.copy2(SB_BIN + ".bak", SB_BIN)
+                copy_replace(SB_BIN + ".bak", SB_BIN)
                 svc_restart(timeout=90)
                 raise ValueError("新版 sing-box 30 秒内未响应，已恢复原版本")
         CORE_UPD.update(ok=True, message=f"sing-box 已从 {cur or '未安装'} 更新到 {nv}" + ("，旧版本已备份" if cur else ""))

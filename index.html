@@ -756,6 +756,9 @@ const $=s=>document.querySelector(s);
 let STATE={},TAB='概览',ACTIVE_RULES=[],timers=[],DEVS={},LIVE={},CONNS=[];
 const TABS=['概览','节点','策略组','订阅','规则','DNS','广告拦截','连接','统计','日志','设置'];
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// 内联事件属性里的字符串参数：onclick="f(${jsq(x)})"。不能写成 '${esc(x)}'：属性值里的 &#39; 会先被还原成单引号再交给 JS，
+// 节点名带 ' 就能跳出字符串执行代码（订阅里的节点名不可信）；encodeURIComponent 也不转义 ' ( )
+const jsq=s=>esc(JSON.stringify(String(s??'')));
 const fmt=b=>{b=+b||0;const u=['B','KB','MB','GB','TB'];let i=0;while(b>=1024&&i<4){b/=1024;i++}return b.toFixed(i?(b<10?2:1):0)+' '+u[i]};
 const dcls=ms=>ms===undefined?'mut':ms<=0?'bad':ms<300?'ok':ms<800?'warn':'bad';
 const dtxt=ms=>ms===undefined?'--':ms<0||ms===0?'超时':ms+' ms';
@@ -1075,7 +1078,7 @@ function renderGroups(){
       <button class="btn g sm" onclick="event.stopPropagation();testGroup(${i},this)">测速</button></div>
       <div class="gbody"><div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(min(100%,178px),1fr));gap:10px">${allH.map(n=>{const j=all0.indexOf(n),d=lastDelay(n),sg=isGroup(n);
         const s2=sg?`<div class="sub2">${esc(GT[PROXIES[n].type]||'')}${PROXIES[n].now?' → '+esc(PROXIES[n].now):''}</div>`:'';
-        const unh=hLevel(n)==='hidden'?`<button class="btn g sm" onclick="event.stopPropagation();unhideNode('${esc(n).replace(/'/g,"\\'")}')">取消隐藏</button>`:'';
+        const unh=hLevel(n)==='hidden'?`<button class="btn g sm" onclick="event.stopPropagation();unhideNode(${jsq(n)})">取消隐藏</button>`:'';
         return `<div class="node ${n===p.now&&!lb?'sel':''} ${lb?'lbm':''}" onclick="pick(${i},${j})" title="${esc(n)}">
         <div class="n">${hIcon(n)}${sg?'📁 ':''}${esc(n)}</div>${s2}<div class="d"><span class="mut">${esc(sg?'分组':PROXIES[n]?.type||'')}</span> <span class="${dcls(d)}">${dtxt(d)}</span></div>${unh}</div>`}).join('')}</div></div></div>`}).join('')||(filt?'<div class="card mut">没有匹配的节点</div>':'<div class="card mut">还没有节点，先去“订阅”添加订阅或导入节点</div>');
   $('#hidedead').classList.toggle('on',HIDEDEAD);$('#hidedead').textContent=HIDEDEAD?'显示超时':'隐藏超时';
@@ -1174,7 +1177,7 @@ async function loadSubs(){await loadState();let prov={};try{prov=(await core('/p
     <td class="subf" title="${esc((s.filter?'保留：'+s.filter+'\n':'')+(exc?'排除：'+exc:'不过滤'))}">${s.filter?'<div>保留：'+esc(s.filter)+'</div>':''}${exc?'<div class="mut">排除：'+esc(exc)+'</div>':'<div class="mut">不过滤</div>'}</td>
     <td>${si.Total?`${fmt(used)} / ${fmt(si.Total)}<div class="ubar"><i class="${pct>90?'bad':pct>70?'warn':''}" style="width:${pct.toFixed(1)}%"></i></div>`:'-'}</td>
     <td>${exp}${days!==null?`<div class="small ${days<=3?'bad':days<=7?'warn':'mut'}">${days<0?'已过期':'剩 '+days+' 天'}</div>`:''}</td><td>${p.updatedAt?new Date(p.updatedAt).toLocaleString('zh-CN',{hour12:false}):'-'}</td>
-    <td><button class="btn g sm" onclick="updSub('${encodeURIComponent(s.name)}',this)">更新</button> <button class="btn g sm" onclick="editSub('${encodeURIComponent(s.name)}')">编辑</button> <button class="btn r sm" onclick="delSub('${encodeURIComponent(s.name)}')">删除</button></td></tr>`}).join('')||'<tr><td class="mut">暂无订阅</td></tr>';
+    <td><button class="btn g sm" onclick="updSub(${jsq(encodeURIComponent(s.name))},this)">更新</button> <button class="btn g sm" onclick="editSub(${jsq(encodeURIComponent(s.name))})">编辑</button> <button class="btn r sm" onclick="delSub(${jsq(encodeURIComponent(s.name))})">删除</button></td></tr>`}).join('')||'<tr><td class="mut">暂无订阅</td></tr>';
   renderNodes(prov)}
 function editSub(n){const s=STATE.subs.find(x=>x.name===decodeURIComponent(n));if(!s)return;EDIT_SUB=s.name;
   $('#sub-name').value=s.name;$('#sub-name').disabled=true;$('#sub-url').value=s.url;$('#sub-filter').value=s.filter||'';
@@ -1191,7 +1194,7 @@ async function delSub(n){if(!confirm('删除订阅 '+decodeURIComponent(n)+'？'
 async function renderNodes(){let px={};try{px=await loadPX()}catch(e){}
   $('#mynodes').innerHTML=(STATE.nodes||[]).map(n=>{const q=px[n.name]||{},h=q.history||[];const d=q._d!==undefined?q._d:h.length?h[h.length-1].delay:undefined;
     return `<tr><td class="w">${esc(n.name)}</td><td>${esc(n.type)}</td><td class="w">${esc(n.server)}:${esc(n.port)}</td><td class="${dcls(d)}">${dtxt(d)}</td>
-    <td style="text-align:right"><button class="btn g sm" onclick="testNode('${encodeURIComponent(n.name)}',this)">测速</button> <button class="btn r sm" onclick="delNode('${encodeURIComponent(n.name)}')">删除</button></td></tr>`}).join('')||'<tr><td class="mut">暂无手动节点</td></tr>'}
+    <td style="text-align:right"><button class="btn g sm" onclick="testNode(${jsq(encodeURIComponent(n.name))},this)">测速</button> <button class="btn r sm" onclick="delNode(${jsq(encodeURIComponent(n.name))})">删除</button></td></tr>`}).join('')||'<tr><td class="mut">暂无手动节点</td></tr>'}
 async function importNodes(){const links=$('#node-links').value.trim();if(!links)return toast('请粘贴节点链接');
   try{toast('正在导入…');const j=await api('/api/nodes','POST',{links});toast(j.message);$('#node-links').value='';loadSubs()}catch(e){toast(e.message)}}
 async function delNode(n){if(!confirm('删除节点 '+decodeURIComponent(n)+'？'))return;try{await api('/api/nodes','DELETE',{name:decodeURIComponent(n)});toast('已删除');loadSubs()}catch(e){toast(e.message)}}
@@ -1240,7 +1243,7 @@ function renderAB(){const a=AB;$('#ab-on').checked=a.enabled;$('#ab-on').onchang
     <td>${l.count!=null?Number(l.count).toLocaleString('zh-CN',{hour12:false}):'-'}${l.allow?`<div class="mut" style="font-size:11px">例外 ${l.allow}</div>`:''}${a.enabled&&l.enabled&&ld==null&&l.count?'<div class="warn" style="font-size:11px">未加载</div>':''}</td>
     <td>${(l.hits||0).toLocaleString('zh-CN',{hour12:false})}</td>
     <td class="w" style="font-size:12px;min-width:90px">${l.error?`<span class="bad" title="${esc(l.error)}">失败：${esc(l.error.slice(0,40))}</span>`:ago(l.updated)}</td>
-    <td style="text-align:right;white-space:nowrap"><button class="btn g sm" onclick="abUpdate('${l.id}')">更新</button> <button class="btn r sm" onclick="abDel(${i})">删除</button></td></tr>`}).join('')
+    <td style="text-align:right;white-space:nowrap"><button class="btn g sm" onclick="abUpdate(${jsq(l.id)})">更新</button> <button class="btn r sm" onclick="abDel(${i})">删除</button></td></tr>`}).join('')
     +(a.black.length?`<tr><td></td><td><b style="font-weight:600">自定义黑名单</b></td><td>${(a.loaded['ad-custom']??a.black.length).toLocaleString('zh-CN',{hour12:false})}</td><td>${(a.custom_hits||0).toLocaleString('zh-CN',{hour12:false})}</td><td></td><td></td></tr>`:'')
     ||'<tr><td colspan="6" class="mut">还没有列表，点下方内置规则一键添加</td></tr>';
   const cats=[...new Set(a.presets.map(p=>p.cat||'其他'))];
@@ -1282,8 +1285,8 @@ function renderConns(list){const f=$('#c-filter').value.toLowerCase();const now=
     const host=(m.host||m.sniffHost||m.destinationIP)+':'+m.destinationPort;const sec=Math.floor((now-new Date(c.start))/1000);
     return `<tr><td class="w ch" title="${esc(host)}">${esc(host)}</td><td>${devCell(m.sourceIP)}</td><td>${esc(m.network)}</td><td class="cr" title="${esc(c.rule+(c.rulePayload?' '+c.rulePayload:''))}">${esc(c.rule)}${c.rulePayload?' <span class="mut">'+esc(c.rulePayload.length>40?c.rulePayload.slice(0,40)+'…':c.rulePayload)+'</span>':''}</td>
     <td class="w cc" title="${esc((c.chains||[]).slice().reverse().join(' → '))}">${esc((c.chains||[]).slice().reverse().join(' → '))}</td><td>${fmt(ds)}/s</td><td>${fmt(us)}/s</td><td>${fmt(c.download)}</td>
-    <td>${sec<60?sec+'s':Math.floor(sec/60)+'m'}</td><td><button class="btn g sm" onclick="closeConn('${c.id}')">断开</button></td></tr>`}).join('')||'<tr><td class="mut" colspan="10">暂无连接</td></tr>'}
-async function closeConn(id){try{await core('/connections/'+id,'DELETE')}catch(e){toast(e.message)}}
+    <td>${sec<60?sec+'s':Math.floor(sec/60)+'m'}</td><td><button class="btn g sm" onclick="closeConn(${jsq(c.id)})">断开</button></td></tr>`}).join('')||'<tr><td class="mut" colspan="10">暂无连接</td></tr>'}
+async function closeConn(id){try{await core('/connections/'+encodeURIComponent(id),'DELETE')}catch(e){toast(e.message)}}
 async function closeAll(){if(!confirm('断开全部连接？'))return;try{await core('/connections','DELETE');toast('已断开')}catch(e){toast(e.message)}}
 
 // 统计
@@ -1294,7 +1297,7 @@ async function loadStats(){try{STATS=await api('/api/stats');await loadDevs()}ca
   $('#st-month').textContent=fmt(m.up)+' / '+fmt(m.down);$('#st-month-sum').textContent=fmt((m.up||0)+(m.down||0));
   document.querySelectorAll('#st-period button').forEach(b=>{b.classList.toggle('on',b.dataset.p===ST_P);b.onclick=()=>{ST_P=b.dataset.p;loadStats()}});
   const p=STATS[ST_P]||{},arp=STATS.arp||{};
-  $('#st-dev').innerHTML=(p.dev||[]).map(([n,u,d])=>`<tr><td class="w">${devCell(n)}${!dname(n)&&arp[n]?'<div class="mut" style="font-size:11px">'+esc(arp[n])+'</div>':''}</td><td>${fmt(u)}</td><td>${fmt(d)}</td><td>${fmt(u+d)} <button class="icon" style="font-size:12px;padding:0 6px;margin-left:4px" title="设置备注" onclick="editDev('${esc(n)}')">✎</button></td></tr>`).join('')||'<tr><td class="mut">暂无数据</td></tr>';
+  $('#st-dev').innerHTML=(p.dev||[]).map(([n,u,d])=>`<tr><td class="w">${devCell(n)}${!dname(n)&&arp[n]?'<div class="mut" style="font-size:11px">'+esc(arp[n])+'</div>':''}</td><td>${fmt(u)}</td><td>${fmt(d)}</td><td>${fmt(u+d)} <button class="icon" style="font-size:12px;padding:0 6px;margin-left:4px" title="设置备注" onclick="editDev(${jsq(n)})">✎</button></td></tr>`).join('')||'<tr><td class="mut">暂无数据</td></tr>';
   $('#st-node').innerHTML=(p.node||[]).map(([n,u,d])=>`<tr><td class="w">${esc(n)}</td><td>${fmt(u)}</td><td>${fmt(d)}</td><td>${fmt(u+d)}</td></tr>`).join('')||'<tr><td class="mut">暂无数据</td></tr>';
   drawDays()}
 function drawDays(){const c=$('#daychart');if(!c||c.offsetParent===null||!STATS)return;const r=devicePixelRatio,w=c.width=c.clientWidth*r,h=c.height=180*r,x=c.getContext('2d');
@@ -1468,7 +1471,7 @@ async function fillHealthCfg(){try{const j=await api('/api/health/status');const
 async function saveHealthCfg(){try{const j=await api('/api/health/cfg','PUT',{enabled:$('#hc-enabled').checked,time:$('#hc-time').value,warn_days:+$('#hc-warn').value,hide_days:+$('#hc-hide').value});if(!j.ok)toast(j.message||'保存失败');fillHealthCfg()}catch(e){toast(e.message)}}
 async function runHealthCheck(){try{toast('开始检查…');const j=await api('/api/health/check','POST');toast(j.message);const poll=setInterval(async()=>{try{const s=await api('/api/health/status');fillHealthCfg();if(!s.running){clearInterval(poll);if(TAB==='节点')loadProxies()}}catch(e){clearInterval(poll)}},3000)}catch(e){toast(e.message)}}
 async function loadHistory(){try{const h=await api('/api/history');
-  $('#hist').innerHTML=h.map(x=>`<div class="row ev" style="padding:6px 0"><span class="mut" style="min-width:118px">${new Date(x.t*1000).toLocaleString('zh-CN',{hour12:false,month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</span><span class="sp">修改前：${x.changed.map(esc).join('、')}</span><button class="btn g sm" onclick="restoreHist('${x.id}')">恢复</button></div>`).join('')||'<span class="mut">还没有快照</span>'}catch(e){}}
+  $('#hist').innerHTML=h.map(x=>`<div class="row ev" style="padding:6px 0"><span class="mut" style="min-width:118px">${new Date(x.t*1000).toLocaleString('zh-CN',{hour12:false,month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</span><span class="sp">修改前：${x.changed.map(esc).join('、')}</span><button class="btn g sm" onclick="restoreHist(${jsq(x.id)})">恢复</button></div>`).join('')||'<span class="mut">还没有快照</span>'}catch(e){}}
 async function restoreHist(id){if(!confirm('恢复到这份快照？当前设置会先保存为新快照。'))return;try{toast('正在校验并应用…');const j=await api('/api/history','POST',{id});toast(j.message);await loadState();renderSettings()}catch(e){toast(e.message)}}
 async function loadLogInfo(){try{const j=await api('/api/logs/info');$('#log-sizes').innerHTML=j.files.map(f=>`<div class="row" style="padding:3px 0"><span class="sp mut" style="font-family:ui-monospace,Menlo,monospace;font-size:12px">${esc(f.path)}</span><b>${f.size<0?'不存在':fmt(f.size)}</b></div>`).join('')}catch(e){}}
 async function cleanLogs(){try{const j=await api('/api/logs/clean','POST');toast(j.message);loadLogInfo()}catch(e){toast(e.message)}}
@@ -1612,7 +1615,7 @@ async function saveRS(rs){try{toast('正在应用…');await api('/api/settings'
 function delRS(i){const r=STATE.rulesets.slice();r.splice(i,1);saveRS(r)}
 async function renderRS(){$('#rs-target').innerHTML=$('#r-target').innerHTML;let prov={};try{prov=(await core('/providers/rules')).providers||{}}catch(e){}
   $('#rulesets').innerHTML=STATE.rulesets.map((r,i)=>{const p=prov[r.name]||{};return `<tr><td>${esc(r.name)}<div class="mut w" style="font-size:11px;max-width:360px">${esc(r.url)}</div></td><td>${esc(r.behavior)}/${esc(r.format)}</td><td>${esc(r.target)}</td>
-    <td>${p.ruleCount??'-'}</td><td><button class="btn g sm" onclick="updRS('${encodeURIComponent(r.name)}')">更新</button></td><td><button class="btn r sm" onclick="delRS(${i})">删除</button></td></tr>`}).join('')||'<tr><td class="mut">暂无规则集</td></tr>'}
+    <td>${p.ruleCount??'-'}</td><td><button class="btn g sm" onclick="updRS(${jsq(encodeURIComponent(r.name))})">更新</button></td><td><button class="btn r sm" onclick="delRS(${i})">删除</button></td></tr>`}).join('')||'<tr><td class="mut">暂无规则集</td></tr>'}
 async function updRS(n){try{await core('/providers/rules/'+n,'PUT');toast('已更新');renderRS()}catch(e){toast(e.message)}}
 
 // 设置扩展
@@ -1656,8 +1659,8 @@ async function loadBackups(){
       return '<div class="row" style="padding:6px 0;border-bottom:1px solid var(--line)">'+
         '<span class="sp"><b>v'+esc(b.version)+'</b> <span class="mut small">'+esc(b.name)+'</span><br>'+
         '<span class="mut small">'+fmtTime(b.mtime)+' · '+fmtSize(b.size)+'</span></span>'+
-        '<button class="btn g sm" onclick="restoreBackup(\''+b.name+'\')">恢复</button>'+
-        '<button class="btn r sm" onclick="delBackup(\''+b.name+'\')">删除</button></div>';
+        '<button class="btn g sm" onclick="restoreBackup('+jsq(b.name)+')">恢复</button>'+
+        '<button class="btn r sm" onclick="delBackup('+jsq(b.name)+')">删除</button></div>';
     }).join("");
   }catch(e){el.innerHTML='<span class="mut">加载失败</span>'}
 }

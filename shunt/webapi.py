@@ -43,7 +43,7 @@ from .dnsleak import antileak_dns, dns_route, leak_check
 from .https import gen_cert, restart_self
 from .access import acl_cfg, host_name, host_ok, ip_is_lan
 from .update_guard import group_meta, rename_policy
-from .validate import clean_fields, rename_sub_clashes
+from .validate import clean_fields, rename_sub_clashes, sub_name_clash
 from .static import MANIFEST, STATIC_TYPES, static_file
 ROUTES = {}  # (方法, 路径) → H 的处理函数；api() 先处理前缀 / 条件路由，再查这张表
 
@@ -1191,6 +1191,9 @@ class H(BaseHTTPRequestHandler):
             url = unmask(url, cur.get("url"), mask_url)
         if not name or not url.startswith("http"):
             return self.send(400, {"message": "名称或订阅链接无效"})
+        other = sub_name_clash(name, [s.get("name") for s in load()["subs"] if isinstance(s, dict) and s.get("name")])
+        if other:  # 「机场 A」和「机场_A」会共用 ./providers/<名>.yaml 和 sing-box 节点缓存，互相覆盖
+            return self.send(400, {"message": f"与已有订阅「{other}」只差符号，会共用同一个缓存文件，请改个名字"})
         flt, exc = (b.get("filter") or "").strip(), (b["exclude"] if "exclude" in b else DEFAULT_EXCLUDE).strip()
         for pat in (flt, exc):
             try:

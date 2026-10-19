@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "8.3.10"
+PANEL_VERSION = "8.3.11"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -334,7 +334,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "8.3.10"
+PANEL_VERSION = "8.3.11"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -1308,7 +1308,7 @@ def clean_custom_group(b):
     return g
 '''
 _SRC['shunt.mihomo'] = '''"""生成配置"""
-import ipaddress, json, os, re
+import ipaddress, json, os, re, threading
 
 from .base import (
     AUTO_ORDER, BUILTIN_POLICIES, CN_APP_DOMAINS, CONF_DIR, CTRL_HOST, CTRL_PORT, DEFAULT_EXCLUDE, DNS_DEFAULT, DNS_LISTS, DOH_DOMAINS, DOH_IPS, G_AI,
@@ -1743,9 +1743,26 @@ def bad_rule_policies(rules, d):
 def write_config(d, path=None):
     os.makedirs(os.path.join(CONF_DIR, "providers"), exist_ok=True)
     path = path or os.path.join(CONF_DIR, "config.yaml")
-    with open(path, "w") as f:  # JSON 是 YAML 的子集，mihomo 可直接读取
-        json.dump(build_config(d), f, ensure_ascii=False, indent=2)
+    write_atomic(path, build_config(d))  # JSON 是 YAML 的子集，mihomo 可直接读取
     return path
+
+
+def write_atomic(path, obj):
+    """先生成内容、写临时文件再改名：生成配置抛异常或写到一半断电时，原来的配置文件保持完整。
+    以前先 open(path, "w") 截断再生成，build 一出错（坏数据 / 回滚时旧数据也生成不了）正式配置就变成空文件，核心起不来"""
+    text = json.dumps(obj, ensure_ascii=False, indent=2)
+    tmp = f"{path}.tmp{os.getpid()}-{threading.get_ident()}"
+    try:
+        with open(tmp, "w") as f:
+            f.write(text)
+        try:  # 沿用原文件权限（以前是原地覆盖，权限不变）
+            os.chmod(tmp, os.stat(path).st_mode & 0o777)
+        except OSError:
+            pass
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
 
 
 def mh_bin(kind=None):
@@ -1871,6 +1888,12 @@ def clean_rules(v):
         if x:
             out.append(x)
     return out
+
+
+def sub_name_clash(name, others):
+    """订阅名只差符号（「机场 A」和「机场_A」）时会共用同一个节点缓存文件，互相覆盖：返回冲突的那个名字"""
+    k = safe(name)
+    return next((o for o in others if o != name and safe(o) == k), None)
 
 
 def rename_sub_clashes(subs):
@@ -2450,6 +2473,38 @@ def _y_flow(s, i=0):
     return scalar(i, "")
 
 
+FLOW_MAX = 200  # 一个流式集合最多跨这么多行，超过就当它没闭合，不再往后吞
+
+
+def _y_depth(s):
+    """括号深度变化：引号里的不算（引号只在值的开头才算引号，Bob's 这种普通文字里的撇号不算）"""
+    q, n, prev = None, 0, ","
+    for i, ch in enumerate(s):
+        if q:
+            if ch == q and (q == "'" or s[i - 1] != "\\\\"):
+                q, prev = None, ch
+            continue
+        if ch in "'\\"" and prev in "{[,:":
+            q = ch
+        elif ch in "{[":
+            n += 1
+        elif ch in "}]":
+            n -= 1
+        if ch not in " \\t":
+            prev = ch
+    return n
+
+
+_FLOW_KEY = re.compile(r"""^\\s*(?:-\\s+)*(?:(?:"(?:[^"\\\\]|\\\\.)*"|'[^']*'|[^\\s'"{}\\[\\],:#-][^:#]*?|-[^\\s:#][^:#]*?)\\s*:\\s+)?""")
+
+
+def _y_flow_start(c):
+    """行内流式集合（{..} / [..]）开始的位置：「- {a: 1}」「key: [a, b]」「[a]」；没有返回 -1"""
+    m = _FLOW_KEY.match(c)
+    i = m.end() if m else 0
+    return i if c[i:i + 1] in ("{", "[") else -1
+
+
 def yaml_lite(text):
     """块状 / 流式映射与列表、引号字符串、注释；不支持锚点等高级语法"""
     raw = []
@@ -2457,17 +2512,26 @@ def yaml_lite(text):
         if line.strip() in ("---", "...") or not line.strip() or line.lstrip().startswith("#"):
             continue
         raw.append(line)
-    lines, buf = [], ""
+    lines, buf, depth, nbuf = [], "", 0, 0
     for line in raw:  # 跨行的流式集合合并成一行
-        buf = buf + " " + line.strip() if buf else line
-        c = _y_strip_comment(buf)
-        depth = sum(1 for ch in c if ch in "{[") - sum(1 for ch in c if ch in "}]")
-        if depth <= 0:
-            lines.append((len(c) - len(c.lstrip(" ")), c.strip()))
+        c = _y_strip_comment(line)
+        if buf:
+            buf += " " + c.strip()
+            depth += _y_depth(c)
+            nbuf += 1
+        else:
+            st = _y_flow_start(c)
+            if st < 0:  # 这一行没有流式集合（块状写法里的 HK[01 之类不算括号）
+                lines.append((len(c) - len(c.lstrip(" ")), c.strip()))
+                continue
+            buf, depth, nbuf = c, _y_depth(c[st:]), 1
+        # 以前每行都对整段已合并的内容重新去注释、数括号，且引号里的 [ 也计数：
+        # 一个节点名带「[」就让后面所有行并成一行，2000 个节点要十几秒（平方级）。现在逐行累计，最多合并 FLOW_MAX 行
+        if depth <= 0 or nbuf >= FLOW_MAX:
+            lines.append((len(buf) - len(buf.lstrip(" ")), buf.strip()))
             buf = ""
     if buf:
-        c = _y_strip_comment(buf)
-        lines.append((len(c) - len(c.lstrip(" ")), c.strip()))
+        lines.append((len(buf) - len(buf.lstrip(" ")), buf.strip()))
 
     def split_kv(t):
         if t[:1] in "'\\"":
@@ -2553,6 +2617,7 @@ from .sysopt import proxy_opener
 from .notify import core_alive
 
 _DEBUG_LOCK = threading.Lock()  # sub-debug.txt 并发写保护
+SUBS_WAIT = 180  # 并发更新订阅整体最多等这么多秒
 
 
 def _yaml_full(text):
@@ -2644,15 +2709,19 @@ def parse_sub_text(text, fetch=None, depth=0):
     if t.startswith("{"):
         try:
             j = json.loads(t)
-            if isinstance(j.get("outbounds"), list):
-                return [{"_sb": o, "name": o.get("tag"), "type": o.get("type")} for o in j["outbounds"]
-                        if o.get("type") not in ("selector", "urltest", "direct", "block", "dns") and o.get("tag") and o.get("server")], []
+            if isinstance(j, dict) and isinstance(j.get("outbounds"), list):
+                # outbounds 里混了非对象元素时以前 o.get 抛 AttributeError（只捕获了 ValueError），整个订阅更新失败；tag 统一成文本
+                return [{"_sb": o, "name": str(o["tag"]), "type": o.get("type")} for o in j["outbounds"]
+                        if isinstance(o, dict) and o.get("type") not in ("selector", "urltest", "direct", "block", "dns")
+                        and o.get("tag") and o.get("server")], []
         except ValueError:
             pass
     if re.search(r"(?m)^[\\"']?(proxies|proxy-providers)[\\"']?\\s*:", t):
         y = sub_yaml(t)
         ps = y.get("proxies") if isinstance(y.get("proxies"), list) else []
-        out = [p for p in ps if isinstance(p, dict) and p.get("name") and p.get("type")]
+        # 名称统一成文本：YAML 里 name: 2024 会解析成数字，后面的筛选正则 / 去重遇到数字会抛 TypeError，整个订阅更新失败
+        out = [dict(p, name=str(p["name"]).strip()) for p in ps
+               if isinstance(p, dict) and p.get("name") not in (None, "") and p.get("type") and str(p["name"]).strip()]
         errs = []
         pv = y.get("proxy-providers") if isinstance(y.get("proxy-providers"), dict) else {}
         # 聚合配置：mihomo 自己会去拉 proxy-providers，sing-box 不会，这里由面板逐个下载展开
@@ -2784,10 +2853,14 @@ def sb_update_subs(names=None, d=None):
     ths = [threading.Thread(target=one, args=(s,)) for s in subs]
     for t in ths:
         t.start()
+    end = time.time() + SUBS_WAIT  # 整体最多等 SUBS_WAIT 秒（以前逐个 join(180)，几个订阅都卡住时要等 N×180 秒）
     for t in ths:
-        t.join(180)
+        t.join(max(0.1, end - time.time()))
+    with res_lock:  # 超时还没结束的线程之后再写结果也不影响这里返回的快照
+        ok_out = list(ok)
+        bad_out = list(bad) + [f"{s['name']}：下载超时" for s, t in zip(subs, ths) if t.is_alive()]
     PROV.update(t=0, data=None)
-    return ok, bad
+    return ok_out, bad_out
 
 
 '''
@@ -3268,7 +3341,7 @@ from .base import (
 from .errlog import log_err
 from .data import auto_name, lb_dropped_names, lb_names, lb_old_name, load, safe, write_json
 from .groups import PROV, gcfg, rx
-from .mihomo import BUILTIN_GEO, build_config, build_rule_providers, dns_cfg, policy_parts, tun_params, write_config
+from .mihomo import BUILTIN_GEO, build_config, build_rule_providers, dns_cfg, policy_parts, tun_params, write_atomic, write_config
 from .corehttp import core_json
 from .sb_common import CORE_PID, SB_BIN, SB_CONF, SB_DIR, SB_RULE_DIR, SB_STATE, active_core
 from .sb_yaml import yaml_lite
@@ -3779,8 +3852,7 @@ def write_sb_config(d, path=None):
     conf, warn, _ = build_singbox(d)
     SB_STATE["warn"] = warn
     path = path or SB_CONF
-    with open(path, "w") as f:
-        json.dump(conf, f, ensure_ascii=False, indent=2)
+    write_atomic(path, conf)
     return path
 
 
@@ -3946,7 +4018,7 @@ from .mihomo import check_config, dns_cfg, mh_bin, write_config
 from .sb_common import CORES, SB_API, SB_BIN, SB_CONF, SB_REPO, SB_STATE, active_core, write_core_file
 from .sb_subs import sb_update_subs
 from .sb_config import check_sb_config, sb_sync_assets, sb_version, write_sb_config
-from .core_update import LGBM_FILE, _cu, bin_version, lgbm_fetch, mh_fetch, open_url, release_digest
+from .core_update import LGBM_FILE, _cu, bin_version, copy_replace, lgbm_fetch, mh_fetch, open_url, release_digest
 from .sysopt import sh, svc_restart
 from .notify import core_alive, notify, set_manual_stop
 from .migrate import restore_selections, snapshot_selections
@@ -4172,7 +4244,7 @@ def sb_update_job(channel, gh, force=False):
         if active_core() == "singbox":
             ok, err = check_sb_config(SB_CONF)
             if not ok:
-                shutil.copy2(SB_BIN + ".bak", SB_BIN)
+                copy_replace(SB_BIN + ".bak", SB_BIN)
                 raise ValueError("新版 sing-box 不兼容当前配置，已恢复原版本：" + err)
             _cu("重启核心", 85, "正在重启核心")
             svc_restart(timeout=90)
@@ -4181,7 +4253,7 @@ def sb_update_job(channel, gh, force=False):
                 if core_alive():
                     break
             else:
-                shutil.copy2(SB_BIN + ".bak", SB_BIN)
+                copy_replace(SB_BIN + ".bak", SB_BIN)
                 svc_restart(timeout=90)
                 raise ValueError("新版 sing-box 30 秒内未响应，已恢复原版本")
         CORE_UPD.update(ok=True, message=f"sing-box 已从 {cur or '未安装'} 更新到 {nv}" + ("，旧版本已备份" if cur else ""))
@@ -4290,6 +4362,20 @@ def self_rollback():
     return True, "已回滚到更新前的版本，面板正在重启"
 
 
+def _undo_replace(done, bak):
+    """面板更新替换到一半失败：已替换的文件从 .backup 放回，更新前没有的（新增的）删掉"""
+    for f in done:
+        dst, src = local_file(f), os.path.join(bak, f)
+        try:
+            if os.path.isfile(src):
+                shutil.copy2(src, dst + ".new")
+                os.replace(dst + ".new", dst)
+            else:  # 新增的文件：删掉
+                os.remove(dst)
+        except OSError as e:
+            log_err("面板更新失败后恢复 " + f, e)
+
+
 def remote_version(src):
     m = re.search(rb'^PANEL_VERSION = "([^"]+)"', src, re.M)
     return m.group(1).decode() if m else "?"
@@ -4353,12 +4439,23 @@ def self_update(apply=False, gh=""):
                 log_err("面板在线更新", "更新前自动备份失败：%s" % name)
         except Exception as e:
             log_err("面板在线更新：更新前自动备份异常", e)
-        for f in changed:
-            dst = local_file(f)
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            shutil.copyfile(os.path.join(tmpd, f), dst + ".new")
-            os.chmod(dst + ".new", 0o755 if (f.endswith(".sh") or f.startswith("init.d/")) else 0o644)
-            os.replace(dst + ".new", dst)
+        done = []
+        try:
+            for f in changed:
+                dst = local_file(f)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copyfile(os.path.join(tmpd, f), dst + ".new")
+                os.chmod(dst + ".new", 0o755 if (f.endswith(".sh") or f.startswith("init.d/")) else 0o644)
+                os.replace(dst + ".new", dst)
+                done.append(f)
+        except Exception as e:
+            # 替换到一半失败（磁盘满、只读等）：已替换的文件放回旧版，不留下「新 server.py + 旧 index.html」这样的混合版本
+            try:
+                os.remove(local_file(f) + ".new")
+            except OSError:
+                pass
+            _undo_replace(done, bak)
+            raise ValueError(f"替换文件失败，已恢复原文件：{e}")
         shutil.rmtree(tmpd, ignore_errors=True)
         start_update_guard(flist)
         restart_self()
@@ -4426,11 +4523,12 @@ def _parse_name(name):
     return m.group(1) if m else None
 
 
-def create(version=None, auto=False):
+def create(version=None, auto=False, keep=None):
     """创建备份。返回 (ok, name_or_message)。
 
     version: 打上的版本号，默认当前 PANEL_VERSION。
     auto: 是否自动备份（更新前调用），失败不抛异常。
+    keep: 清理旧备份时必须保留的文件名（恢复时保住正要恢复的那个）。
     """
     version = version or PANEL_VERSION
     try:
@@ -4459,7 +4557,7 @@ def create(version=None, auto=False):
             except OSError:
                 pass
             raise
-        cleanup()
+        cleanup(protect=keep)
         return True, name
     except Exception as e:
         # 自动备份失败不阻断调用方
@@ -4507,10 +4605,11 @@ def delete(name):
         return False, str(e)
 
 
-def cleanup(keep=KEEP_N):
-    """只保留最近 keep 个，删除最旧的。"""
-    items = list()
-    for it in items[keep:]:
+def cleanup(keep=KEEP_N, protect=None):
+    """只保留最近 keep 个，删除最旧的（protect 指定的文件不删）。"""
+    allb = list()
+    items = [it for it in allb if it["name"] != protect]
+    for it in items[keep - (len(allb) - len(items)):]:
         try:
             os.unlink(os.path.join(BACKUP_DIR, it["name"]))
         except OSError:
@@ -4554,8 +4653,8 @@ def restore(name, check_data=None, apply_data=None):
                         new_data = check_data(raw)
                     except ValueError as e:
                         return False, "备份里的设置无效，未恢复（当前设置未改动）：%s" % e
-                # 防呆：先备份当前
-                ok, cur = create()
+                # 防呆：先备份当前。已有 10 个备份时新备份会挤掉最旧的一个——恰好是要恢复的这个时以前会把它删掉
+                ok, cur = create(keep=name)
                 if not ok:
                     return False, "备份当前版本失败，中止恢复：%s" % cur
                 # 搬文件
@@ -4907,10 +5006,18 @@ def _core_swap_and_restart(src, label, kind="mihomo"):
             return True, ""
     if had_old and src != bak:  # 新核心起不来 → 自动恢复
         _cu("自动回滚", 95, "新核心 30 秒内未响应，正在恢复原核心")
-        shutil.copy2(bak, B)
+        copy_replace(bak, B)
         svc_restart(timeout=90)
         return False, "新核心启动失败，已自动恢复为原核心。日志：" + sh(f"tail -n 5 '{MIHOMO_LOG}'")[1][-300:]
     return False, "核心重启后 30 秒内未响应，请查看日志"
+
+
+def copy_replace(src, dst):
+    """复制到临时文件再改名替换：dst 可能是正在运行（卡住 / 反复重启）的程序，直接覆盖写会因 ETXTBSY（Text file busy）失败，
+    回滚恰恰在新程序起不来时发生，以前这一步失败会让回滚落空"""
+    tmp = dst + ".rb"
+    shutil.copy2(src, tmp)
+    os.replace(tmp, dst)
 
 
 def mh_fetch(kind, channel, gh, prog=None):
@@ -5239,7 +5346,8 @@ def opt_items():
          "sysctl": {"net.netfilter.nf_conntrack_max": ct, "net.netfilter.nf_conntrack_tcp_timeout_established": 7200,
                     "net.netfilter.nf_conntrack_udp_timeout": 60, "net.netfilter.nf_conntrack_udp_timeout_stream": 180}},
         {"id": "fd", "name": "文件句柄上限", "rec": True, "ok": nof > 1024, "why": "本机文件句柄硬上限只有 1024，需在宿主机上调高",
-         "desc": f"mihomo 可同时打开的连接数从 1024 提高到 {nof}，设备多或 BT 下载时不再报 too many open files（下次重启核心生效）",
+         "desc": f"核心可同时打开的连接数固定为 {nof}，并提高系统总句柄数，设备多或 BT 下载时不再报 too many open files（下次重启核心生效）。"
+                 "未开启时启动脚本也会按本机硬上限给核心兜底，不会停在 1024",
          "sysctl": {"fs.file-max": 1048576, "fs.nr_open": 1048576}},
         {"id": "rps", "name": "多核网络分流 (RPS)", "rec": ncpu > 1, "ok": rps_ok,
          "why": "单核 CPU 无需开启" if ncpu <= 1 else "未找到物理网卡" if not rpsq else f"网卡参数只读，请在{host}上设置",
@@ -5308,16 +5416,27 @@ def opt_status():
     return {"items": out, "mem": mem_mb(), "cpu": os.cpu_count() or 1, "kernel": os.uname().release, "container": in_container()}
 
 
-def opt_migrate_confd():
-    """服务改名后把旧 conf.d/mihomo 里的 rc_ulimit 搬到 conf.d/shunt-core（已迁移的设备每次面板启动时补一次）"""
+def opt_migrate_confd(on=None):
+    """服务改名后把旧 conf.d/mihomo 里的 rc_ulimit 搬到 conf.d/shunt-core（已迁移的设备每次面板启动时补一次）。
+    只在「系统优化」里文件句柄开着（data.sysopt 含 fd）时才搬；旧文件里的 rc_ulimit 行处理完就删掉（核心服务已不读它）。
+    以前不删也不看开关：用户关掉文件句柄后，面板一重启又从旧文件搬回来，状态页显示「已生效」"""
     if OPT_CONFD == OPT_CONFD_OLD:
         return False
-    old, cur = rfile(OPT_CONFD_OLD), rfile(OPT_CONFD)
+    old = rfile(OPT_CONFD_OLD)
     m = re.search(r'^rc_ulimit="[^"\\n]*"', old, re.M)
-    if not m or re.search(r"^rc_ulimit=", cur, re.M):
+    if not m:
         return False
-    wfile(OPT_CONFD, (cur + ("" if not cur or cur.endswith("\\n") else "\\n")) + m.group(0) + "\\n")
-    return True
+    if on is None:
+        on = set(load().get("sysopt") or [])
+    cur, moved = rfile(OPT_CONFD), False
+    if "fd" in on and not re.search(r"^rc_ulimit=", cur, re.M):
+        os.makedirs(os.path.dirname(OPT_CONFD), exist_ok=True)
+        if not wfile(OPT_CONFD, (cur + "\\n" if cur else "") + m.group(0) + "\\n"):
+            return False  # 没搬成：旧文件先留着，下次再试
+        moved = True
+    rest = "\\n".join(ln for ln in old.splitlines() if not ln.startswith("rc_ulimit=")).strip()
+    wfile(OPT_CONFD_OLD, rest + "\\n" if rest else "")
+    return moved
 
 
 def opt_fix_ulimit():
@@ -5938,7 +6057,8 @@ def set_manual_stop(on):
 def wd_counts(events=None):
     """记录里的自动重启 / 切换直连 / 恢复次数"""
     c = {"restart": 0, "direct": 0, "recover": 0}
-    for e in (WD["events"] if events is None else events):
+    # list() 在 C 层一次拷完：直接遍历 deque 时看门狗线程 appendleft 会抛「deque mutated during iteration」，/api/state 偶发 500
+    for e in list(WD["events"] if events is None else events):
         k = e.get("kind")
         if k in c:
             c[k] += 1
@@ -6108,6 +6228,29 @@ def watchdog_tick():
     if WD["manual_stop"]:
         WD["status"] = "stopped"
         return
+    # core_alive_confirmed 最长要二十多秒，这期间可能开始了热重载（SIGHUP，设置 WD_HOLD）/ 内核更新 / 用户点了停止：
+    # 只在 tick 开头查一次的话，会把重载中短暂不通的核心当成卡死，SIGQUIT 杀掉（Fake-IP 映射来不及写进 cache.db）再重启
+    if _wd_yield():
+        return
+    # 拿服务锁再动手（重启、SIGQUIT 现场、撤透明代理）：拿不到说明面板 / 定时任务正在启停核心，这一轮跳过
+    if not SVC_OP.acquire(blocking=False):
+        return
+    try:
+        if _wd_yield():  # 拿锁前的瞬间可能刚开始重载 / 刚被手动停止
+            return
+        _wd_fail(d, cname)
+    finally:
+        SVC_OP.release()
+
+
+def _wd_yield():
+    """看门狗该让路：内核更新中、面板正在重启 / 重载核心（WD_HOLD）、核心被手动停止"""
+    return bool(CORE_UPD["busy"]) or time.time() < WD_HOLD["until"] or bool(WD["manual_stop"])
+
+
+def _wd_fail(d, cname):
+    """确认核心无响应后的处理（调用方已持有 SVC_OP）：前 2 次自动重启，之后撤透明代理直连，每 5 分钟再试一次"""
+    redirecting = d["proxy_mode"] != "off"
     WD["fails"] += 1
     if WD["fails"] <= 2:
         WD["status"] = "restarting"
@@ -8962,7 +9105,7 @@ from .dnsleak import antileak_dns, dns_route, leak_check
 from .https import gen_cert, restart_self
 from .access import acl_cfg, host_name, host_ok, ip_is_lan
 from .update_guard import group_meta, rename_policy
-from .validate import clean_fields, rename_sub_clashes
+from .validate import clean_fields, rename_sub_clashes, sub_name_clash
 from .static import MANIFEST, STATIC_TYPES, static_file
 ROUTES = {}  # (方法, 路径) → H 的处理函数；api() 先处理前缀 / 条件路由，再查这张表
 
@@ -10110,6 +10253,9 @@ class H(BaseHTTPRequestHandler):
             url = unmask(url, cur.get("url"), mask_url)
         if not name or not url.startswith("http"):
             return self.send(400, {"message": "名称或订阅链接无效"})
+        other = sub_name_clash(name, [s.get("name") for s in load()["subs"] if isinstance(s, dict) and s.get("name")])
+        if other:  # 「机场 A」和「机场_A」会共用 ./providers/<名>.yaml 和 sing-box 节点缓存，互相覆盖
+            return self.send(400, {"message": f"与已有订阅「{other}」只差符号，会共用同一个缓存文件，请改个名字"})
         flt, exc = (b.get("filter") or "").strip(), (b["exclude"] if "exclude" in b else DEFAULT_EXCLUDE).strip()
         for pat in (flt, exc):
             try:
@@ -10618,24 +10764,28 @@ from .webapi import H
 def tp_env():
     """供 tproxy.sh eval：绕过列表、IPv6 开关、本机 IPv6 网段（值均经过正则过滤）"""
     d = load()
-    items = [x.strip() for x in d["bypass"] if x.strip()]
-    macs = [x.lower().replace("-", ":") for x in items if re.fullmatch(r"([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}", x)]
+    items = [x.strip() for x in d["bypass"] if isinstance(x, str) and x.strip()]
+    macs = list(dict.fromkeys(x.lower().replace("-", ":") for x in items if re.fullmatch(r"([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}", x)))
     ips, ip6s = [], []
     for x in items:
         try:
             n = ipaddress.ip_network(x, strict=False)
-            (ips if n.version == 4 else ip6s).append(str(n))
+            (ips if n.version == 4 else ip6s).append(n)
         except ValueError:
             pass
+    # nftables 的 interval 集合不接受重叠 / 重复的元素（192.168.1.0/24 和 192.168.1.5 同时在列表里会报 conflicting intervals，
+    # 整份透明代理规则加载失败），先合并
+    ips, ip6s = [str(n) for n in ipaddress.collapse_addresses(ips)], [str(n) for n in ipaddress.collapse_addresses(ip6s)]
     local6 = []
     _, out = sh("ip -o -6 addr show scope global 2>/dev/null")
     for m in re.finditer(r"inet6 ([0-9a-fA-F:]+/\\d+)", out):
         try:
-            local6.append(str(ipaddress.ip_interface(m.group(1)).network))
+            local6.append(ipaddress.ip_interface(m.group(1)).network)
         except ValueError:
             pass
+    local6 = [str(n) for n in ipaddress.collapse_addresses(local6)]
     return (f"B_IP='{','.join(ips)}'\\nB_MAC='{','.join(macs)}'\\nB_IP6='{','.join(ip6s)}'\\n"
-            f"LOCAL6='{','.join(sorted(set(local6)))}'\\nIPV6={1 if d.get('ipv6') else 0}\\nTPROXY={1 if d.get('tproxy') else 0}\\n"
+            f"LOCAL6='{','.join(local6)}'\\nIPV6={1 if d.get('ipv6') else 0}\\nTPROXY={1 if d.get('tproxy') else 0}\\n"
             f"MODE={d['proxy_mode']}\\nDNS_ALL={1 if dns_cfg(d)['block_bypass'] else 0}")
 
 

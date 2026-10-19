@@ -80,7 +80,7 @@ function renderGroups(){
       <button class="btn g sm" onclick="event.stopPropagation();testGroup(${i},this)">测速</button></div>
       <div class="gbody"><div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(min(100%,178px),1fr));gap:10px">${allH.map(n=>{const j=all0.indexOf(n),d=lastDelay(n),sg=isGroup(n);
         const s2=sg?`<div class="sub2">${esc(GT[PROXIES[n].type]||'')}${PROXIES[n].now?' → '+esc(PROXIES[n].now):''}</div>`:'';
-        const unh=hLevel(n)==='hidden'?`<button class="btn g sm" onclick="event.stopPropagation();unhideNode('${esc(n).replace(/'/g,"\\'")}')">取消隐藏</button>`:'';
+        const unh=hLevel(n)==='hidden'?`<button class="btn g sm" onclick="event.stopPropagation();unhideNode(${jsq(n)})">取消隐藏</button>`:'';
         return `<div class="node ${n===p.now&&!lb?'sel':''} ${lb?'lbm':''}" onclick="pick(${i},${j})" title="${esc(n)}">
         <div class="n">${hIcon(n)}${sg?'📁 ':''}${esc(n)}</div>${s2}<div class="d"><span class="mut">${esc(sg?'分组':PROXIES[n]?.type||'')}</span> <span class="${dcls(d)}">${dtxt(d)}</span></div>${unh}</div>`}).join('')}</div></div></div>`}).join('')||(filt?'<div class="card mut">没有匹配的节点</div>':'<div class="card mut">还没有节点，先去“订阅”添加订阅或导入节点</div>');
   $('#hidedead').classList.toggle('on',HIDEDEAD);$('#hidedead').textContent=HIDEDEAD?'显示超时':'隐藏超时';

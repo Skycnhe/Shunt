@@ -13,8 +13,8 @@ async function loadBackups(){
       return '<div class="row" style="padding:6px 0;border-bottom:1px solid var(--line)">'+
         '<span class="sp"><b>v'+esc(b.version)+'</b> <span class="mut small">'+esc(b.name)+'</span><br>'+
         '<span class="mut small">'+fmtTime(b.mtime)+' · '+fmtSize(b.size)+'</span></span>'+
-        '<button class="btn g sm" onclick="restoreBackup(\''+b.name+'\')">恢复</button>'+
-        '<button class="btn r sm" onclick="delBackup(\''+b.name+'\')">删除</button></div>';
+        '<button class="btn g sm" onclick="restoreBackup('+jsq(b.name)+')">恢复</button>'+
+        '<button class="btn r sm" onclick="delBackup('+jsq(b.name)+')">删除</button></div>';
     }).join("");
   }catch(e){el.innerHTML='<span class="mut">加载失败</span>'}
 }

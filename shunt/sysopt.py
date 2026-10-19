@@ -168,7 +168,8 @@ def opt_items():
          "sysctl": {"net.netfilter.nf_conntrack_max": ct, "net.netfilter.nf_conntrack_tcp_timeout_established": 7200,
                     "net.netfilter.nf_conntrack_udp_timeout": 60, "net.netfilter.nf_conntrack_udp_timeout_stream": 180}},
         {"id": "fd", "name": "文件句柄上限", "rec": True, "ok": nof > 1024, "why": "本机文件句柄硬上限只有 1024，需在宿主机上调高",
-         "desc": f"mihomo 可同时打开的连接数从 1024 提高到 {nof}，设备多或 BT 下载时不再报 too many open files（下次重启核心生效）",
+         "desc": f"核心可同时打开的连接数固定为 {nof}，并提高系统总句柄数，设备多或 BT 下载时不再报 too many open files（下次重启核心生效）。"
+                 "未开启时启动脚本也会按本机硬上限给核心兜底，不会停在 1024",
          "sysctl": {"fs.file-max": 1048576, "fs.nr_open": 1048576}},
         {"id": "rps", "name": "多核网络分流 (RPS)", "rec": ncpu > 1, "ok": rps_ok,
          "why": "单核 CPU 无需开启" if ncpu <= 1 else "未找到物理网卡" if not rpsq else f"网卡参数只读，请在{host}上设置",
@@ -237,16 +238,27 @@ def opt_status():
     return {"items": out, "mem": mem_mb(), "cpu": os.cpu_count() or 1, "kernel": os.uname().release, "container": in_container()}
 
 
-def opt_migrate_confd():
-    """服务改名后把旧 conf.d/mihomo 里的 rc_ulimit 搬到 conf.d/shunt-core（已迁移的设备每次面板启动时补一次）"""
+def opt_migrate_confd(on=None):
+    """服务改名后把旧 conf.d/mihomo 里的 rc_ulimit 搬到 conf.d/shunt-core（已迁移的设备每次面板启动时补一次）。
+    只在「系统优化」里文件句柄开着（data.sysopt 含 fd）时才搬；旧文件里的 rc_ulimit 行处理完就删掉（核心服务已不读它）。
+    以前不删也不看开关：用户关掉文件句柄后，面板一重启又从旧文件搬回来，状态页显示「已生效」"""
     if OPT_CONFD == OPT_CONFD_OLD:
         return False
-    old, cur = rfile(OPT_CONFD_OLD), rfile(OPT_CONFD)
+    old = rfile(OPT_CONFD_OLD)
     m = re.search(r'^rc_ulimit="[^"\n]*"', old, re.M)
-    if not m or re.search(r"^rc_ulimit=", cur, re.M):
+    if not m:
         return False
-    wfile(OPT_CONFD, (cur + ("" if not cur or cur.endswith("\n") else "\n")) + m.group(0) + "\n")
-    return True
+    if on is None:
+        on = set(load().get("sysopt") or [])
+    cur, moved = rfile(OPT_CONFD), False
+    if "fd" in on and not re.search(r"^rc_ulimit=", cur, re.M):
+        os.makedirs(os.path.dirname(OPT_CONFD), exist_ok=True)
+        if not wfile(OPT_CONFD, (cur + "\n" if cur else "") + m.group(0) + "\n"):
+            return False  # 没搬成：旧文件先留着，下次再试
+        moved = True
+    rest = "\n".join(ln for ln in old.splitlines() if not ln.startswith("rc_ulimit=")).strip()
+    wfile(OPT_CONFD_OLD, rest + "\n" if rest else "")
+    return moved
 
 
 def opt_fix_ulimit():
