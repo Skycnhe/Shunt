@@ -73,7 +73,8 @@ def set_manual_stop(on):
 def wd_counts(events=None):
     """记录里的自动重启 / 切换直连 / 恢复次数"""
     c = {"restart": 0, "direct": 0, "recover": 0}
-    for e in (WD["events"] if events is None else events):
+    # list() 在 C 层一次拷完：直接遍历 deque 时看门狗线程 appendleft 会抛「deque mutated during iteration」，/api/state 偶发 500
+    for e in list(WD["events"] if events is None else events):
         k = e.get("kind")
         if k in c:
             c[k] += 1
@@ -236,6 +237,29 @@ def watchdog_tick():
     if WD["manual_stop"]:
         WD["status"] = "stopped"
         return
+    # core_alive_confirmed 最长要二十多秒，这期间可能开始了热重载（SIGHUP，设置 WD_HOLD）/ 内核更新 / 用户点了停止：
+    # 只在 tick 开头查一次的话，会把重载中短暂不通的核心当成卡死，SIGQUIT 杀掉（Fake-IP 映射来不及写进 cache.db）再重启
+    if _wd_yield():
+        return
+    # 拿服务锁再动手（重启、SIGQUIT 现场、撤透明代理）：拿不到说明面板 / 定时任务正在启停核心，这一轮跳过（不计失败次数）
+    if not SVC_OP.acquire(blocking=False):
+        return
+    try:
+        if _wd_yield():  # 拿锁前的瞬间可能刚开始重载 / 刚被手动停止
+            return
+        _wd_fail(d, cname)
+    finally:
+        SVC_OP.release()
+
+
+def _wd_yield():
+    """看门狗该让路：内核更新中、面板正在重启 / 重载核心（WD_HOLD）、核心被手动停止"""
+    return bool(CORE_UPD["busy"]) or time.time() < WD_HOLD["until"] or bool(WD["manual_stop"])
+
+
+def _wd_fail(d, cname):
+    """确认核心无响应后的处理（调用方已持有 SVC_OP）：前 2 次自动重启，之后撤透明代理直连，每 5 分钟再试一次"""
+    redirecting = d["proxy_mode"] != "off"
     WD["fails"] += 1
     if WD["fails"] <= 2:
         WD["status"] = "restarting"
