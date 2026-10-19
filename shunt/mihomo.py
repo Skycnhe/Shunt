@@ -7,7 +7,7 @@ from .base import (
     TUN_DEFAULT, TUN_STACKS
 )
 from .data import LB_KINDS, auto_name, lb_name, region_label, safe
-from .devroute import device_route_rules, mark_applied
+from .devroute import device_route_rules, note_written
 from .groups import clean_custom_group, gcfg, group_opts, region_plan, rx
 from .ruleutil import DOMAIN_RX, adblock_providers, dns_policy_of, rule_policy_index
 from .sb_common import active_core
@@ -438,9 +438,10 @@ def bad_rule_policies(rules, d):
 
 def write_config(d, path=None):
     os.makedirs(os.path.join(CONF_DIR, "providers"), exist_ok=True)
-    path = path or os.path.join(CONF_DIR, "config.yaml")
+    final = os.path.join(CONF_DIR, "config.yaml")
+    path = path or final
     write_atomic(path, build_config(d))  # JSON 是 YAML 的子集，mihomo 可直接读取
-    mark_applied()
+    note_written(path, final)
     return path
 
 

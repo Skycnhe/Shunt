@@ -176,9 +176,36 @@ def _sig(mapping):
     return {m: list(v) for m, v in sorted(mapping.items())}
 
 
-def mark_applied():
-    """写入正式配置后调用：记下这份配置里 MAC → IP 的解析结果（落盘，开机时 --gen 进程写的面板进程也能读到）"""
+_PENDING = {}  # 临时配置文件路径 → 生成它时的 MAC 解析结果（校验通过、替换成正式配置后才算「已应用」）
+_PENDING_LOCK = threading.Lock()
+
+
+def note_written(path, final):
+    """配置写到 path 后调用：path 就是正式配置时直接记为已应用；临时 / 校验用文件先挂起，替换成正式配置时再 commit_applied。
+    以前写 .new / .chk 也记为已应用：校验失败的配置被当成已生效，这次 MAC 变化就不会再自动重载"""
     sig = STATE["last"]
+    if os.path.abspath(path) == os.path.abspath(final):
+        mark_applied(sig)
+        return
+    with _PENDING_LOCK:
+        _PENDING[path] = sig
+        while len(_PENDING) > 16:  # 校验失败 / 只做检查的临时文件不会 commit，只留最近几个
+            _PENDING.pop(next(iter(_PENDING)))
+
+
+def commit_applied(path):
+    """临时配置 path 已替换成正式配置：记下它生成时的解析结果"""
+    with _PENDING_LOCK:
+        if path not in _PENDING:
+            return
+        sig = _PENDING.pop(path)
+    mark_applied(sig)
+
+
+def mark_applied(sig=None):
+    """写入正式配置后调用：记下这份配置里 MAC → IP 的解析结果（落盘，开机时 --gen 进程写的面板进程也能读到）"""
+    if sig is None:
+        sig = STATE["last"]
     STATE.update(applied=sig, loaded=True)
     try:
         if sig or os.path.isfile(APPLIED_FILE):

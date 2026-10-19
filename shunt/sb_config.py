@@ -3,12 +3,12 @@ import ipaddress, json, os, re, shlex, signal, threading, time, urllib.request, 
 
 from .base import (
     AB_DIR, BUILTIN_POLICIES, CN_ECS, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, UA, dl_check, wd_hold)
-from .errlog import log_tail
+from .errlog import log_err, log_tail
 from .data import auto_name, lb_dropped_names, lb_names, lb_old_name, load, safe, write_json
 from .groups import PROV, gcfg, rx
 from .mihomo import BUILTIN_GEO, build_config, build_rule_providers, dns_cfg, policy_parts, tun_params, write_atomic, write_config
 from .corehttp import core_json
-from .devroute import mark_applied
+from .devroute import note_written
 from .sb_common import CORE_PID, SB_BIN, SB_CONF, SB_DIR, SB_RULE_DIR, SB_STATE, active_core
 from .sb_yaml import yaml_lite
 from .groups import sb_provider_nodes, sb_sub_cache, sb_sub_outbounds
@@ -99,20 +99,101 @@ def sb_node_outbounds(d, cfg, sub_out, warn):
         except ValueError as e:
             warn.append(f"节点「{p['name']}」：{e}，已跳过")
     skipped = 0
+    convs = {}
     for sname, lst in sub_out.items():
-        prov_names[sname] = []
+        conv = []
         for name, p in lst:
             try:
-                outbounds.append(sb_outbound(p, name))
-                prov_names[sname].append(name)
+                conv.append((name, p, sb_outbound(p, name)))
             except (ValueError, TypeError):
                 skipped += 1
+        convs[sname] = conv
+    # detour 可以指向本订阅以外、但在最终配置里存在的出站（手动节点、其他订阅的节点、策略组、DIRECT / direct）：保持不变
+    region_lb = {n for r, _ in REGIONS + [(G_OTHER, None)] for n in lb_names(r) + lb_dropped_names(r) + [lb_old_name(r)]}
+    base_known = set(node_names) | {g["name"] for g in cfg["proxy-groups"] if g["name"] not in region_lb} | {"DIRECT", "direct"}
+    all_sub = {name for conv in convs.values() for name, _, _ in conv}
+    dropped = {}
+    for sname, conv in convs.items():
+        mine = {name for name, _, _ in conv}
+        convs[sname], dropped[sname] = sb_fix_detour(conv, base_known | (all_sub - mine))
+    while True:  # 跨订阅：前置节点在别的订阅里被跳过的，依赖它的也跳过
+        gone = {n for v in dropped.values() for n in v}
+        more = False
+        for sname, conv in convs.items():
+            keep = [x for x in conv if not (x[2].get("detour") in gone and x[2]["detour"] not in base_known)]
+            if len(keep) != len(conv):
+                dropped[sname] += [x[0] for x in conv if x not in keep]
+                convs[sname] = keep
+                more = True
+        if not more:
+            break
+    for sname, conv in convs.items():
+        lost = dropped[sname]
+        if lost:
+            msg = f"订阅「{sname}」中 {len(lost)} 个节点的前置代理（detour）不存在，已跳过：" + "、".join(lost[:5]) + \
+                  ("…" if len(lost) > 5 else "")
+            warn.append(msg)
+            log_err("sing-box 订阅 detour", msg)
+        prov_names[sname] = [name for name, _, _ in conv]
+        outbounds += [o for _, _, o in conv]
+    if any(o.get("detour") == "direct" for o in outbounds):  # 订阅里常见的小写 direct：补一个同名直连出站，原样保留 detour
+        outbounds.append({"type": "direct", "tag": "direct"})
     if skipped:
         warn.append(f"订阅中有 {skipped} 个节点的协议 sing-box 不支持（如 ssr、snell、wireguard），已跳过")
     for s in d["subs"]:
         if not sb_sub_cache(s["name"]).get("updated"):
             warn.append(f"订阅「{s['name']}」还没有下载过节点")
     return outbounds, node_names, prov_names
+
+
+def sb_fix_detour(conv, known=()):
+    """sing-box JSON 订阅的节点可带 detour（前置代理，指向订阅里另一个节点的原 tag）。节点全局去重改名后原 tag 可能失效：
+    按「原 tag → 现名」重映射；指向本订阅以外、但在最终配置里存在的出站（known：DIRECT / direct、手动节点、其他订阅节点、策略组）
+    原样保留；哪里都不存在（被筛选 / 协议不支持 / 本来就没有）或成环时跳过该节点，保证整份配置能通过 check。
+    conv: [(现名, 原节点, outbound)]，返回 (保留的 conv, 跳过的节点名)"""
+    if not any(o.get("detour") for _, _, o in conv):
+        return conv, []
+    known = set(known)
+    tag_map = {}
+    for name, p, _ in conv:
+        orig = str(((p.get("_sb") or {}).get("tag")) or p.get("name") or "")
+        tag_map.setdefault(orig, name)
+    names = {name for name, _, _ in conv}
+    dep = {}
+    for name, p, o in conv:
+        det = o.get("detour")
+        if det:
+            det = str(det)
+            if det in tag_map:
+                tgt = tag_map[det]
+            elif det in names or det in known:
+                tgt = det
+            else:
+                tgt = None
+            if tgt is not None:
+                o["detour"] = tgt
+            dep[name] = tgt
+    bad = set()
+    changed = True
+    while changed:  # 前置节点被跳过的，依赖它的也跳过；成环的整环跳过
+        changed = False
+        for name, tgt in dep.items():
+            if name in bad:
+                continue
+            seen, cur = {name}, tgt
+            ok = tgt is not None
+            while ok and cur is not None:
+                if cur not in names:  # 本订阅以外的出站：上面已确认存在
+                    break
+                if cur in bad or cur in seen:
+                    ok = False
+                    break
+                seen.add(cur)
+                cur = dep.get(cur)
+            if not ok:
+                bad.add(name)
+                changed = True
+    return [x for x in conv if x[0] not in bad], [x[0] for x in conv if x[0] in bad]
 
 
 def sb_group_outbounds(cfg, gc, node_names, prov_names, warn):
@@ -361,6 +442,9 @@ def sb_ab_loaded(d):
     return out
 
 
+ASSETS_WAIT = 150  # 并发下载规则集整体最多等这么多秒
+
+
 def sb_sync_assets(d, force=False, need=None):
     """下载 / 转换 sing-box 需要的规则集文件；返回失败列表"""
     if need is None:
@@ -369,6 +453,7 @@ def sb_sync_assets(d, force=False, need=None):
     os.makedirs(SB_RULE_DIR, exist_ok=True)
     bad = []
     bad_lock = threading.Lock()
+    late = threading.Event()  # 整体超时后置位：仍卡着的线程迟到时不再写文件
 
     def one(tag, rsd):
         """单个规则集：下载 / 转换 / 写文件（每个规则集独立文件，线程间无冲突）"""
@@ -399,6 +484,8 @@ def sb_sync_assets(d, force=False, need=None):
                     break
             if data is None:
                 raise IOError(err or "下载失败")
+            if late.is_set():
+                return
             if rsd["kind"] in ("geo", "srs"):
                 if not data.startswith(b"SRS"):
                     raise ValueError("不是有效的 .srs 文件")
@@ -414,12 +501,16 @@ def sb_sync_assets(d, force=False, need=None):
             with bad_lock:
                 bad.append(f"{tag}：{e}")
 
-    ths = [threading.Thread(target=one, args=(tag, rsd)) for tag, rsd in need.items()]
+    items = list(need.items())
+    ths = [threading.Thread(target=one, args=(tag, rsd), daemon=True) for tag, rsd in items]
     for t in ths:
         t.start()
+    end = time.time() + ASSETS_WAIT  # 整体最多等 ASSETS_WAIT 秒（以前逐个 join(150)，几个都卡住时要等 N×150 秒）
     for t in ths:
-        t.join(150)
-    return bad
+        t.join(max(0.1, end - time.time()))
+    late.set()
+    with bad_lock:  # 返回快照：超时线程之后的结果不影响这里
+        return list(bad) + [f"{tag}：下载超时" for (tag, _), t in zip(items, ths) if t.is_alive()]
 
 
 def write_sb_config(d, path=None):
@@ -428,7 +519,7 @@ def write_sb_config(d, path=None):
     SB_STATE["warn"] = warn
     path = path or SB_CONF
     write_atomic(path, conf)
-    mark_applied()
+    note_written(path, SB_CONF)
     return path
 
 

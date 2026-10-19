@@ -165,14 +165,16 @@ def download(url, timeout=60, limit=40 << 20):
     raise IOError(err or "下载失败")
 
 
-def ab_fetch(lst):
-    """下载并转换一个列表，写入 <id>.txt / <id>.allow.txt，返回 meta"""
+def ab_fetch(lst, late=None):
+    """下载并转换一个列表，写入 <id>.txt / <id>.allow.txt，返回 meta。late 置位（整体超时）后不再写文件"""
     text = download(lst["url"])
     bs, be, as_, ae, skipped = parse_filter(text)
     lines, n = domain_lines(bs, be)
     alines, na = domain_lines(as_, ae)
     if not n and not na:
         raise ValueError("没有解析出任何域名，确认是 AdGuard / hosts / 域名列表格式")
+    if late is not None and late.is_set():
+        raise IOError("下载超时")
     write_lines(os.path.join(AB_DIR, lst["id"] + ".txt"), lines)
     write_lines(os.path.join(AB_DIR, lst["id"] + ".allow.txt"), alines)
     return {"count": n, "allow": na, "skipped": skipped, "updated": int(time.time()), "error": ""}
@@ -226,6 +228,9 @@ def ab_apply():
     return reload_core()
 
 
+AB_WAIT = 150  # 并发下载广告列表整体最多等这么多秒
+
+
 def adblock_update(ids=None, apply=True):
     """下载全部（或指定）启用的列表；在后台线程里调用"""
     with AB_LOCK:
@@ -237,17 +242,32 @@ def adblock_update(ids=None, apply=True):
         lists = [l for l in d["adblock"]["lists"] if l.get("enabled", True) and (not ids or l["id"] in ids)]
         meta = ab_meta()
         res = {}
+        res_lock = threading.Lock()
+        late = threading.Event()
+
+        def fail(l, err):
+            m = dict(meta.get(l["id"]) or {})
+            m.update(error=err, checked=int(time.time()))
+            return m
 
         def one(l):
             try:
-                res[l["id"]] = ab_fetch(l)
+                r = ab_fetch(l, late)
             except Exception as e:
-                m = dict(meta.get(l["id"]) or {})
-                m.update(error=str(e)[:200], checked=int(time.time()))
-                res[l["id"]] = m
-        ths = [threading.Thread(target=one, args=(l,)) for l in lists]
+                r = fail(l, str(e)[:200])
+            with res_lock:
+                if not late.is_set():
+                    res[l["id"]] = r
+        ths = [threading.Thread(target=one, args=(l,), daemon=True) for l in lists]
         [t.start() for t in ths]
-        [t.join(150) for t in ths]
+        end = time.time() + AB_WAIT  # 整体最多等 AB_WAIT 秒（以前逐个 join(150)，几个列表都卡住时要等 N×150 秒）
+        [t.join(max(0.1, end - time.time())) for t in ths]
+        with res_lock:  # 之后迟到的线程既不写列表文件也不改结果，meta 与磁盘上的文件一致
+            late.set()
+            res = dict(res)
+            for l in lists:
+                if l["id"] not in res:
+                    res[l["id"]] = fail(l, "下载超时")
         meta.update(res)
         os.makedirs(AB_DIR, exist_ok=True)
         write_json(os.path.join(AB_DIR, "meta.json"), meta)

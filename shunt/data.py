@@ -69,6 +69,14 @@ def _load_uncached():
             d = json.load(f)
     except Exception:
         d = {}
+    if normalize(d):
+        with LOCK:
+            save(d)
+    return d
+
+
+def normalize(d):
+    """补默认值 + 旧版迁移（原地修改 d）。返回是否有需要写回 data.json 的变化。版本备份恢复时也用它处理备份里的 data.json"""
     for k, v in DEFAULT.items():
         d.setdefault(k, copy.deepcopy(v))
         if isinstance(v, dict) and isinstance(d[k], dict) and k != "devices":
@@ -112,10 +120,7 @@ def _load_uncached():
                 g["strategy"] = "consistent-hashing"
         d["schema"] = SCHEMA
         dirty = True
-    if dirty:
-        with LOCK:
-            save(d)
-    return d
+    return dirty
 
 
 def region_label(rname):

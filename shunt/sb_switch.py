@@ -10,6 +10,7 @@ from .sb_subs import sb_update_subs
 from .sb_config import check_sb_config, sb_sync_assets, sb_version, write_sb_config
 from .core_update import LGBM_FILE, _cu, bin_version, copy_replace, lgbm_fetch, mh_fetch, open_url, release_digest
 from .sysopt import sh, svc_restart
+from .devroute import commit_applied
 from .notify import core_alive, notify, set_manual_stop
 from .migrate import restore_selections, snapshot_selections
 def sb_arch():
@@ -109,10 +110,14 @@ def sb_install(channel, gh, force=False):
     return nv, True
 
 
+_UNSET = object()
+
+
 def core_switch_job(kind, gh):
     """切换内核：准备程序与数据 → 生成并校验配置 → 写入启动选择 → 重启；失败自动换回原内核"""
     prev = active_core()
     dns_auto_fix = False  # 切到 sing-box 时是否自动开启了「阻止客户端绕过 DNS」
+    bb_prev = _UNSET
     try:
         label = CORES[kind]
         if kind == "singbox":
@@ -121,6 +126,7 @@ def core_switch_job(kind, gh):
                 nv, _ = sb_install("stable", gh)
                 _cu("安装 sing-box", 62, f"已安装 sing-box {nv}")
             d = load()
+            bb_prev = (d.get("dns") or {}).get("block_bypass", _UNSET)  # 回滚时恢复原值（原来没有这一项就删掉）
             if not dns_cfg(d)["block_bypass"]:
                 # sing-box 1.13+ 移除了 sniff_override_destination，设备 DNS 绕过面板时拿到污染 IP 必死；
                 # mihomo 的 sniffer 默认改写目标地址所以不受影响。切到 sing-box 时自动开启防绕过。
@@ -146,6 +152,7 @@ def core_switch_job(kind, gh):
                 os.remove(tmp)
                 raise ValueError("sing-box 配置校验失败，未切换：" + err)
             os.replace(tmp, SB_CONF)
+            commit_applied(tmp)
         else:
             if kind == "smart" and not bin_version(SMART_BIN):
                 _cu("安装 Smart 内核", 5, "设备上还没有 mihomo Smart，正在从 vernesong/mihomo 下载")
@@ -167,6 +174,7 @@ def core_switch_job(kind, gh):
                 os.remove(tmp)
                 raise ValueError(f"{label} 配置校验失败，未切换：" + err)
             os.replace(tmp, os.path.join(CONF_DIR, "config.yaml"))
+            commit_applied(tmp)
         snapshot_selections(force=True)
 
         def _apply_switch(x):
@@ -186,7 +194,15 @@ def core_switch_job(kind, gh):
                 break
         else:
             tail = [l for l in sh(f"tail -n 30 '{MIHOMO_LOG}'")[1].splitlines() if re.search(r"FATAL|ERROR|level=(?:error|fatal)", l)]
-            update(lambda x: x.update(core=prev))
+            def _undo(x):
+                x["core"] = prev
+                if dns_auto_fix:  # 切换时自动打开的「阻止客户端绕过 DNS」一并关回去
+                    if bb_prev is _UNSET:
+                        (x.get("dns") or {}).pop("block_bypass", None)
+                    else:
+                        x.setdefault("dns", {})["block_bypass"] = bb_prev
+
+            update(_undo)
             write_core_file(prev)
             svc_restart(timeout=90)
             log = re.sub(r"\x1b\[[0-9;]*m", "", "\n".join(tail[-3:]))[-400:]

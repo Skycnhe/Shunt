@@ -11,7 +11,7 @@ from .base import (
     LB_STRATEGIES, LOCK, MAX_BODY, MIHOMO_BIN, MIHOMO_LOG, PANEL_VERSION, PRIMARY_REGIONS, PROXY_MODES, REGIONS, SMART_BIN, SVC, TPROXY_SH,
     TUN_STACKS, upd_begin, upd_busy_msg, wd_hold
 )
-from .data import HISTORY_FILE, HISTORY_SKIP, auto_name, config_version, lb_names, load, migrate_names, read_json, region_lb_set, save, update
+from .data import HISTORY_FILE, HISTORY_SKIP, auto_name, config_version, lb_names, load, migrate_names, normalize, read_json, region_lb_set, save, update
 from .links import add_links, q1, reserved_names
 from .groups import all_node_names, clean_custom_group, gcfg, provider_nodes, provider_rev, region_plan, rx
 from .mihomo import bad_rule_policies, build_config, dns_cfg, safe_dev, validate_dns
@@ -43,7 +43,7 @@ from .dnsleak import antileak_dns, dns_route, leak_check
 from .https import gen_cert, restart_self
 from .access import acl_cfg, host_name, host_ok, ip_is_lan
 from .update_guard import group_meta, rename_policy
-from .validate import clean_fields, sub_name_clash
+from .validate import clean_fields, rename_sub_clashes, sub_name_clash
 from .static import MANIFEST, STATIC_TYPES, static_file
 ROUTES = {}  # (方法, 路径) → H 的处理函数；api() 先处理前缀 / 条件路由，再查这张表
 
@@ -326,6 +326,16 @@ def state_nodes(d):
         except (KeyError, TypeError):
             continue
     return out
+
+
+RESTORE_KEYS = ("mode", "tproxy", "subs", "rules", "rulesets", "bypass", "tests", "sub_interval", "region_groups",
+                "nodes", "ipv6", "watchdog", "tg_token", "tg_chat", "proxy_mode", "tun", "log_limit", "adblock", "dns",
+                "devices", "device_routes", "schedule", "groups_cfg", "custom_groups", "sniffer", "gh_proxy")
+
+
+def renames_note(renames):
+    """「；已自动改名：A → A_2、B → B_2」，没有改名时为空"""
+    return ("；已自动改名：" + "、".join(f"{a} → {b}" for a, b in renames)) if renames else ""
 
 
 def probe_data(d):
@@ -1542,8 +1552,47 @@ class H(BaseHTTPRequestHandler):
     @api_route("/api/backup/restore", "POST")
     def api_backup_restore(self, m, p, b, q):
         from . import backup as backup_mod
-        ok, msg = backup_mod.restore((b.get("name") or "").strip())
-        return self.reply(ok, msg)
+        st = {}
+
+        def check(raw):
+            """与「恢复设置」相同的校验：CLEANERS 形状校验 → 订阅名冲突自动改名 → 补默认值 / 迁移 → 试生成配置。
+            当前的 core / secret 保留（切换内核与控制密钥不随备份回退）"""
+            if not isinstance(raw, dict):
+                raise ValueError("data.json 不是 JSON 对象")
+            vals = clean_fields(raw, RESTORE_KEYS)
+            d = copy.deepcopy(raw)
+            d.update(vals)
+            if "subs" in vals:
+                d["subs"], st["renames"] = rename_sub_clashes(vals["subs"])
+            try:
+                normalize(d)
+            except Exception as e:
+                raise ValueError(f"{type(e).__name__}: {e}"[:300])
+            cur = load()
+            for k in ("core", "secret"):
+                d[k] = cur[k]
+            err = probe_data(d)
+            if err:
+                raise ValueError(err)
+            return d
+
+        def apply(new):
+            def fn(d):
+                keep = {k: d[k] for k in ("core", "secret") if k in d}
+                d.clear()
+                d.update(copy.deepcopy(new))
+                d.update(keep)
+            st["prev"] = update(fn)
+
+        ok, msg = backup_mod.restore((b.get("name") or "").strip(), check_data=check, apply_data=apply)
+        if ok and "prev" in st:
+            ab_compose(load())
+            rok, rmsg = reload_core(st["prev"])
+            if rok:
+                tp_apply()
+            msg += ("核心已重载：" if rok else "设置已撤销：") + rmsg
+            ok = rok
+        return self.reply(ok, msg + renames_note(st.get("renames")))
 
     @api_route("/api/backup/delete", "POST")
     def api_backup_delete(self, m, p, b, q):
@@ -1601,16 +1650,15 @@ class H(BaseHTTPRequestHandler):
 
     @api_route("/api/restore", "POST")
     def api_restore_post(self, m, p, b, q):
-        keys = ("mode", "tproxy", "subs", "rules", "rulesets", "bypass", "tests", "sub_interval", "region_groups",
-                "nodes", "ipv6", "watchdog", "tg_token", "tg_chat", "proxy_mode", "tun", "log_limit", "adblock", "dns",
-                "devices", "device_routes", "schedule", "groups_cfg", "custom_groups", "sniffer", "gh_proxy")
-
         try:  # 恢复残缺 / 旧格式的备份：任何一项形状不对都整体拒绝，不写进 data.json
-            vals = clean_fields(b, keys)
+            vals = clean_fields(b, RESTORE_KEYS)
         except ValueError as e:
             return self.send(400, {"message": "备份内容无效：" + str(e)})
         if not vals:
             return self.send(400, {"message": "备份内容无效：没有可恢复的设置"})
+        renames = []
+        if "subs" in vals:  # 订阅名只差符号会共用同一个节点缓存文件：自动改名而不是整份拒绝
+            vals["subs"], renames = rename_sub_clashes(vals["subs"])
 
         def apply_backup(d):
             d.update(copy.deepcopy(vals))
@@ -1629,7 +1677,7 @@ class H(BaseHTTPRequestHandler):
         ok, msg = reload_core(prev)
         if ok:
             tp_apply()
-        return self.reply(ok, ("已恢复，" if ok else "") + msg)
+        return self.reply(ok, ("已恢复，" if ok else "") + msg + renames_note(renames))
 
     @api_route("/api/logticket", "POST")
     def api_logticket_post(self, m, p, b, q):

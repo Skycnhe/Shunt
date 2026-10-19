@@ -10,6 +10,7 @@ from .mihomo import build_config, check_config, write_config
 from .sb_common import SB_CONF, active_core
 from .sb_config import build_singbox, check_sb_config, sb_hot_reload, sb_log_error, sb_rule_need, sb_sync_assets, write_sb_config
 from .sysopt import svc_restart
+from .devroute import commit_applied
 from .notify import WD, core_alive
 
 
@@ -111,6 +112,7 @@ def _reload_core(prev):
                     tmp = None
                     continue
                 os.replace(tmp, final)
+                commit_applied(tmp)
                 tmp = None
                 break
     finally:

@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "10.2.7"
+PANEL_VERSION = "10.2.8"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -311,7 +311,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "10.2.7"
+PANEL_VERSION = "10.2.8"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -538,6 +538,14 @@ def _load_uncached():
             d = json.load(f)
     except Exception:
         d = {}
+    if normalize(d):
+        with LOCK:
+            save(d)
+    return d
+
+
+def normalize(d):
+    """补默认值 + 旧版迁移（原地修改 d）。返回是否有需要写回 data.json 的变化。版本备份恢复时也用它处理备份里的 data.json"""
     for k, v in DEFAULT.items():
         d.setdefault(k, copy.deepcopy(v))
         if isinstance(v, dict) and isinstance(d[k], dict) and k != "devices":
@@ -581,10 +589,7 @@ def _load_uncached():
                 g["strategy"] = "consistent-hashing"
         d["schema"] = SCHEMA
         dirty = True
-    if dirty:
-        with LOCK:
-            save(d)
-    return d
+    return dirty
 
 
 def region_label(rname):
@@ -1495,9 +1500,36 @@ def _sig(mapping):
     return {m: list(v) for m, v in sorted(mapping.items())}
 
 
-def mark_applied():
-    """写入正式配置后调用：记下这份配置里 MAC → IP 的解析结果（落盘，开机时 --gen 进程写的面板进程也能读到）"""
+_PENDING = {}  # 临时配置文件路径 → 生成它时的 MAC 解析结果（校验通过、替换成正式配置后才算「已应用」）
+_PENDING_LOCK = threading.Lock()
+
+
+def note_written(path, final):
+    """配置写到 path 后调用：path 就是正式配置时直接记为已应用；临时 / 校验用文件先挂起，替换成正式配置时再 commit_applied。
+    以前写 .new / .chk 也记为已应用：校验失败的配置被当成已生效，这次 MAC 变化就不会再自动重载"""
     sig = STATE["last"]
+    if os.path.abspath(path) == os.path.abspath(final):
+        mark_applied(sig)
+        return
+    with _PENDING_LOCK:
+        _PENDING[path] = sig
+        while len(_PENDING) > 16:  # 校验失败 / 只做检查的临时文件不会 commit，只留最近几个
+            _PENDING.pop(next(iter(_PENDING)))
+
+
+def commit_applied(path):
+    """临时配置 path 已替换成正式配置：记下它生成时的解析结果"""
+    with _PENDING_LOCK:
+        if path not in _PENDING:
+            return
+        sig = _PENDING.pop(path)
+    mark_applied(sig)
+
+
+def mark_applied(sig=None):
+    """写入正式配置后调用：记下这份配置里 MAC → IP 的解析结果（落盘，开机时 --gen 进程写的面板进程也能读到）"""
+    if sig is None:
+        sig = STATE["last"]
     STATE.update(applied=sig, loaded=True)
     try:
         if sig or os.path.isfile(APPLIED_FILE):
@@ -1542,7 +1574,7 @@ from .base import (
     TUN_DEFAULT, TUN_STACKS
 )
 from .data import LB_KINDS, auto_name, lb_name, region_label, safe
-from .devroute import device_route_rules, mark_applied
+from .devroute import device_route_rules, note_written
 from .groups import clean_custom_group, gcfg, group_opts, region_plan, rx
 from .ruleutil import DOMAIN_RX, adblock_providers, dns_policy_of, rule_policy_index
 from .sb_common import active_core
@@ -1973,9 +2005,10 @@ def bad_rule_policies(rules, d):
 
 def write_config(d, path=None):
     os.makedirs(os.path.join(CONF_DIR, "providers"), exist_ok=True)
-    path = path or os.path.join(CONF_DIR, "config.yaml")
+    final = os.path.join(CONF_DIR, "config.yaml")
+    path = path or final
     write_atomic(path, build_config(d))  # JSON 是 YAML 的子集，mihomo 可直接读取
-    mark_applied()
+    note_written(path, final)
     return path
 
 
@@ -2127,6 +2160,24 @@ def sub_name_clash(name, others):
     """订阅名只差符号（「机场 A」和「机场_A」）时会共用同一个节点缓存文件，互相覆盖：返回冲突的那个名字"""
     k = safe(name)
     return next((o for o in others if o != name and safe(o) == k), None)
+
+
+def rename_sub_clashes(subs):
+    """恢复备份时订阅名只差符号（会共用同一个节点缓存文件）：后出现的自动加 _2、_3… 改名。返回 (新列表, [(原名, 新名)])"""
+    out, renames, keys, names = [], [], set(), {s["name"] for s in subs}
+    for s in subs:
+        name = s["name"]
+        if safe(name) in keys:
+            k = 2
+            while f"{name}_{k}" in names or safe(f"{name}_{k}") in keys:
+                k += 1
+            new = f"{name}_{k}"
+            renames.append((name, new))
+            names.add(new)
+            s = dict(s, name=new)
+        keys.add(safe(s["name"]))
+        out.append(s)
+    return out, renames
 
 
 def clean_subs(v):
@@ -2294,6 +2345,7 @@ from .mihomo import build_config, check_config, write_config
 from .sb_common import SB_CONF, active_core
 from .sb_config import build_singbox, check_sb_config, sb_hot_reload, sb_log_error, sb_rule_need, sb_sync_assets, write_sb_config
 from .sysopt import svc_restart
+from .devroute import commit_applied
 from .notify import WD, core_alive
 
 
@@ -2395,6 +2447,7 @@ def _reload_core(prev):
                     tmp = None
                     continue
                 os.replace(tmp, final)
+                commit_applied(tmp)
                 tmp = None
                 break
     finally:
@@ -3553,12 +3606,12 @@ import ipaddress, json, os, re, shlex, signal, threading, time, urllib.request, 
 
 from .base import (
     AB_DIR, BUILTIN_POLICIES, CN_ECS, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, UA, dl_check, wd_hold)
-from .errlog import log_tail
+from .errlog import log_err, log_tail
 from .data import auto_name, lb_dropped_names, lb_names, lb_old_name, load, safe, write_json
 from .groups import PROV, gcfg, rx
 from .mihomo import BUILTIN_GEO, build_config, build_rule_providers, dns_cfg, policy_parts, tun_params, write_atomic, write_config
 from .corehttp import core_json
-from .devroute import mark_applied
+from .devroute import note_written
 from .sb_common import CORE_PID, SB_BIN, SB_CONF, SB_DIR, SB_RULE_DIR, SB_STATE, active_core
 from .sb_yaml import yaml_lite
 from .groups import sb_provider_nodes, sb_sub_cache, sb_sub_outbounds
@@ -3649,20 +3702,101 @@ def sb_node_outbounds(d, cfg, sub_out, warn):
         except ValueError as e:
             warn.append(f"节点「{p['name']}」：{e}，已跳过")
     skipped = 0
+    convs = {}
     for sname, lst in sub_out.items():
-        prov_names[sname] = []
+        conv = []
         for name, p in lst:
             try:
-                outbounds.append(sb_outbound(p, name))
-                prov_names[sname].append(name)
+                conv.append((name, p, sb_outbound(p, name)))
             except (ValueError, TypeError):
                 skipped += 1
+        convs[sname] = conv
+    # detour 可以指向本订阅以外、但在最终配置里存在的出站（手动节点、其他订阅的节点、策略组、DIRECT / direct）：保持不变
+    region_lb = {n for r, _ in REGIONS + [(G_OTHER, None)] for n in lb_names(r) + lb_dropped_names(r) + [lb_old_name(r)]}
+    base_known = set(node_names) | {g["name"] for g in cfg["proxy-groups"] if g["name"] not in region_lb} | {"DIRECT", "direct"}
+    all_sub = {name for conv in convs.values() for name, _, _ in conv}
+    dropped = {}
+    for sname, conv in convs.items():
+        mine = {name for name, _, _ in conv}
+        convs[sname], dropped[sname] = sb_fix_detour(conv, base_known | (all_sub - mine))
+    while True:  # 跨订阅：前置节点在别的订阅里被跳过的，依赖它的也跳过
+        gone = {n for v in dropped.values() for n in v}
+        more = False
+        for sname, conv in convs.items():
+            keep = [x for x in conv if not (x[2].get("detour") in gone and x[2]["detour"] not in base_known)]
+            if len(keep) != len(conv):
+                dropped[sname] += [x[0] for x in conv if x not in keep]
+                convs[sname] = keep
+                more = True
+        if not more:
+            break
+    for sname, conv in convs.items():
+        lost = dropped[sname]
+        if lost:
+            msg = f"订阅「{sname}」中 {len(lost)} 个节点的前置代理（detour）不存在，已跳过：" + "、".join(lost[:5]) + \\
+                  ("…" if len(lost) > 5 else "")
+            warn.append(msg)
+            log_err("sing-box 订阅 detour", msg)
+        prov_names[sname] = [name for name, _, _ in conv]
+        outbounds += [o for _, _, o in conv]
+    if any(o.get("detour") == "direct" for o in outbounds):  # 订阅里常见的小写 direct：补一个同名直连出站，原样保留 detour
+        outbounds.append({"type": "direct", "tag": "direct"})
     if skipped:
         warn.append(f"订阅中有 {skipped} 个节点的协议 sing-box 不支持（如 ssr、snell、wireguard），已跳过")
     for s in d["subs"]:
         if not sb_sub_cache(s["name"]).get("updated"):
             warn.append(f"订阅「{s['name']}」还没有下载过节点")
     return outbounds, node_names, prov_names
+
+
+def sb_fix_detour(conv, known=()):
+    """sing-box JSON 订阅的节点可带 detour（前置代理，指向订阅里另一个节点的原 tag）。节点全局去重改名后原 tag 可能失效：
+    按「原 tag → 现名」重映射；指向本订阅以外、但在最终配置里存在的出站（known：DIRECT / direct、手动节点、其他订阅节点、策略组）
+    原样保留；哪里都不存在（被筛选 / 协议不支持 / 本来就没有）或成环时跳过该节点，保证整份配置能通过 check。
+    conv: [(现名, 原节点, outbound)]，返回 (保留的 conv, 跳过的节点名)"""
+    if not any(o.get("detour") for _, _, o in conv):
+        return conv, []
+    known = set(known)
+    tag_map = {}
+    for name, p, _ in conv:
+        orig = str(((p.get("_sb") or {}).get("tag")) or p.get("name") or "")
+        tag_map.setdefault(orig, name)
+    names = {name for name, _, _ in conv}
+    dep = {}
+    for name, p, o in conv:
+        det = o.get("detour")
+        if det:
+            det = str(det)
+            if det in tag_map:
+                tgt = tag_map[det]
+            elif det in names or det in known:
+                tgt = det
+            else:
+                tgt = None
+            if tgt is not None:
+                o["detour"] = tgt
+            dep[name] = tgt
+    bad = set()
+    changed = True
+    while changed:  # 前置节点被跳过的，依赖它的也跳过；成环的整环跳过
+        changed = False
+        for name, tgt in dep.items():
+            if name in bad:
+                continue
+            seen, cur = {name}, tgt
+            ok = tgt is not None
+            while ok and cur is not None:
+                if cur not in names:  # 本订阅以外的出站：上面已确认存在
+                    break
+                if cur in bad or cur in seen:
+                    ok = False
+                    break
+                seen.add(cur)
+                cur = dep.get(cur)
+            if not ok:
+                bad.add(name)
+                changed = True
+    return [x for x in conv if x[0] not in bad], [x[0] for x in conv if x[0] in bad]
 
 
 def sb_group_outbounds(cfg, gc, node_names, prov_names, warn):
@@ -3911,6 +4045,9 @@ def sb_ab_loaded(d):
     return out
 
 
+ASSETS_WAIT = 150  # 并发下载规则集整体最多等这么多秒
+
+
 def sb_sync_assets(d, force=False, need=None):
     """下载 / 转换 sing-box 需要的规则集文件；返回失败列表"""
     if need is None:
@@ -3919,6 +4056,7 @@ def sb_sync_assets(d, force=False, need=None):
     os.makedirs(SB_RULE_DIR, exist_ok=True)
     bad = []
     bad_lock = threading.Lock()
+    late = threading.Event()  # 整体超时后置位：仍卡着的线程迟到时不再写文件
 
     def one(tag, rsd):
         """单个规则集：下载 / 转换 / 写文件（每个规则集独立文件，线程间无冲突）"""
@@ -3949,6 +4087,8 @@ def sb_sync_assets(d, force=False, need=None):
                     break
             if data is None:
                 raise IOError(err or "下载失败")
+            if late.is_set():
+                return
             if rsd["kind"] in ("geo", "srs"):
                 if not data.startswith(b"SRS"):
                     raise ValueError("不是有效的 .srs 文件")
@@ -3964,12 +4104,16 @@ def sb_sync_assets(d, force=False, need=None):
             with bad_lock:
                 bad.append(f"{tag}：{e}")
 
-    ths = [threading.Thread(target=one, args=(tag, rsd)) for tag, rsd in need.items()]
+    items = list(need.items())
+    ths = [threading.Thread(target=one, args=(tag, rsd), daemon=True) for tag, rsd in items]
     for t in ths:
         t.start()
+    end = time.time() + ASSETS_WAIT  # 整体最多等 ASSETS_WAIT 秒（以前逐个 join(150)，几个都卡住时要等 N×150 秒）
     for t in ths:
-        t.join(150)
-    return bad
+        t.join(max(0.1, end - time.time()))
+    late.set()
+    with bad_lock:  # 返回快照：超时线程之后的结果不影响这里
+        return list(bad) + [f"{tag}：下载超时" for (tag, _), t in zip(items, ths) if t.is_alive()]
 
 
 def write_sb_config(d, path=None):
@@ -3978,7 +4122,7 @@ def write_sb_config(d, path=None):
     SB_STATE["warn"] = warn
     path = path or SB_CONF
     write_atomic(path, conf)
-    mark_applied()
+    note_written(path, SB_CONF)
     return path
 
 
@@ -4140,6 +4284,7 @@ from .sb_subs import sb_update_subs
 from .sb_config import check_sb_config, sb_sync_assets, sb_version, write_sb_config
 from .core_update import LGBM_FILE, _cu, bin_version, copy_replace, lgbm_fetch, mh_fetch, open_url, release_digest
 from .sysopt import sh, svc_restart
+from .devroute import commit_applied
 from .notify import core_alive, notify, set_manual_stop
 from .migrate import restore_selections, snapshot_selections
 def sb_arch():
@@ -4239,10 +4384,14 @@ def sb_install(channel, gh, force=False):
     return nv, True
 
 
+_UNSET = object()
+
+
 def core_switch_job(kind, gh):
     """切换内核：准备程序与数据 → 生成并校验配置 → 写入启动选择 → 重启；失败自动换回原内核"""
     prev = active_core()
     dns_auto_fix = False  # 切到 sing-box 时是否自动开启了「阻止客户端绕过 DNS」
+    bb_prev = _UNSET
     try:
         label = CORES[kind]
         if kind == "singbox":
@@ -4251,6 +4400,7 @@ def core_switch_job(kind, gh):
                 nv, _ = sb_install("stable", gh)
                 _cu("安装 sing-box", 62, f"已安装 sing-box {nv}")
             d = load()
+            bb_prev = (d.get("dns") or {}).get("block_bypass", _UNSET)  # 回滚时恢复原值（原来没有这一项就删掉）
             if not dns_cfg(d)["block_bypass"]:
                 # sing-box 1.13+ 移除了 sniff_override_destination，设备 DNS 绕过面板时拿到污染 IP 必死；
                 # mihomo 的 sniffer 默认改写目标地址所以不受影响。切到 sing-box 时自动开启防绕过。
@@ -4276,6 +4426,7 @@ def core_switch_job(kind, gh):
                 os.remove(tmp)
                 raise ValueError("sing-box 配置校验失败，未切换：" + err)
             os.replace(tmp, SB_CONF)
+            commit_applied(tmp)
         else:
             if kind == "smart" and not bin_version(SMART_BIN):
                 _cu("安装 Smart 内核", 5, "设备上还没有 mihomo Smart，正在从 vernesong/mihomo 下载")
@@ -4297,6 +4448,7 @@ def core_switch_job(kind, gh):
                 os.remove(tmp)
                 raise ValueError(f"{label} 配置校验失败，未切换：" + err)
             os.replace(tmp, os.path.join(CONF_DIR, "config.yaml"))
+            commit_applied(tmp)
         snapshot_selections(force=True)
 
         def _apply_switch(x):
@@ -4316,7 +4468,15 @@ def core_switch_job(kind, gh):
                 break
         else:
             tail = [l for l in sh(f"tail -n 30 '{MIHOMO_LOG}'")[1].splitlines() if re.search(r"FATAL|ERROR|level=(?:error|fatal)", l)]
-            update(lambda x: x.update(core=prev))
+            def _undo(x):
+                x["core"] = prev
+                if dns_auto_fix:  # 切换时自动打开的「阻止客户端绕过 DNS」一并关回去
+                    if bb_prev is _UNSET:
+                        (x.get("dns") or {}).pop("block_bypass", None)
+                    else:
+                        x.setdefault("dns", {})["block_bypass"] = bb_prev
+
+            update(_undo)
             write_core_file(prev)
             svc_restart(timeout=90)
             log = re.sub(r"\\x1b\\[[0-9;]*m", "", "\\n".join(tail[-3:]))[-400:]
@@ -4573,6 +4733,7 @@ def self_update(apply=False, gh=""):
 '''
 _SRC['shunt.backup'] = '''# SPDX-License-Identifier: GPL-3.0-or-later
 """版本备份/恢复：把面板文件打包成带版本号的 tar.gz，支持一键回滚。"""
+import json
 import os
 import re
 import shutil
@@ -4724,19 +4885,16 @@ def cleanup(keep=KEEP_N, protect=None):
             pass
 
 
-def restore(name):
+def restore(name, check_data=None, apply_data=None):
     """恢复指定备份。返回 (ok, message)。
 
-    流程：先自动备份当前版本（防呆）→ 解压覆盖 server.py/index.html/data.json。
-    恢复 server.py 后需重启面板进程才生效。
+    流程：解压到临时目录 → check_data 校验备份里的 data.json（不通过则什么都不改）→ 自动备份当前版本（防呆）
+    → 覆盖 server.py/index.html，data.json 交给 apply_data 写入（没给时原样覆盖）。恢复 server.py 后需重启面板进程才生效。
+    check_data(dict) 返回要写入的 dict，数据无效时抛 ValueError（提示直接给用户看）。
     """
     fp, err = _backup_path(name)
     if err:
         return False, err
-    # 防呆：先备份当前。已有 10 个备份时，新备份会挤掉最旧的一个——恰好是要恢复的这个时以前会把它删掉再报「恢复失败」
-    ok, cur = create(keep=name)
-    if not ok:
-        return False, "备份当前版本失败，中止恢复：%s" % cur
     try:
         with tarfile.open(fp, "r:gz") as tf:
             members = tf.getmembers()
@@ -4747,12 +4905,27 @@ def restore(name):
                 if m.issym() or m.islnk():
                     return False, "备份文件含非法链接"
             # 解压到唯一临时目录再搬，避免半截覆盖和并发冲突
+            _ensure_dir()
             tmpd = tempfile.mkdtemp(prefix="restore_", dir=BACKUP_DIR)
             try:
                 try:
                     tf.extractall(tmpd, filter="data")
                 except TypeError:  # Python < 3.12 且没有安全补丁的版本没有 filter 参数；上面已逐项检查过成员
                     tf.extractall(tmpd)
+                src_data = os.path.join(tmpd, "data.json")
+                new_data = None
+                if os.path.isfile(src_data) and check_data is not None:
+                    # 与「恢复设置」相同的校验：形状不对 / 生成不了配置的数据不写进 data.json，当前数据保持不变
+                    try:
+                        with open(src_data, encoding="utf-8") as f:
+                            raw = json.load(f)
+                        new_data = check_data(raw)
+                    except ValueError as e:
+                        return False, "备份里的设置无效，未恢复（当前设置未改动）：%s" % e
+                # 防呆：先备份当前。已有 10 个备份时，新备份会挤掉最旧的一个——恰好是要恢复的这个时以前会把它删掉再报「恢复失败」
+                ok, cur = create(keep=name)
+                if not ok:
+                    return False, "备份当前版本失败，中止恢复：%s" % cur
                 # 搬文件
                 for rel in ("server.py", "index.html", "CHANGELOG.md"):
                     src = os.path.join(tmpd, rel)
@@ -4761,8 +4934,9 @@ def restore(name):
                         shutil.copyfile(src, dst + ".new")
                         os.chmod(dst + ".new", 0o644)
                         os.replace(dst + ".new", dst)
-                src_data = os.path.join(tmpd, "data.json")
-                if os.path.isfile(src_data):
+                if new_data is not None and apply_data is not None:
+                    apply_data(new_data)
+                elif os.path.isfile(src_data):
                     shutil.copyfile(src_data, DATA_FILE + ".new")
                     os.chmod(DATA_FILE + ".new", 0o600)
                     os.replace(DATA_FILE + ".new", DATA_FILE)
@@ -7242,14 +7416,16 @@ def download(url, timeout=60, limit=40 << 20):
     raise IOError(err or "下载失败")
 
 
-def ab_fetch(lst):
-    """下载并转换一个列表，写入 <id>.txt / <id>.allow.txt，返回 meta"""
+def ab_fetch(lst, late=None):
+    """下载并转换一个列表，写入 <id>.txt / <id>.allow.txt，返回 meta。late 置位（整体超时）后不再写文件"""
     text = download(lst["url"])
     bs, be, as_, ae, skipped = parse_filter(text)
     lines, n = domain_lines(bs, be)
     alines, na = domain_lines(as_, ae)
     if not n and not na:
         raise ValueError("没有解析出任何域名，确认是 AdGuard / hosts / 域名列表格式")
+    if late is not None and late.is_set():
+        raise IOError("下载超时")
     write_lines(os.path.join(AB_DIR, lst["id"] + ".txt"), lines)
     write_lines(os.path.join(AB_DIR, lst["id"] + ".allow.txt"), alines)
     return {"count": n, "allow": na, "skipped": skipped, "updated": int(time.time()), "error": ""}
@@ -7303,6 +7479,9 @@ def ab_apply():
     return reload_core()
 
 
+AB_WAIT = 150  # 并发下载广告列表整体最多等这么多秒
+
+
 def adblock_update(ids=None, apply=True):
     """下载全部（或指定）启用的列表；在后台线程里调用"""
     with AB_LOCK:
@@ -7314,17 +7493,32 @@ def adblock_update(ids=None, apply=True):
         lists = [l for l in d["adblock"]["lists"] if l.get("enabled", True) and (not ids or l["id"] in ids)]
         meta = ab_meta()
         res = {}
+        res_lock = threading.Lock()
+        late = threading.Event()
+
+        def fail(l, err):
+            m = dict(meta.get(l["id"]) or {})
+            m.update(error=err, checked=int(time.time()))
+            return m
 
         def one(l):
             try:
-                res[l["id"]] = ab_fetch(l)
+                r = ab_fetch(l, late)
             except Exception as e:
-                m = dict(meta.get(l["id"]) or {})
-                m.update(error=str(e)[:200], checked=int(time.time()))
-                res[l["id"]] = m
-        ths = [threading.Thread(target=one, args=(l,)) for l in lists]
+                r = fail(l, str(e)[:200])
+            with res_lock:
+                if not late.is_set():
+                    res[l["id"]] = r
+        ths = [threading.Thread(target=one, args=(l,), daemon=True) for l in lists]
         [t.start() for t in ths]
-        [t.join(150) for t in ths]
+        end = time.time() + AB_WAIT  # 整体最多等 AB_WAIT 秒（以前逐个 join(150)，几个列表都卡住时要等 N×150 秒）
+        [t.join(max(0.1, end - time.time())) for t in ths]
+        with res_lock:  # 之后迟到的线程既不写列表文件也不改结果，meta 与磁盘上的文件一致
+            late.set()
+            res = dict(res)
+            for l in lists:
+                if l["id"] not in res:
+                    res[l["id"]] = fail(l, "下载超时")
         meta.update(res)
         os.makedirs(AB_DIR, exist_ok=True)
         write_json(os.path.join(AB_DIR, "meta.json"), meta)
@@ -9116,7 +9310,7 @@ from .base import (
     LB_STRATEGIES, LOCK, MAX_BODY, MIHOMO_BIN, MIHOMO_LOG, PANEL_VERSION, PRIMARY_REGIONS, PROXY_MODES, REGIONS, SMART_BIN, SVC, TPROXY_SH,
     TUN_STACKS, upd_begin, upd_busy_msg, wd_hold
 )
-from .data import HISTORY_FILE, HISTORY_SKIP, auto_name, config_version, lb_names, load, migrate_names, read_json, region_lb_set, save, update
+from .data import HISTORY_FILE, HISTORY_SKIP, auto_name, config_version, lb_names, load, migrate_names, normalize, read_json, region_lb_set, save, update
 from .links import add_links, q1, reserved_names
 from .groups import all_node_names, clean_custom_group, gcfg, provider_nodes, provider_rev, region_plan, rx
 from .mihomo import bad_rule_policies, build_config, dns_cfg, safe_dev, validate_dns
@@ -9148,7 +9342,7 @@ from .dnsleak import antileak_dns, dns_route, leak_check
 from .https import gen_cert, restart_self
 from .access import acl_cfg, host_name, host_ok, ip_is_lan
 from .update_guard import group_meta, rename_policy
-from .validate import clean_fields, sub_name_clash
+from .validate import clean_fields, rename_sub_clashes, sub_name_clash
 from .static import MANIFEST, STATIC_TYPES, static_file
 ROUTES = {}  # (方法, 路径) → H 的处理函数；api() 先处理前缀 / 条件路由，再查这张表
 
@@ -9431,6 +9625,16 @@ def state_nodes(d):
         except (KeyError, TypeError):
             continue
     return out
+
+
+RESTORE_KEYS = ("mode", "tproxy", "subs", "rules", "rulesets", "bypass", "tests", "sub_interval", "region_groups",
+                "nodes", "ipv6", "watchdog", "tg_token", "tg_chat", "proxy_mode", "tun", "log_limit", "adblock", "dns",
+                "devices", "device_routes", "schedule", "groups_cfg", "custom_groups", "sniffer", "gh_proxy")
+
+
+def renames_note(renames):
+    """「；已自动改名：A → A_2、B → B_2」，没有改名时为空"""
+    return ("；已自动改名：" + "、".join(f"{a} → {b}" for a, b in renames)) if renames else ""
 
 
 def probe_data(d):
@@ -10647,8 +10851,47 @@ class H(BaseHTTPRequestHandler):
     @api_route("/api/backup/restore", "POST")
     def api_backup_restore(self, m, p, b, q):
         from . import backup as backup_mod
-        ok, msg = backup_mod.restore((b.get("name") or "").strip())
-        return self.reply(ok, msg)
+        st = {}
+
+        def check(raw):
+            """与「恢复设置」相同的校验：CLEANERS 形状校验 → 订阅名冲突自动改名 → 补默认值 / 迁移 → 试生成配置。
+            当前的 core / secret 保留（切换内核与控制密钥不随备份回退）"""
+            if not isinstance(raw, dict):
+                raise ValueError("data.json 不是 JSON 对象")
+            vals = clean_fields(raw, RESTORE_KEYS)
+            d = copy.deepcopy(raw)
+            d.update(vals)
+            if "subs" in vals:
+                d["subs"], st["renames"] = rename_sub_clashes(vals["subs"])
+            try:
+                normalize(d)
+            except Exception as e:
+                raise ValueError(f"{type(e).__name__}: {e}"[:300])
+            cur = load()
+            for k in ("core", "secret"):
+                d[k] = cur[k]
+            err = probe_data(d)
+            if err:
+                raise ValueError(err)
+            return d
+
+        def apply(new):
+            def fn(d):
+                keep = {k: d[k] for k in ("core", "secret") if k in d}
+                d.clear()
+                d.update(copy.deepcopy(new))
+                d.update(keep)
+            st["prev"] = update(fn)
+
+        ok, msg = backup_mod.restore((b.get("name") or "").strip(), check_data=check, apply_data=apply)
+        if ok and "prev" in st:
+            ab_compose(load())
+            rok, rmsg = reload_core(st["prev"])
+            if rok:
+                tp_apply()
+            msg += ("核心已重载：" if rok else "设置已撤销：") + rmsg
+            ok = rok
+        return self.reply(ok, msg + renames_note(st.get("renames")))
 
     @api_route("/api/backup/delete", "POST")
     def api_backup_delete(self, m, p, b, q):
@@ -10706,16 +10949,15 @@ class H(BaseHTTPRequestHandler):
 
     @api_route("/api/restore", "POST")
     def api_restore_post(self, m, p, b, q):
-        keys = ("mode", "tproxy", "subs", "rules", "rulesets", "bypass", "tests", "sub_interval", "region_groups",
-                "nodes", "ipv6", "watchdog", "tg_token", "tg_chat", "proxy_mode", "tun", "log_limit", "adblock", "dns",
-                "devices", "device_routes", "schedule", "groups_cfg", "custom_groups", "sniffer", "gh_proxy")
-
         try:  # 恢复残缺 / 旧格式的备份：任何一项形状不对都整体拒绝，不写进 data.json
-            vals = clean_fields(b, keys)
+            vals = clean_fields(b, RESTORE_KEYS)
         except ValueError as e:
             return self.send(400, {"message": "备份内容无效：" + str(e)})
         if not vals:
             return self.send(400, {"message": "备份内容无效：没有可恢复的设置"})
+        renames = []
+        if "subs" in vals:  # 订阅名只差符号会共用同一个节点缓存文件：自动改名而不是整份拒绝
+            vals["subs"], renames = rename_sub_clashes(vals["subs"])
 
         def apply_backup(d):
             d.update(copy.deepcopy(vals))
@@ -10734,7 +10976,7 @@ class H(BaseHTTPRequestHandler):
         ok, msg = reload_core(prev)
         if ok:
             tp_apply()
-        return self.reply(ok, ("已恢复，" if ok else "") + msg)
+        return self.reply(ok, ("已恢复，" if ok else "") + msg + renames_note(renames))
 
     @api_route("/api/logticket", "POST")
     def api_logticket_post(self, m, p, b, q):

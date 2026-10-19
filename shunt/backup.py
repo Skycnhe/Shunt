@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """版本备份/恢复：把面板文件打包成带版本号的 tar.gz，支持一键回滚。"""
+import json
 import os
 import re
 import shutil
@@ -151,19 +152,16 @@ def cleanup(keep=KEEP_N, protect=None):
             pass
 
 
-def restore(name):
+def restore(name, check_data=None, apply_data=None):
     """恢复指定备份。返回 (ok, message)。
 
-    流程：先自动备份当前版本（防呆）→ 解压覆盖 server.py/index.html/data.json。
-    恢复 server.py 后需重启面板进程才生效。
+    流程：解压到临时目录 → check_data 校验备份里的 data.json（不通过则什么都不改）→ 自动备份当前版本（防呆）
+    → 覆盖 server.py/index.html，data.json 交给 apply_data 写入（没给时原样覆盖）。恢复 server.py 后需重启面板进程才生效。
+    check_data(dict) 返回要写入的 dict，数据无效时抛 ValueError（提示直接给用户看）。
     """
     fp, err = _backup_path(name)
     if err:
         return False, err
-    # 防呆：先备份当前。已有 10 个备份时，新备份会挤掉最旧的一个——恰好是要恢复的这个时以前会把它删掉再报「恢复失败」
-    ok, cur = create(keep=name)
-    if not ok:
-        return False, "备份当前版本失败，中止恢复：%s" % cur
     try:
         with tarfile.open(fp, "r:gz") as tf:
             members = tf.getmembers()
@@ -174,12 +172,27 @@ def restore(name):
                 if m.issym() or m.islnk():
                     return False, "备份文件含非法链接"
             # 解压到唯一临时目录再搬，避免半截覆盖和并发冲突
+            _ensure_dir()
             tmpd = tempfile.mkdtemp(prefix="restore_", dir=BACKUP_DIR)
             try:
                 try:
                     tf.extractall(tmpd, filter="data")
                 except TypeError:  # Python < 3.12 且没有安全补丁的版本没有 filter 参数；上面已逐项检查过成员
                     tf.extractall(tmpd)
+                src_data = os.path.join(tmpd, "data.json")
+                new_data = None
+                if os.path.isfile(src_data) and check_data is not None:
+                    # 与「恢复设置」相同的校验：形状不对 / 生成不了配置的数据不写进 data.json，当前数据保持不变
+                    try:
+                        with open(src_data, encoding="utf-8") as f:
+                            raw = json.load(f)
+                        new_data = check_data(raw)
+                    except ValueError as e:
+                        return False, "备份里的设置无效，未恢复（当前设置未改动）：%s" % e
+                # 防呆：先备份当前。已有 10 个备份时，新备份会挤掉最旧的一个——恰好是要恢复的这个时以前会把它删掉再报「恢复失败」
+                ok, cur = create(keep=name)
+                if not ok:
+                    return False, "备份当前版本失败，中止恢复：%s" % cur
                 # 搬文件
                 for rel in ("server.py", "index.html", "CHANGELOG.md"):
                     src = os.path.join(tmpd, rel)
@@ -188,8 +201,9 @@ def restore(name):
                         shutil.copyfile(src, dst + ".new")
                         os.chmod(dst + ".new", 0o644)
                         os.replace(dst + ".new", dst)
-                src_data = os.path.join(tmpd, "data.json")
-                if os.path.isfile(src_data):
+                if new_data is not None and apply_data is not None:
+                    apply_data(new_data)
+                elif os.path.isfile(src_data):
                     shutil.copyfile(src_data, DATA_FILE + ".new")
                     os.chmod(DATA_FILE + ".new", 0o600)
                     os.replace(DATA_FILE + ".new", DATA_FILE)
