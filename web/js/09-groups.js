@@ -3,7 +3,7 @@ let GI=null,CGF=null,GCF={},_pv=0,SN={subs:[]};
 const TYN={'select':'手动选择','url-test':'自动测速','fallback':'故障转移','load-balance':'负载均衡'};
 const TYC={'select':'k-sel','url-test':'k-auto','fallback':'k-fb','load-balance':'k-lb'};
 async function loadGroupsPage(){try{[GI]=await Promise.all([api('/api/groups'),loadState().catch(()=>{}),loadSN()])}catch(e){return toast(e.message)}
-  GCF=Object.assign({},GI.cfg,{on:GI.region_groups});renderGC();renderRegions();renderCGList();$('#gc-lb-sb').classList.toggle('hide',GI.core!=='singbox')}
+  GCF=Object.assign({},GI.cfg,{on:GI.region_groups});renderGC();renderRegions();renderCGList();if(CGF)renderCGSChosen();$('#gc-lb-sb').classList.toggle('hide',GI.core!=='singbox')}
 // 订阅节点清单（节点显示名 + 原名 + 引用它的自定义组）：策略组编辑器勾选、节点页「从订阅删除」共用
 async function loadSN(){try{SN=await api('/api/subs/nodes')}catch(e){SN={subs:[]}}if(!SN||!Array.isArray(SN.subs))SN={subs:[]};return SN}
 const snKey=(sub,name)=>sub+'\n'+name;
@@ -54,17 +54,19 @@ function renderCGPick(){const q=$('#cg-search').value.trim().toLowerCase();const
   $('#cg-pick').innerHTML=c.slice(0,160).map(n=>`<span class="mchip add ${GI.groups.includes(n)?'grp':''}" onclick="cgAdd(this.dataset.n)" data-n="${esc(n)}"><span>${GI.groups.includes(n)?'📁 ':''}${esc(n)}</span></span>`).join('')+(c.length>160?`<span class="mut small">还有 ${c.length-160} 项，请搜索</span>`:'')||'<span class="mut small">无匹配项</span>'}
 function renderCGSChosen(){const ix=snIndex();$('#cg-schosen').innerHTML=CGF.sub_nodes.map((x,i)=>{const st=snStale(x,ix),d=ix.m.get(snKey(x.sub,x.name))||x.name;
     return `<span class="mchip" title="${esc(x.sub+' · '+x.name)}"><span>${esc(x.sub)} · ${esc(d)}</span>${st?'<b class="bad small">已失效</b>':''}<button title="移除" onclick="cgSDel(${i})">✕</button></span>`}).join('')||'<span class="mut small">没有勾选订阅节点</span>';renderCGSPick()}
-function cgSMatch(s,q){return s.nodes.map((n,ni)=>[n,ni]).filter(([n])=>!q||n.name.toLowerCase().includes(q)||s.name.toLowerCase().includes(q))}
+function cgSMatch(s,q){return s.nodes.filter(n=>!q||n.name.toLowerCase().includes(q)||s.name.toLowerCase().includes(q))}
 function renderCGSPick(){const q=$('#cg-ssearch').value.trim().toLowerCase(),sel=new Set(CGF.sub_nodes.map(x=>snKey(x.sub,x.name)));
-  $('#cg-spick').innerHTML=SN.subs.map((s,si)=>{const ns=cgSMatch(s,q);if(q&&!ns.length)return '';
-    return `<div style="margin-bottom:8px"><div class="row" style="gap:6px;margin:2px 0 6px"><b class="sp small">${esc(s.name)} <span class="mut">${s.known||s.nodes.length?s.nodes.length+' 个节点':'节点未加载'}</span></b>${ns.length?`<button class="btn g sm" onclick="cgSAll(${si},1)">全选${q?'匹配':''}</button> <button class="btn g sm" onclick="cgSAll(${si},0)">取消${q?'匹配':'全部'}</button>`:''}</div>
-    <div class="mchips">${ns.slice(0,300).map(([n,ni])=>{const on=sel.has(snKey(s.name,n.orig));return `<span class="mchip add ${on?'grp':''}" onclick="cgSTog(${si},${ni})" title="${esc(n.name)}"><span>${on?'✓ ':''}${esc(n.name)}</span></span>`}).join('')}${ns.length>300?`<span class="mut small">还有 ${ns.length-300} 个，请搜索</span>`:''}</div></div>`}).join('')
+  $('#cg-spick').innerHTML=SN.subs.map(s=>{const ns=cgSMatch(s,q);if(q&&!ns.length)return '';
+    return `<div style="margin-bottom:8px"><div class="row" style="gap:6px;margin:2px 0 6px"><b class="sp small">${esc(s.name)} <span class="mut">${s.known||s.nodes.length?s.nodes.length+' 个节点':'节点未加载'}</span></b>${ns.length?`<button class="btn g sm" data-s="${esc(s.name)}" onclick="cgSAll(this.dataset.s,1)">全选${q?'匹配':''}</button> <button class="btn g sm" data-s="${esc(s.name)}" onclick="cgSAll(this.dataset.s,0)">取消${q?'匹配':'全部'}</button>`:''}</div>
+    <div class="mchips">${ns.slice(0,300).map(n=>{const on=sel.has(snKey(s.name,n.orig));return `<span class="mchip add ${on?'grp':''}" data-s="${esc(s.name)}" data-o="${esc(n.orig)}" onclick="cgSTog(this.dataset.s,this.dataset.o)" title="${esc(n.name)}"><span>${on?'✓ ':''}${esc(n.name)}</span></span>`}).join('')}${ns.length>300?`<span class="mut small">还有 ${ns.length-300} 个，请搜索</span>`:''}</div></div>`}).join('')
     ||`<span class="mut small">${SN.subs.length?'无匹配节点':'还没有订阅'}</span>`}
-function cgSTog(si,ni){const s=SN.subs[si],n=s&&s.nodes[ni];if(!n)return;const i=CGF.sub_nodes.findIndex(x=>x.sub===s.name&&x.name===n.orig);
-  if(i>=0)CGF.sub_nodes.splice(i,1);else CGF.sub_nodes.push({sub:s.name,name:n.orig});renderCGSChosen()}
-function cgSAll(si,on){const s=SN.subs[si];if(!s)return;const q=$('#cg-ssearch').value.trim().toLowerCase(),ns=cgSMatch(s,q).map(([n])=>n.orig);
-  if(on)ns.forEach(o=>{if(!CGF.sub_nodes.some(x=>x.sub===s.name&&x.name===o))CGF.sub_nodes.push({sub:s.name,name:o})});
-  else{const rm=new Set(ns);CGF.sub_nodes=CGF.sub_nodes.filter(x=>!(x.sub===s.name&&rm.has(x.name)))}renderCGSChosen()}
+// 按「订阅名 + 节点原名」勾选（不按序号：切换页面 / 删除节点后 SN 会重新加载，旧序号可能指向别的节点）
+function cgSTog(sub,orig){if(!CGF||typeof sub!=='string'||typeof orig!=='string')return;const i=CGF.sub_nodes.findIndex(x=>x.sub===sub&&x.name===orig);
+  if(i>=0)CGF.sub_nodes.splice(i,1);else CGF.sub_nodes.push({sub,name:orig});renderCGSChosen()}
+function cgSAll(sub,on){const s=SN.subs.find(x=>x.name===sub);if(!s||!CGF)return;const q=$('#cg-ssearch').value.trim().toLowerCase(),ns=cgSMatch(s,q).map(n=>n.orig);
+  if(on)ns.forEach(o=>{if(!CGF.sub_nodes.some(x=>x.sub===sub&&x.name===o))CGF.sub_nodes.push({sub,name:o})});
+  else if(!q)CGF.sub_nodes=CGF.sub_nodes.filter(x=>x.sub!==sub);  // 「取消全部」：连同已失效的勾选一起去掉
+  else{const rm=new Set(ns);CGF.sub_nodes=CGF.sub_nodes.filter(x=>!(x.sub===sub&&rm.has(x.name)))}renderCGSChosen()}
 function cgSDel(i){CGF.sub_nodes.splice(i,1);renderCGSChosen()}
 function cgAdd(n){if(!CGF.proxies.includes(n))CGF.proxies.push(n);renderCGChosen()}
 function cgDel(i){CGF.proxies.splice(i,1);renderCGChosen()}

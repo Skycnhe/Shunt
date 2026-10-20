@@ -106,19 +106,20 @@ async function testAll(btn){btn.disabled=true;btn.textContent='测速中…';
   btn.disabled=false;btn.textContent='全部测速';loadProxies()}
 
 // 订阅节点管理：勾选一个或多个订阅节点「从订阅删除」（按订阅 + 节点原名记入该订阅的已删除名单）
-let SNI=[],SNSEL=new Set();
+// SNS：本次打开时的订阅快照。SN 是和策略组页共用的全局变量，切到策略组页会被重新加载，不能直接用来渲染 / 按序号取订阅
+let SNI=[],SNS=[],SNSEL=new Set();
 async function toggleSN(){const b=$('#sn-box'),open=b.classList.contains('hide');b.classList.toggle('hide',!open);$('#sn-toggle').textContent=open?'收起':'选择节点删除';if(open)await reloadSN()}
-async function reloadSN(){await loadSN();SNI=[];SN.subs.forEach(s=>s.nodes.forEach(n=>SNI.push({sub:s.name,orig:n.orig,name:n.name,groups:n.groups||[]})));SNSEL=new Set();renderSN()}
+async function reloadSN(){await loadSN();SNI=[];SNS=SN.subs;SNS.forEach(s=>s.nodes.forEach(n=>SNI.push({sub:s.name,orig:n.orig,name:n.name,groups:n.groups||[]})));SNSEL=new Set();renderSN()}
 function snVis(q){return SNI.map((x,i)=>i).filter(i=>!q||SNI[i].name.toLowerCase().includes(q)||SNI[i].sub.toLowerCase().includes(q))}
 function renderSN(){const q=$('#sn-q').value.trim().toLowerCase(),vis=snVis(q),by={};vis.forEach(i=>(by[SNI[i].sub]=by[SNI[i].sub]||[]).push(i));
-  $('#sn-list').innerHTML=SN.subs.map((s,si)=>{const ids=by[s.name]||[];if(!ids.length)return q?'':`<div class="mut small" style="margin:4px 0">${esc(s.name)}：${s.known?'没有节点':'节点未加载'}</div>`;
+  $('#sn-list').innerHTML=SNS.map((s,si)=>{const ids=by[s.name]||[];if(!ids.length)return q?'':`<div class="mut small" style="margin:4px 0">${esc(s.name)}：${s.known?'没有节点':'节点未加载'}</div>`;
     const all=ids.every(i=>SNSEL.has(i));
     return `<div style="margin-bottom:10px"><label class="row small" style="gap:6px;margin:2px 0 4px"><input type="checkbox" ${all?'checked':''} onchange="snAll(${si},this.checked)"><b>${esc(s.name)}</b><span class="mut">${ids.length} 个${q?'匹配':''}</span></label>
     ${ids.slice(0,500).map(i=>{const x=SNI[i];return `<label class="row small" style="gap:6px;padding:2px 0 2px 18px" title="${esc(x.name)}"><input type="checkbox" ${SNSEL.has(i)?'checked':''} onchange="snTog(${i},this.checked)"><span class="sp" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.name)}</span>${x.groups.length?`<span class="tag k-cus" title="${esc(x.groups.join('、'))}">在 ${x.groups.length} 个自定义组</span>`:''}</label>`}).join('')}${ids.length>500?`<div class="mut small">还有 ${ids.length-500} 个，请搜索</div>`:''}</div>`}).join('')
-    ||`<span class="mut small">${SN.subs.length?'没有匹配的订阅节点':'还没有订阅'}</span>`;
+    ||`<span class="mut small">${SNS.length?'没有匹配的订阅节点':'还没有订阅'}</span>`;
   $('#sn-cnt').textContent=`已选 ${SNSEL.size} 个`}
 function snTog(i,on){on?SNSEL.add(i):SNSEL.delete(i);$('#sn-cnt').textContent=`已选 ${SNSEL.size} 个`}
-function snAll(si,on){const s=SN.subs[si];if(!s)return;const q=$('#sn-q').value.trim().toLowerCase();snVis(q).filter(i=>SNI[i].sub===s.name).forEach(i=>on?SNSEL.add(i):SNSEL.delete(i));renderSN()}
+function snAll(si,on){const s=SNS[si];if(!s)return;const q=$('#sn-q').value.trim().toLowerCase();snVis(q).filter(i=>SNI[i].sub===s.name).forEach(i=>on?SNSEL.add(i):SNSEL.delete(i));renderSN()}
 function snClear(){SNSEL=new Set();renderSN()}
 async function snDelete(btn){const items=[...SNSEL].map(i=>SNI[i]).filter(Boolean);if(!items.length)return toast('请先勾选要删除的订阅节点');
   const used=items.filter(x=>x.groups.length),gs=[...new Set(used.flatMap(x=>x.groups))];

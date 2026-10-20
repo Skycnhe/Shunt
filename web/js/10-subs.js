@@ -33,14 +33,14 @@ async function importNodes(){const links=$('#node-links').value.trim();if(!links
 async function delNode(n){if(!confirm('删除节点 '+decodeURIComponent(n)+'？'))return;try{await api('/api/nodes','DELETE',{name:decodeURIComponent(n)});toast('已删除');loadSubs()}catch(e){toast(e.message)}}
 async function testNode(n,btn){btn.disabled=true;try{const r=await core(`/proxies/${n}/delay?url=${encodeURIComponent('https://www.gstatic.com/generate_204')}&timeout=5000`);toast(decodeURIComponent(n)+'：'+r.delay+' ms')}catch(e){toast(decodeURIComponent(n)+'：超时')}btn.disabled=false;renderNodes()}
 
-// 从订阅删除的节点：查看、单个恢复、全部恢复
+// 从订阅删除的节点：查看、单个恢复、全部恢复（按节点名恢复，不按序号：STATE 每 15 秒刷新，序号可能已指向别的节点）
 function showRemoved(n){RMV=decodeURIComponent(n);renderRemoved();$('#sub-removed').scrollIntoView({behavior:'smooth',block:'nearest'})}
 function renderRemoved(){const box=$('#sub-removed'),s=RMV===null?null:STATE.subs.find(x=>x.name===RMV),rm=s?(s.removed||[]):[];
   if(!rm.length){box.classList.add('hide');box.innerHTML='';RMV=null;return}
   box.classList.remove('hide');
-  box.innerHTML=`<div class="row mt"><b class="sp">「${esc(s.name)}」已删除 ${rm.length} 个节点</b><button class="btn g sm" onclick="restoreNodes(-1,this)">全部恢复</button> <button class="btn g sm" onclick="RMV=null;renderRemoved()">收起</button></div>
-    <div class="pickbox">${rm.map((n,i)=>`<div class="row small" style="gap:6px;padding:2px 0"><span class="sp" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(n)}">${esc(n)}</span><button class="btn g sm" onclick="restoreNodes(${i},this)">恢复</button></div>`).join('')}</div>`}
-async function restoreNodes(i,btn){const s=STATE.subs.find(x=>x.name===RMV);if(!s)return;const rm=s.removed||[];
-  if(i<0&&!confirm(`恢复「${s.name}」已删除的全部 ${rm.length} 个节点？`))return;
-  const body=i<0?{sub:s.name,all:true}:{sub:s.name,names:[rm[i]]};if(i>=0&&rm[i]===undefined)return;btn.disabled=true;
+  box.innerHTML=`<div class="row mt"><b class="sp">「${esc(s.name)}」已删除 ${rm.length} 个节点</b><button class="btn g sm" onclick="restoreNodes(null,this)">全部恢复</button> <button class="btn g sm" onclick="RMV=null;renderRemoved()">收起</button></div>
+    <div class="pickbox">${rm.map(n=>`<div class="row small" style="gap:6px;padding:2px 0"><span class="sp" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(n)}">${esc(n)}</span><button class="btn g sm" data-n="${esc(n)}" onclick="restoreNodes(this.dataset.n,this)">恢复</button></div>`).join('')}</div>`}
+async function restoreNodes(n,btn){const s=STATE.subs.find(x=>x.name===RMV);if(!s)return;const rm=s.removed||[],all=n===null;
+  if(all&&!confirm(`恢复「${s.name}」已删除的全部 ${rm.length} 个节点？`))return;
+  if(!all&&!n)return;const body=all?{sub:s.name,all:true}:{sub:s.name,names:[n]};btn.disabled=true;
   try{toast('正在恢复并应用…');const j=await api('/api/subs/nodes/restore','POST',body);toast(j.message)}catch(e){toast(e.message)}btn.disabled=false;loadSubs()}

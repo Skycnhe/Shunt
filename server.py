@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "8.4.0"
+PANEL_VERSION = "8.4.1"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -334,7 +334,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "8.4.0"
+PANEL_VERSION = "8.4.1"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -10543,6 +10543,12 @@ class H(BaseHTTPRequestHandler):
         for sname in {x[0] for x in items}:
             if len(set(sub_removed(subs[sname])) | {n for s2, n in items if s2 == sname}) > NODE_LIST_MAX:
                 return self.send(400, {"message": f"订阅「{sname}」删除的节点过多（最多 {NODE_LIST_MAX} 个）"})
+        # 不能把一个订阅的节点全部删掉：mihomo 的 provider 过滤后一个节点都没有会解析失败（file doesn't have any proxy），
+        # 订阅加载出错、之后每次更新也都失败，订阅新增的节点永远进不来，还会按退避间隔反复重新下载。不要这个订阅应直接删除订阅
+        left = sub_orig_nodes(load())
+        for sname in {x[0] for x in items}:
+            if left.get(sname) and left[sname] <= {n for s2, n in items if s2 == sname}:
+                return self.send(400, {"message": f"不能删除订阅「{sname}」的全部节点（至少保留一个）；不需要这个订阅可以在「订阅」页直接删除"})
         info = {"n": 0}
 
         def fn(d):
@@ -11036,6 +11042,8 @@ class H(BaseHTTPRequestHandler):
 
         def apply_backup(d):
             d.update(copy.deepcopy(vals))
+            if renames and "custom_groups" not in vals:  # 备份里没有自定义组：沿用的现有组里勾选的订阅节点也跟着改指新订阅名
+                d["custom_groups"] = rename_sub_refs(d.get("custom_groups"), renames)
             if "proxy_mode" not in vals and "tproxy" in vals:
                 d["proxy_mode"] = "tproxy" if vals["tproxy"] else "off"
             if d.get("proxy_mode") not in PROXY_MODES:
