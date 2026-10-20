@@ -177,7 +177,7 @@
         <select id="r-type"><option>DOMAIN-SUFFIX</option><option>DOMAIN</option><option>DOMAIN-KEYWORD</option><option>GEOSITE</option><option>IP-CIDR</option><option>GEOIP</option><option>SRC-IP-CIDR</option><option>DST-PORT</option><option>PROCESS-NAME</option></select>
         <input id="r-val" placeholder="例如 openai.com" class="sp"><select id="r-target"></select><button class="btn" onclick="addRule()">添加</button></div>
       <div class="tw"><table><tbody id="myrules"></tbody></table></div>
-      <div class="row" style="margin-top:10px"><span class="sp mut">也可批量编辑，每行一条：</span></div>
+      <div class="row" style="margin-top:10px"><span class="sp mut">也可批量编辑，每行一条（不写目标策略时默认 🚀 节点选择）：</span></div>
       <textarea id="r-bulk" rows="6"></textarea>
       <div class="row" style="margin-top:8px"><span class="sp"></span><button class="btn" onclick="saveBulk()">保存批量规则</button></div></div>
     <div class="card"><h3>规则集订阅（rule-providers）</h3>

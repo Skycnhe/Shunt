@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "8.4.2"
+PANEL_VERSION = "8.4.3"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -334,7 +334,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "8.4.2"
+PANEL_VERSION = "8.4.3"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -1086,6 +1086,25 @@ def rule_policy_index(parts):
     return i
 
 
+# 「类型,值,策略」中值后面必须跟策略的规则类型（MATCH / 逻辑规则除外）
+RULE_TYPES = frozenset("""DOMAIN DOMAIN-SUFFIX DOMAIN-KEYWORD DOMAIN-REGEX DOMAIN-WILDCARD GEOSITE GEOIP IP-CIDR IP-CIDR6 IP-SUFFIX
+IP-ASN SRC-GEOIP SRC-IP-ASN SRC-IP-CIDR SRC-IP-SUFFIX DST-PORT SRC-PORT IN-PORT IN-TYPE IN-USER IN-NAME PROCESS-NAME
+PROCESS-PATH PROCESS-NAME-REGEX PROCESS-PATH-REGEX UID NETWORK DSCP RULE-SET USER-AGENT URL-REGEX""".split())
+
+
+def complete_rule(rule, default):
+    """「DOMAIN-SUFFIX,a.com」「IP-CIDR,1.2.3.4/32,no-resolve」这类没写目标策略的规则补上 default。
+    以前会把值（a.com）当成策略名：保存时报「策略不存在」，备份恢复 / 手改 data.json 的则被换成节点选择、值丢失"""
+    s = rule.strip()
+    if not s or s.startswith("#"):
+        return rule
+    parts = s.split(",")
+    if parts[0].strip().upper() in RULE_TYPES and rule_policy_index(parts) <= 1 and len(parts) >= 2 and parts[1].strip():
+        parts.insert(2, default)
+        return ",".join(parts)
+    return rule
+
+
 def dns_policy_of(server):
     _, sep, tail = server.partition("#")
     if not sep:
@@ -1442,7 +1461,7 @@ from .base import (
 )
 from .data import LB_KINDS, auto_name, lb_name, region_label, safe
 from .groups import clean_custom_group, gcfg, group_opts, names_rx, pick_plan, region_plan, rx, rx_or, sub_orig_nodes, sub_removed
-from .ruleutil import DOMAIN_RX, adblock_providers, dns_policy_of, rule_policy_index
+from .ruleutil import DOMAIN_RX, adblock_providers, complete_rule, dns_policy_of, rule_policy_index
 from .sb_common import active_core
 from .sysopt import sh
 def build_config(d, strict=False):
@@ -1725,7 +1744,7 @@ def mihomo_tun(d):
 
 def fix_rule_policy(rule, policies):
     """自定义规则引用了不存在的策略组时改用节点选择，避免整份配置无法加载"""
-    rule = rule.strip()
+    rule = complete_rule(rule.strip(), G_SEL)
     if not rule or rule.startswith("#"):
         return None
     parts = rule.split(",")
@@ -9288,6 +9307,7 @@ from .groups import (
     NODE_LIST_MAX, all_node_names, clean_custom_group, gcfg, node_name_ok, provider_nodes, provider_rev, region_plan, rx, sb_sub_outbounds,
     sub_orig_nodes, sub_removed
 )
+from .ruleutil import complete_rule
 from .mihomo import bad_rule_policies, build_config, dns_cfg, safe_dev, validate_dns
 from .core import conns_snapshot, refresh_after_sub, refresh_later, refresh_regions, reload_core
 from .corehttp import core, core_json
@@ -10639,7 +10659,7 @@ class H(BaseHTTPRequestHandler):
 
     @api_route("/api/rules", "PUT")
     def api_rules_put(self, m, p, b, q):
-        rules = [r.strip() for r in b.get("rules", []) if r.strip()]
+        rules = [complete_rule(r.strip(), G_SEL) for r in b.get("rules", []) if isinstance(r, str) and r.strip()]
         bad = bad_rule_policies([r for r in rules if not r.startswith("#")], load())
         if bad:
             return self.send(400, {"message": "以下规则的策略不存在：" + "；".join(bad[:5])})

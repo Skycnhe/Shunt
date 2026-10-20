@@ -8,7 +8,7 @@ from .base import (
 )
 from .data import LB_KINDS, auto_name, lb_name, region_label, safe
 from .groups import clean_custom_group, gcfg, group_opts, names_rx, pick_plan, region_plan, rx, rx_or, sub_orig_nodes, sub_removed
-from .ruleutil import DOMAIN_RX, adblock_providers, dns_policy_of, rule_policy_index
+from .ruleutil import DOMAIN_RX, adblock_providers, complete_rule, dns_policy_of, rule_policy_index
 from .sb_common import active_core
 from .sysopt import sh
 def build_config(d, strict=False):
@@ -291,7 +291,7 @@ def mihomo_tun(d):
 
 def fix_rule_policy(rule, policies):
     """自定义规则引用了不存在的策略组时改用节点选择，避免整份配置无法加载"""
-    rule = rule.strip()
+    rule = complete_rule(rule.strip(), G_SEL)
     if not rule or rule.startswith("#"):
         return None
     parts = rule.split(",")

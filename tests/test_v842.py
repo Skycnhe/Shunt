@@ -27,16 +27,6 @@ WA = sys.modules["shunt.webapi"]
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-class VersionTest(unittest.TestCase):
-    def test_version(self):
-        self.assertEqual(B.PANEL_VERSION, "8.4.2")
-
-    def test_changelog_top(self):
-        with open(os.path.join(ROOT, "CHANGELOG.md"), encoding="utf-8") as f:
-            heads = [ln for ln in f if ln.startswith("## v")]
-        self.assertTrue(heads[0].startswith("## v8.4.2"), heads[0])
-
-
 class SbRefreshNodeParamsTest(unittest.TestCase):
     """#1 sing-box：订阅更新后节点名字不变、参数变了（换密码 / 服务器）也要重载"""
 
