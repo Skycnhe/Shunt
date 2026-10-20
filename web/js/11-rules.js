@@ -1,7 +1,7 @@
 // 规则
 async function loadRules(){await loadState();
   $('#r-target').innerHTML=STATE.groups.concat(['DIRECT','REJECT']).map(g=>`<option>${esc(g)}</option>`).join('');
-  $('#myrules').innerHTML=STATE.rules.map((r,i)=>`<tr><td class="w">${esc(r)}</td><td style="text-align:right"><button class="btn r sm" onclick="delRule(${i})">删除</button></td></tr>`).join('')||'<tr><td class="mut">暂无自定义规则</td></tr>';
+  $('#myrules').innerHTML=STATE.rules.map((r,i)=>`<tr><td class="w">${esc(r)}</td><td style="text-align:right"><button class="btn r sm" onclick="delRule(${jsq(r)})">删除</button></td></tr>`).join('')||'<tr><td class="mut">暂无自定义规则</td></tr>';
   $('#r-bulk').value=STATE.rules.join('\n');
   renderRS();
   try{ACTIVE_RULES=(await core('/rules')).rules||[]}catch(e){ACTIVE_RULES=[]}renderActiveRules()}
@@ -11,7 +11,8 @@ function renderActiveRules(){const f=$('#r-filter').value.toLowerCase();
 async function saveRules(rules){try{toast('正在应用…');await api('/api/rules','PUT',{rules});toast('规则已生效');loadRules()}catch(e){toast(e.message)}}
 function addRule(){const t=$('#r-type').value,v=$('#r-val').value.trim(),g=$('#r-target').value;if(!v)return toast('请填写内容');
   let r=`${t},${v},${g}`;if(['IP-CIDR','GEOIP'].includes(t))r+=',no-resolve';$('#r-val').value='';saveRules(STATE.rules.concat([r]))}
-function delRule(i){const r=STATE.rules.slice();r.splice(i,1);saveRules(r)}
+// 按规则内容删除（不按序号）：STATE 每 15 秒在后台刷新而列表不重画，别的窗口改过规则后序号会指向另一条规则
+function delRule(v){const r=STATE.rules.slice(),i=r.indexOf(v);if(i<0){toast('该规则已不存在，列表已刷新');return loadRules()}r.splice(i,1);saveRules(r)}
 function saveBulk(){saveRules($('#r-bulk').value.split('\n'))}
 async function ruleTest(){const t=$('#rt-target').value.trim();if(!t)return toast('请输入域名或 IP');const b=$('#rt-btn');b.disabled=true;
   $('#rt-result').innerHTML='<span class="mut">测试中…</span>';

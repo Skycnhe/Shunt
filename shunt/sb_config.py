@@ -105,7 +105,10 @@ def sb_node_outbounds(d, cfg, sub_out, warn):
         for name, p in lst:
             try:
                 conv.append((name, p, sb_outbound(p, name)))
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, AttributeError, KeyError):
+                # 订阅内容不可信：字段类型不对（如 ws-opts.headers / grpc-opts / plugin-opts 是文本或列表）时 .get / .items
+                # 抛 AttributeError，以前只捕获 ValueError / TypeError，一个坏节点让整份 sing-box 配置生成失败（订阅更新、
+                # 改任何设置都报错，开机 --gen 也生成不了）。跳过这个节点，与协议不支持的节点同样计数提示
                 skipped += 1
         convs[sname] = conv
     # detour 可以指向本订阅以外、但在最终配置里存在的出站（手动节点、其他订阅的节点、策略组、DIRECT / direct）：保持不变
@@ -139,7 +142,7 @@ def sb_node_outbounds(d, cfg, sub_out, warn):
     if any(o.get("detour") == "direct" for o in outbounds):  # 订阅里常见的小写 direct：补一个同名直连出站，原样保留 detour
         outbounds.append({"type": "direct", "tag": "direct"})
     if skipped:
-        warn.append(f"订阅中有 {skipped} 个节点的协议 sing-box 不支持（如 ssr、snell、wireguard），已跳过")
+        warn.append(f"订阅中有 {skipped} 个节点的协议 sing-box 不支持（如 ssr、snell、wireguard）或参数格式不正确，已跳过")
     for s in d["subs"]:
         if not sb_sub_cache(s["name"]).get("updated"):
             warn.append(f"订阅「{s['name']}」还没有下载过节点")

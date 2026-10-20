@@ -90,7 +90,7 @@ def run_task(name):
     if name == "sub_update":
         bad = []
         for s in d["subs"]:
-            code, _ = core("PUT", "/providers/proxies/" + quote(s["name"]), timeout=120)
+            code, _ = core("PUT", "/providers/proxies/" + quote(s["name"], safe=""), timeout=120)
             if code >= 300:
                 bad.append(s["name"])
         try:

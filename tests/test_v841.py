@@ -22,11 +22,6 @@ B = sys.modules["shunt.base"]
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-class VersionTest(unittest.TestCase):
-    def test_version(self):
-        self.assertEqual(B.PANEL_VERSION, "8.4.1")
-
-
 class RemoveAllGuardTest(ApiCase):
     def setUp(self):
         super().setUp()

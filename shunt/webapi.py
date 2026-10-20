@@ -61,8 +61,11 @@ SVC_NAMES = {"start": "启动", "stop": "停止", "restart": "重启"}
 
 def tp_apply():
     """按当前代理方式重载 nftables 规则。核心被手动停止时不挂规则：否则局域网流量会被导向不存在的核心端口
-    （init.d 的 start_post 会在下次启动核心时自动加载）"""
-    if WD["manual_stop"]:
+    （init.d 的 start_post 会在下次启动核心时自动加载）。
+    看门狗因核心无响应已撤掉规则、让局域网直连（WD.tp_off）时同样不挂：以前这时保存绕过设备 / IPv6 / DNS 防绕过、
+    恢复设置或快照都会把规则重新挂上，流量导向卡死的核心，局域网断网直到看门狗下一次重试（最长约 5 分钟）。
+    核心恢复后看门狗按当时的设置重新开启规则"""
+    if WD["manual_stop"] or WD["tp_off"]:
         return 0, ""
     return sh(TPROXY_SH + " apply")
 
@@ -683,7 +686,8 @@ class H(BaseHTTPRequestHandler):
                 err = tun_runtime_error(safe_dev(load()["tun"].get("device"))) if ok else msg
                 note = "（auto-redirect 不可用，已自动关闭）" if not err else ""
             if err:  # TUN 起不来时局域网会断网：恢复为原来的代理方式
-                save(prev)
+                with LOCK:  # 与 update() 一样在锁内写：data.json.tmp 是共用的临时文件名，并发写会互相截断 / 改名失败
+                    save(prev)
                 reload_core()
                 tp_apply()
                 return self.send(500, {"message": "TUN 启动失败，已恢复原来的代理方式：" + err +
@@ -914,7 +918,9 @@ class H(BaseHTTPRequestHandler):
             if sub.startswith("/providers/proxies/") and sub.endswith("/healthcheck"):
                 code, raw = core("GET", f"/group/{quote(G_MANUAL)}/delay?url={quote(HC)}&timeout=5000", timeout=60)
                 return self.send(204 if code < 300 else code, b"")
-            if (sub.startswith("/providers/rules/") and m == "PUT") or sub == "/configs/geo":
+            # 与 mihomo 一致只认 POST /configs/geo：以前任何方法都执行，GET 不要求 X-Shunt 头，
+            # 局域网里打开的恶意网页用一个 <img src=…/api/core/configs/geo> 就能让面板强制重下全部规则集并重载核心
+            if (sub.startswith("/providers/rules/") and m == "PUT") or (sub == "/configs/geo" and m == "POST"):
                 d = load()
                 need = sb_rule_need(d)
                 if sub.startswith("/providers/rules/"):
@@ -927,6 +933,8 @@ class H(BaseHTTPRequestHandler):
                 return self.reply(*reload_core())
             if sub == "/upgrade":
                 return self.send(400, {"message": "请在 设置 → 核心 → 内核更新 里更新 sing-box"})
+            if sub == "/configs/geo":
+                return self.send(405, {"message": "请用 POST"})
         if p.startswith("/api/core/"):
             slow = p.endswith("/delay") or p.endswith("/healthcheck")  # 测速可能超过默认 10 秒
             code, raw = core(m, p[len("/api/core"):] + ("?" + q if q else ""), b if b else None, timeout=60 if slow else 10)
@@ -1209,7 +1217,7 @@ class H(BaseHTTPRequestHandler):
             return self.reply(not bad, msg)
         bad = []
         for nm in names:
-            code, raw = core("PUT", "/providers/proxies/" + quote(nm), timeout=120)
+            code, raw = core("PUT", "/providers/proxies/" + quote(nm, safe=""), timeout=120)
             if code >= 300:
                 bad.append(nm + "：" + raw.decode(errors="ignore")[:100])
         ok2, msg2 = refresh_regions()

@@ -221,7 +221,7 @@ def ab_apply():
         same = False
     if same:
         for name in adblock_providers(d)[0]:
-            core("PUT", "/providers/rules/" + quote(name), timeout=60)
+            core("PUT", "/providers/rules/" + quote(name, safe=""), timeout=60)
         AB_CACHE.clear()
         return True, "规则已刷新"
     AB_CACHE.clear()

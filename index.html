@@ -1270,7 +1270,7 @@ async function restoreNodes(n,btn){const s=STATE.subs.find(x=>x.name===RMV);if(!
 // 规则
 async function loadRules(){await loadState();
   $('#r-target').innerHTML=STATE.groups.concat(['DIRECT','REJECT']).map(g=>`<option>${esc(g)}</option>`).join('');
-  $('#myrules').innerHTML=STATE.rules.map((r,i)=>`<tr><td class="w">${esc(r)}</td><td style="text-align:right"><button class="btn r sm" onclick="delRule(${i})">删除</button></td></tr>`).join('')||'<tr><td class="mut">暂无自定义规则</td></tr>';
+  $('#myrules').innerHTML=STATE.rules.map((r,i)=>`<tr><td class="w">${esc(r)}</td><td style="text-align:right"><button class="btn r sm" onclick="delRule(${jsq(r)})">删除</button></td></tr>`).join('')||'<tr><td class="mut">暂无自定义规则</td></tr>';
   $('#r-bulk').value=STATE.rules.join('\n');
   renderRS();
   try{ACTIVE_RULES=(await core('/rules')).rules||[]}catch(e){ACTIVE_RULES=[]}renderActiveRules()}
@@ -1280,7 +1280,8 @@ function renderActiveRules(){const f=$('#r-filter').value.toLowerCase();
 async function saveRules(rules){try{toast('正在应用…');await api('/api/rules','PUT',{rules});toast('规则已生效');loadRules()}catch(e){toast(e.message)}}
 function addRule(){const t=$('#r-type').value,v=$('#r-val').value.trim(),g=$('#r-target').value;if(!v)return toast('请填写内容');
   let r=`${t},${v},${g}`;if(['IP-CIDR','GEOIP'].includes(t))r+=',no-resolve';$('#r-val').value='';saveRules(STATE.rules.concat([r]))}
-function delRule(i){const r=STATE.rules.slice();r.splice(i,1);saveRules(r)}
+// 按规则内容删除（不按序号）：STATE 每 15 秒在后台刷新而列表不重画，别的窗口改过规则后序号会指向另一条规则
+function delRule(v){const r=STATE.rules.slice(),i=r.indexOf(v);if(i<0){toast('该规则已不存在，列表已刷新');return loadRules()}r.splice(i,1);saveRules(r)}
 function saveBulk(){saveRules($('#r-bulk').value.split('\n'))}
 async function ruleTest(){const t=$('#rt-target').value.trim();if(!t)return toast('请输入域名或 IP');const b=$('#rt-btn');b.disabled=true;
   $('#rt-result').innerHTML='<span class="mut">测试中…</span>';
@@ -1679,10 +1680,11 @@ function presetRS(name,site,target){saveRS(STATE.rulesets.filter(r=>r.name!==nam
 function addRS(){const name=$('#rs-name').value.trim(),url=$('#rs-url').value.trim();if(!name||!url)return toast('请填写名称和链接');
   saveRS(STATE.rulesets.filter(r=>r.name!==name).concat([{name,url,behavior:$('#rs-beh').value,format:$('#rs-fmt').value,target:$('#rs-target').value}]))}
 async function saveRS(rs){try{toast('正在应用…');await api('/api/settings','PUT',{rulesets:rs});toast('规则集已生效');loadRules()}catch(e){toast(e.message)}}
-function delRS(i){const r=STATE.rulesets.slice();r.splice(i,1);saveRS(r)}
+// 按名称删除（不按序号）：同 delRule，STATE 后台刷新后序号可能指向别的规则集
+function delRS(n){const r=STATE.rulesets.filter(x=>x.name!==n);if(r.length===STATE.rulesets.length){toast('该规则集已不存在，列表已刷新');return loadRules()}saveRS(r)}
 async function renderRS(){$('#rs-target').innerHTML=$('#r-target').innerHTML;let prov={};try{prov=(await core('/providers/rules')).providers||{}}catch(e){}
-  $('#rulesets').innerHTML=STATE.rulesets.map((r,i)=>{const p=prov[r.name]||{};return `<tr><td>${esc(r.name)}<div class="mut w" style="font-size:11px;max-width:360px">${esc(r.url)}</div></td><td>${esc(r.behavior)}/${esc(r.format)}</td><td>${esc(r.target)}</td>
-    <td>${p.ruleCount??'-'}</td><td><button class="btn g sm" onclick="updRS(${jsq(encodeURIComponent(r.name))})">更新</button></td><td><button class="btn r sm" onclick="delRS(${i})">删除</button></td></tr>`}).join('')||'<tr><td class="mut">暂无规则集</td></tr>'}
+  $('#rulesets').innerHTML=STATE.rulesets.map(r=>{const p=prov[r.name]||{};return `<tr><td>${esc(r.name)}<div class="mut w" style="font-size:11px;max-width:360px">${esc(r.url)}</div></td><td>${esc(r.behavior)}/${esc(r.format)}</td><td>${esc(r.target)}</td>
+    <td>${p.ruleCount??'-'}</td><td><button class="btn g sm" onclick="updRS(${jsq(encodeURIComponent(r.name))})">更新</button></td><td><button class="btn r sm" onclick="delRS(${jsq(r.name)})">删除</button></td></tr>`}).join('')||'<tr><td class="mut">暂无规则集</td></tr>'}
 async function updRS(n){try{await core('/providers/rules/'+n,'PUT');toast('已更新');renderRS()}catch(e){toast(e.message)}}
 
 // 设置扩展

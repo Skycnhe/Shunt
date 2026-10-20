@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "8.4.1"
+PANEL_VERSION = "8.4.2"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -334,7 +334,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "8.4.1"
+PANEL_VERSION = "8.4.2"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -2222,7 +2222,7 @@ def clean_fields(b, keys):
     return out
 '''
 _SRC['shunt.core'] = '''"""核心交互"""
-import itertools, os, threading, time
+import itertools, json, os, threading, time
 
 from .base import CONF_DIR, LOCK, wd_hold
 from .errlog import log_err
@@ -2381,11 +2381,14 @@ def refresh_regions():
     if active_core() == "singbox":
         cur = read_json(SB_CONF, None)
         new = build_singbox(load())[0]
-        sig = lambda c: [(o["tag"], tuple(o.get("outbounds") or [])) for o in (c or {}).get("outbounds") or [] if o.get("outbounds")]
+        # 比较全部出站（节点参数 + 策略组成员），按 JSON 往返后的形式比：sing-box 的订阅由面板下载后写进配置，
+        # 机场换了节点的密码 / 服务器 / 端口但名字不变时，以前只比策略组成员，判定「无变化」不重载，
+        # 核心一直用旧参数连接（手动「更新」订阅也一样），节点全部不通
+        sig = lambda c: json.dumps((c or {}).get("outbounds") or [], ensure_ascii=False, sort_keys=True)
         if cur and sig(cur) == sig(new):
-            return True, "地区分组无变化"
+            return True, "节点与地区分组无变化"
         ok, msg = reload_core()
-        return ok, "地区分组已按最新订阅节点更新" if ok else msg
+        return ok, "已按最新订阅节点更新配置" if ok else msg
     cur = read_json(os.path.join(CONF_DIR, "config.yaml"), None)
     if not cur:
         return False, "当前配置不存在"
@@ -3607,7 +3610,10 @@ def sb_node_outbounds(d, cfg, sub_out, warn):
         for name, p in lst:
             try:
                 conv.append((name, p, sb_outbound(p, name)))
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, AttributeError, KeyError):
+                # 订阅内容不可信：字段类型不对（如 ws-opts.headers / grpc-opts / plugin-opts 是文本或列表）时 .get / .items
+                # 抛 AttributeError，以前只捕获 ValueError / TypeError，一个坏节点让整份 sing-box 配置生成失败（订阅更新、
+                # 改任何设置都报错，开机 --gen 也生成不了）。跳过这个节点，与协议不支持的节点同样计数提示
                 skipped += 1
         convs[sname] = conv
     # detour 可以指向本订阅以外、但在最终配置里存在的出站（手动节点、其他订阅的节点、策略组、DIRECT / direct）：保持不变
@@ -3641,7 +3647,7 @@ def sb_node_outbounds(d, cfg, sub_out, warn):
     if any(o.get("detour") == "direct" for o in outbounds):  # 订阅里常见的小写 direct：补一个同名直连出站，原样保留 detour
         outbounds.append({"type": "direct", "tag": "direct"})
     if skipped:
-        warn.append(f"订阅中有 {skipped} 个节点的协议 sing-box 不支持（如 ssr、snell、wireguard），已跳过")
+        warn.append(f"订阅中有 {skipped} 个节点的协议 sing-box 不支持（如 ssr、snell、wireguard）或参数格式不正确，已跳过")
     for s in d["subs"]:
         if not sb_sub_cache(s["name"]).get("updated"):
             warn.append(f"订阅「{s['name']}」还没有下载过节点")
@@ -6422,6 +6428,10 @@ def watchdog_tick():
                 msg += "，透明代理已重新开启" if code == 0 else "，但重新开启透明代理失败：" + out[-120:]
             WD["tp_off"] = False
             wd_event(msg, kind="recover")
+        elif WD["tp_off"]:  # 撤规则直连期间核心被手动停止、又由用户启动（status 已不是 direct）：补开规则并清标志，
+            WD["tp_off"] = False  # 否则 tp_off 一直留着，之后保存设置时面板永远不再重载透明代理规则
+            if redirecting:
+                sh(TPROXY_SH + " apply")
         WD["status"], WD["fails"] = "ok", 0
         return
     if WD["manual_stop"]:
@@ -7455,7 +7465,7 @@ def ab_apply():
         same = False
     if same:
         for name in adblock_providers(d)[0]:
-            core("PUT", "/providers/rules/" + quote(name), timeout=60)
+            core("PUT", "/providers/rules/" + quote(name, safe=""), timeout=60)
         AB_CACHE.clear()
         return True, "规则已刷新"
     AB_CACHE.clear()
@@ -8058,7 +8068,7 @@ def run_task(name):
     if name == "sub_update":
         bad = []
         for s in d["subs"]:
-            code, _ = core("PUT", "/providers/proxies/" + quote(s["name"]), timeout=120)
+            code, _ = core("PUT", "/providers/proxies/" + quote(s["name"], safe=""), timeout=120)
             if code >= 300:
                 bad.append(s["name"])
         try:
@@ -8928,7 +8938,7 @@ def restore_selections():
         g2, now2 = mp.get(g, g), mp.get(now, now)
         p = proxies.get(g2) or {}
         if p.get("type") == "Selector" and now2 in (p.get("all") or []) and p.get("now") != now2:
-            code, _ = core("PUT", "/proxies/" + quote(g2), {"name": now2})
+            code, _ = core("PUT", "/proxies/" + quote(g2, safe=""), {"name": now2})
             n += code < 300
     try:
         os.remove(SEL_FILE)
@@ -9322,8 +9332,11 @@ SVC_NAMES = {"start": "启动", "stop": "停止", "restart": "重启"}
 
 def tp_apply():
     """按当前代理方式重载 nftables 规则。核心被手动停止时不挂规则：否则局域网流量会被导向不存在的核心端口
-    （init.d 的 start_post 会在下次启动核心时自动加载）"""
-    if WD["manual_stop"]:
+    （init.d 的 start_post 会在下次启动核心时自动加载）。
+    看门狗因核心无响应已撤掉规则、让局域网直连（WD.tp_off）时同样不挂：以前这时保存绕过设备 / IPv6 / DNS 防绕过、
+    恢复设置或快照都会把规则重新挂上，流量导向卡死的核心，局域网断网直到看门狗下一次重试（最长约 5 分钟）。
+    核心恢复后看门狗按当时的设置重新开启规则"""
+    if WD["manual_stop"] or WD["tp_off"]:
         return 0, ""
     return sh(TPROXY_SH + " apply")
 
@@ -9944,7 +9957,8 @@ class H(BaseHTTPRequestHandler):
                 err = tun_runtime_error(safe_dev(load()["tun"].get("device"))) if ok else msg
                 note = "（auto-redirect 不可用，已自动关闭）" if not err else ""
             if err:  # TUN 起不来时局域网会断网：恢复为原来的代理方式
-                save(prev)
+                with LOCK:  # 与 update() 一样在锁内写：data.json.tmp 是共用的临时文件名，并发写会互相截断 / 改名失败
+                    save(prev)
                 reload_core()
                 tp_apply()
                 return self.send(500, {"message": "TUN 启动失败，已恢复原来的代理方式：" + err +
@@ -10175,7 +10189,9 @@ class H(BaseHTTPRequestHandler):
             if sub.startswith("/providers/proxies/") and sub.endswith("/healthcheck"):
                 code, raw = core("GET", f"/group/{quote(G_MANUAL)}/delay?url={quote(HC)}&timeout=5000", timeout=60)
                 return self.send(204 if code < 300 else code, b"")
-            if (sub.startswith("/providers/rules/") and m == "PUT") or sub == "/configs/geo":
+            # 与 mihomo 一致只认 POST /configs/geo：以前任何方法都执行，GET 不要求 X-Shunt 头，
+            # 局域网里打开的恶意网页用一个 <img src=…/api/core/configs/geo> 就能让面板强制重下全部规则集并重载核心
+            if (sub.startswith("/providers/rules/") and m == "PUT") or (sub == "/configs/geo" and m == "POST"):
                 d = load()
                 need = sb_rule_need(d)
                 if sub.startswith("/providers/rules/"):
@@ -10188,6 +10204,8 @@ class H(BaseHTTPRequestHandler):
                 return self.reply(*reload_core())
             if sub == "/upgrade":
                 return self.send(400, {"message": "请在 设置 → 核心 → 内核更新 里更新 sing-box"})
+            if sub == "/configs/geo":
+                return self.send(405, {"message": "请用 POST"})
         if p.startswith("/api/core/"):
             slow = p.endswith("/delay") or p.endswith("/healthcheck")  # 测速可能超过默认 10 秒
             code, raw = core(m, p[len("/api/core"):] + ("?" + q if q else ""), b if b else None, timeout=60 if slow else 10)
@@ -10470,7 +10488,7 @@ class H(BaseHTTPRequestHandler):
             return self.reply(not bad, msg)
         bad = []
         for nm in names:
-            code, raw = core("PUT", "/providers/proxies/" + quote(nm), timeout=120)
+            code, raw = core("PUT", "/providers/proxies/" + quote(nm, safe=""), timeout=120)
             if code >= 300:
                 bad.append(nm + "：" + raw.decode(errors="ignore")[:100])
         ok2, msg2 = refresh_regions()

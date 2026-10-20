@@ -35,7 +35,7 @@ def restore_selections():
         g2, now2 = mp.get(g, g), mp.get(now, now)
         p = proxies.get(g2) or {}
         if p.get("type") == "Selector" and now2 in (p.get("all") or []) and p.get("now") != now2:
-            code, _ = core("PUT", "/proxies/" + quote(g2), {"name": now2})
+            code, _ = core("PUT", "/proxies/" + quote(g2, safe=""), {"name": now2})
             n += code < 300
     try:
         os.remove(SEL_FILE)
