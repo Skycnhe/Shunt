@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "8.4.3"
+PANEL_VERSION = "8.4.4"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -334,7 +334,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "8.4.3"
+PANEL_VERSION = "8.4.4"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -1439,12 +1439,13 @@ def clean_custom_group(b):
     if t != "select":
         try:
             iv = int(b.get("interval") or 0)
-            tol = int(b.get("tolerance") or 0)
+            # 容差留空 = 跟随全局（策略组设置里的容差）；以前留空存成 0，全局改成 50 后自定义组仍按 0 频繁切换节点
+            tol = None if b.get("tolerance") in (None, "") else int(b.get("tolerance"))
         except (TypeError, ValueError):
             raise ValueError("测速间隔 / 容差必须是数字")
         if iv and not 30 <= iv <= 86400:
             raise ValueError("测速间隔应在 30–86400 秒之间")
-        if not 0 <= tol <= 1000:
+        if tol is not None and not 0 <= tol <= 1000:
             raise ValueError("容差应在 0–1000 ms 之间")
         g.update(interval=iv, tolerance=tol)
         if t == "load-balance":
@@ -1598,7 +1599,9 @@ def build_config(d, strict=False):
             "mmdb": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.metadb",
         },
         "profile": {"store-selected": True, "store-fake-ip": True},
-        "sniffer": {"enable": bool(d.get("sniffer", True)), "sniff": {
+        # skip-domain：米家设备连云端的 TLS 握手里 SNI 是「Mijia Cloud」，嗅探后按这个假域名改写目标会连不上，设备频繁离线；
+        # Apple 推送长连接被嗅探改写后会断开重连，消息推送延迟。两者都是 mihomo 官方示例里的跳过项
+        "sniffer": {"enable": bool(d.get("sniffer", True)), "skip-domain": ["Mijia Cloud", "+.push.apple.com"], "sniff": {
             "HTTP": {"ports": [80, "8080-8880"], "override-destination": True},
             "TLS": {"ports": [443, 8443]}, "QUIC": {"ports": [443, 8443]}}},
         "dns": dns, "tun": tun, "hosts": hosts,
@@ -2389,7 +2392,9 @@ def _reload_core(prev):
 
 
 def group_sig(cfg):
-    return [(g["name"], g["type"], g.get("filter", ""), tuple(g.get("proxies") or [])) for g in cfg.get("proxy-groups") or []]
+    # use / exclude-filter 也要比：订阅节点勾选（v8.4.0）按 use 引用订阅，只比 proxies 会漏掉引用的订阅变化
+    return [(g["name"], g["type"], g.get("filter", ""), g.get("exclude-filter", ""), tuple(g.get("use") or []),
+             tuple(g.get("proxies") or [])) for g in cfg.get("proxy-groups") or []]
 
 
 def refresh_regions():

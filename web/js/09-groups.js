@@ -40,10 +40,10 @@ function renderCGList(){const ix=snIndex();$('#cg-list').innerHTML=(GI.custom||[
     ||'<tr><td colspan="5" class="mut">还没有自定义策略组。例如：把美国和日本节点合成一个「🎯 美日均衡」负载均衡组，或建一个「🎮 游戏」组给规则引用</td></tr>'}
 function newCG(){CGF={orig:'',name:'',icon:'',type:'select',proxies:[],sub_nodes:[],filter:'',subs:true,expose:true,strategy:'consistent-hashing',interval:'',tolerance:''};openCG('新建策略组')}
 function editCG(i){const g=GI.custom[i];CGF=JSON.parse(JSON.stringify(Object.assign({strategy:'consistent-hashing',interval:'',tolerance:''},g,{orig:g.name})));
-  if(!Array.isArray(CGF.sub_nodes))CGF.sub_nodes=[];if(!CGF.interval)CGF.interval='';if(!CGF.tolerance)CGF.tolerance='';openCG('编辑策略组：'+g.name)}
+  if(!Array.isArray(CGF.sub_nodes))CGF.sub_nodes=[];if(!CGF.interval)CGF.interval='';if(CGF.tolerance==null)CGF.tolerance='';openCG('编辑策略组：'+g.name)}
 function openCG(t){$('#cg-title').textContent=t;$('#cg-form').classList.remove('hide');$('#cg-name').value=CGF.name;$('#cg-icon').value=CGF.icon||'';
   $('#cg-filter').value=CGF.filter||'';$('#cg-subs').checked=CGF.subs!==false;$('#cg-expose').checked=CGF.expose!==false;$('#cg-search').value='';$('#cg-ssearch').value='';
-  $('#cg-st').value='consistent-hashing';$('#cg-int').value=CGF.interval||'';$('#cg-tol').value=CGF.tolerance||'';
+  $('#cg-st').value='consistent-hashing';$('#cg-int').value=CGF.interval||'';$('#cg-tol').value=CGF.tolerance==null?'':CGF.tolerance;
   cgType();renderCGChosen();renderCGSChosen();previewCG();$('#cg-form').scrollIntoView({behavior:'smooth',block:'start'})}
 function cgType(){segv('#cg-type',CGF.type,v=>{CGF.type=v;cgType()});const t=CGF.type;$('#cg-adv').classList.toggle('hide',t==='select');
   $('#cg-tol').classList.toggle('hide',t!=='url-test')}
@@ -76,7 +76,7 @@ function previewCG(){clearTimeout(_pv);_pv=setTimeout(async()=>{const f=$('#cg-f
     $('#cg-prev').innerHTML=`匹配 <b>${r.total}</b> / ${r.of} 个节点`+(r.matched.length?'：'+r.matched.slice(0,12).map(esc).join('、')+(r.total>12?' …':''):'')}
   catch(e){$('#cg-prev').innerHTML=`<span class="bad">${esc(e.message)}</span>`}},300)}
 async function saveCG(){const b=Object.assign({},CGF,{name:$('#cg-name').value.trim(),icon:$('#cg-icon').value.trim(),filter:$('#cg-filter').value.trim(),
-    subs:$('#cg-subs').checked,expose:$('#cg-expose').checked,strategy:$('#cg-st').value,interval:+$('#cg-int').value||0,tolerance:+$('#cg-tol').value||0});
+    subs:$('#cg-subs').checked,expose:$('#cg-expose').checked,strategy:$('#cg-st').value,interval:+$('#cg-int').value||0,tolerance:$('#cg-tol').value===''?null:+$('#cg-tol').value});
   if(!b.name)return toast('请填写名称');const btn=$('#cg-save');btn.disabled=true;
   try{toast('正在校验并应用…');const j=await api('/api/groups','POST',b);toast(j.message);closeCG();await loadGroupsPage()}catch(e){toast(e.message)}btn.disabled=false}
 async function delCG(i){const n=GI.custom[i].name;const refs=cgRefs(n);

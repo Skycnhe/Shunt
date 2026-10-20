@@ -283,12 +283,13 @@ def clean_custom_group(b):
     if t != "select":
         try:
             iv = int(b.get("interval") or 0)
-            tol = int(b.get("tolerance") or 0)
+            # 容差留空 = 跟随全局（策略组设置里的容差）；以前留空存成 0，全局改成 50 后自定义组仍按 0 频繁切换节点
+            tol = None if b.get("tolerance") in (None, "") else int(b.get("tolerance"))
         except (TypeError, ValueError):
             raise ValueError("测速间隔 / 容差必须是数字")
         if iv and not 30 <= iv <= 86400:
             raise ValueError("测速间隔应在 30–86400 秒之间")
-        if not 0 <= tol <= 1000:
+        if tol is not None and not 0 <= tol <= 1000:
             raise ValueError("容差应在 0–1000 ms 之间")
         g.update(interval=iv, tolerance=tol)
         if t == "load-balance":

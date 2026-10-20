@@ -147,7 +147,9 @@ def _reload_core(prev):
 
 
 def group_sig(cfg):
-    return [(g["name"], g["type"], g.get("filter", ""), tuple(g.get("proxies") or [])) for g in cfg.get("proxy-groups") or []]
+    # use / exclude-filter 也要比：订阅节点勾选（v8.4.0）按 use 引用订阅，只比 proxies 会漏掉引用的订阅变化
+    return [(g["name"], g["type"], g.get("filter", ""), g.get("exclude-filter", ""), tuple(g.get("use") or []),
+             tuple(g.get("proxies") or [])) for g in cfg.get("proxy-groups") or []]
 
 
 def refresh_regions():

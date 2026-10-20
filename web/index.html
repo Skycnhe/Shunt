@@ -130,7 +130,7 @@
       <div class="lbl">类型</div>
       <div class="seg" id="cg-type"><button data-v="select">手动选择</button><button data-v="url-test">自动测速</button><button data-v="fallback">故障转移</button><button data-v="load-balance">负载均衡</button></div>
       <div class="row mt" id="cg-adv"><select id="cg-st" class="hide"><option value="consistent-hashing">一致性哈希</option></select>
-        <input id="cg-int" type="number" min="30" placeholder="测速间隔（秒，默认同地区组）" style="width:200px"><input id="cg-tol" type="number" min="0" placeholder="容差 ms" style="width:100px"></div>
+        <input id="cg-int" type="number" min="30" placeholder="测速间隔（秒，默认同地区组）" style="width:200px"><input id="cg-tol" type="number" min="0" placeholder="容差 ms（默认同全局）" style="width:160px"></div>
       <div class="lbl">成员（按顺序，故障转移按此顺序优先）</div>
       <div id="cg-chosen" class="mchips"><span class="mut small">还没有成员</span></div>
       <input id="cg-search" placeholder="搜索节点 / 分组，点击加入" style="width:100%;margin-top:8px" oninput="renderCGPick()">

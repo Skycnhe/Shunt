@@ -145,7 +145,9 @@ def build_config(d, strict=False):
             "mmdb": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.metadb",
         },
         "profile": {"store-selected": True, "store-fake-ip": True},
-        "sniffer": {"enable": bool(d.get("sniffer", True)), "sniff": {
+        # skip-domain：米家设备连云端的 TLS 握手里 SNI 是「Mijia Cloud」，嗅探后按这个假域名改写目标会连不上，设备频繁离线；
+        # Apple 推送长连接被嗅探改写后会断开重连，消息推送延迟。两者都是 mihomo 官方示例里的跳过项
+        "sniffer": {"enable": bool(d.get("sniffer", True)), "skip-domain": ["Mijia Cloud", "+.push.apple.com"], "sniff": {
             "HTTP": {"ports": [80, "8080-8880"], "override-destination": True},
             "TLS": {"ports": [443, 8443]}, "QUIC": {"ports": [443, 8443]}}},
         "dns": dns, "tun": tun, "hosts": hosts,

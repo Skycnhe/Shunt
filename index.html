@@ -458,7 +458,7 @@ nav button{font-size:15.5px;font-weight:600;opacity:.85}nav button.on{font-weigh
       <div class="lbl">类型</div>
       <div class="seg" id="cg-type"><button data-v="select">手动选择</button><button data-v="url-test">自动测速</button><button data-v="fallback">故障转移</button><button data-v="load-balance">负载均衡</button></div>
       <div class="row mt" id="cg-adv"><select id="cg-st" class="hide"><option value="consistent-hashing">一致性哈希</option></select>
-        <input id="cg-int" type="number" min="30" placeholder="测速间隔（秒，默认同地区组）" style="width:200px"><input id="cg-tol" type="number" min="0" placeholder="容差 ms" style="width:100px"></div>
+        <input id="cg-int" type="number" min="30" placeholder="测速间隔（秒，默认同地区组）" style="width:200px"><input id="cg-tol" type="number" min="0" placeholder="容差 ms（默认同全局）" style="width:160px"></div>
       <div class="lbl">成员（按顺序，故障转移按此顺序优先）</div>
       <div id="cg-chosen" class="mchips"><span class="mut small">还没有成员</span></div>
       <input id="cg-search" placeholder="搜索节点 / 分组，点击加入" style="width:100%;margin-top:8px" oninput="renderCGPick()">
@@ -1178,10 +1178,10 @@ function renderCGList(){const ix=snIndex();$('#cg-list').innerHTML=(GI.custom||[
     ||'<tr><td colspan="5" class="mut">还没有自定义策略组。例如：把美国和日本节点合成一个「🎯 美日均衡」负载均衡组，或建一个「🎮 游戏」组给规则引用</td></tr>'}
 function newCG(){CGF={orig:'',name:'',icon:'',type:'select',proxies:[],sub_nodes:[],filter:'',subs:true,expose:true,strategy:'consistent-hashing',interval:'',tolerance:''};openCG('新建策略组')}
 function editCG(i){const g=GI.custom[i];CGF=JSON.parse(JSON.stringify(Object.assign({strategy:'consistent-hashing',interval:'',tolerance:''},g,{orig:g.name})));
-  if(!Array.isArray(CGF.sub_nodes))CGF.sub_nodes=[];if(!CGF.interval)CGF.interval='';if(!CGF.tolerance)CGF.tolerance='';openCG('编辑策略组：'+g.name)}
+  if(!Array.isArray(CGF.sub_nodes))CGF.sub_nodes=[];if(!CGF.interval)CGF.interval='';if(CGF.tolerance==null)CGF.tolerance='';openCG('编辑策略组：'+g.name)}
 function openCG(t){$('#cg-title').textContent=t;$('#cg-form').classList.remove('hide');$('#cg-name').value=CGF.name;$('#cg-icon').value=CGF.icon||'';
   $('#cg-filter').value=CGF.filter||'';$('#cg-subs').checked=CGF.subs!==false;$('#cg-expose').checked=CGF.expose!==false;$('#cg-search').value='';$('#cg-ssearch').value='';
-  $('#cg-st').value='consistent-hashing';$('#cg-int').value=CGF.interval||'';$('#cg-tol').value=CGF.tolerance||'';
+  $('#cg-st').value='consistent-hashing';$('#cg-int').value=CGF.interval||'';$('#cg-tol').value=CGF.tolerance==null?'':CGF.tolerance;
   cgType();renderCGChosen();renderCGSChosen();previewCG();$('#cg-form').scrollIntoView({behavior:'smooth',block:'start'})}
 function cgType(){segv('#cg-type',CGF.type,v=>{CGF.type=v;cgType()});const t=CGF.type;$('#cg-adv').classList.toggle('hide',t==='select');
   $('#cg-tol').classList.toggle('hide',t!=='url-test')}
@@ -1214,7 +1214,7 @@ function previewCG(){clearTimeout(_pv);_pv=setTimeout(async()=>{const f=$('#cg-f
     $('#cg-prev').innerHTML=`匹配 <b>${r.total}</b> / ${r.of} 个节点`+(r.matched.length?'：'+r.matched.slice(0,12).map(esc).join('、')+(r.total>12?' …':''):'')}
   catch(e){$('#cg-prev').innerHTML=`<span class="bad">${esc(e.message)}</span>`}},300)}
 async function saveCG(){const b=Object.assign({},CGF,{name:$('#cg-name').value.trim(),icon:$('#cg-icon').value.trim(),filter:$('#cg-filter').value.trim(),
-    subs:$('#cg-subs').checked,expose:$('#cg-expose').checked,strategy:$('#cg-st').value,interval:+$('#cg-int').value||0,tolerance:+$('#cg-tol').value||0});
+    subs:$('#cg-subs').checked,expose:$('#cg-expose').checked,strategy:$('#cg-st').value,interval:+$('#cg-int').value||0,tolerance:$('#cg-tol').value===''?null:+$('#cg-tol').value});
   if(!b.name)return toast('请填写名称');const btn=$('#cg-save');btn.disabled=true;
   try{toast('正在校验并应用…');const j=await api('/api/groups','POST',b);toast(j.message);closeCG();await loadGroupsPage()}catch(e){toast(e.message)}btn.disabled=false}
 async function delCG(i){const n=GI.custom[i].name;const refs=cgRefs(n);
