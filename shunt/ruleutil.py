@@ -18,6 +18,25 @@ def rule_policy_index(parts):
     return i
 
 
+# 「类型,值,策略」中值后面必须跟策略的规则类型（MATCH / 逻辑规则除外）
+RULE_TYPES = frozenset("""DOMAIN DOMAIN-SUFFIX DOMAIN-KEYWORD DOMAIN-REGEX DOMAIN-WILDCARD GEOSITE GEOIP IP-CIDR IP-CIDR6 IP-SUFFIX
+IP-ASN SRC-GEOIP SRC-IP-ASN SRC-IP-CIDR SRC-IP-SUFFIX DST-PORT SRC-PORT IN-PORT IN-TYPE IN-USER IN-NAME PROCESS-NAME
+PROCESS-PATH PROCESS-NAME-REGEX PROCESS-PATH-REGEX UID NETWORK DSCP RULE-SET USER-AGENT URL-REGEX""".split())
+
+
+def complete_rule(rule, default):
+    """「DOMAIN-SUFFIX,a.com」「IP-CIDR,1.2.3.4/32,no-resolve」这类没写目标策略的规则补上 default。
+    以前会把值（a.com）当成策略名：保存时报「策略不存在」，备份恢复 / 手改 data.json 的则被换成节点选择、值丢失"""
+    s = rule.strip()
+    if not s or s.startswith("#"):
+        return rule
+    parts = s.split(",")
+    if parts[0].strip().upper() in RULE_TYPES and rule_policy_index(parts) <= 1 and len(parts) >= 2 and parts[1].strip():
+        parts.insert(2, default)
+        return ",".join(parts)
+    return rule
+
+
 def dns_policy_of(server):
     _, sep, tail = server.partition("#")
     if not sep:

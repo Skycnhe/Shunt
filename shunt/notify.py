@@ -232,6 +232,10 @@ def watchdog_tick():
                 msg += "，透明代理已重新开启" if code == 0 else "，但重新开启透明代理失败：" + out[-120:]
             WD["tp_off"] = False
             wd_event(msg, kind="recover")
+        elif WD["tp_off"]:  # 撤规则直连期间核心被手动停止、又由用户启动（status 已不是 direct）：补开规则并清标志，
+            WD["tp_off"] = False  # 否则 tp_off 一直留着，之后保存设置时面板永远不再重载透明代理规则
+            if redirecting:
+                sh(TPROXY_SH + " apply")
         WD["status"], WD["fails"] = "ok", 0
         return
     if WD["manual_stop"]:

@@ -8,8 +8,8 @@ from .base import (
 )
 from .data import LB_KINDS, auto_name, lb_name, region_label, safe
 from .devroute import device_route_rules, note_written
-from .groups import clean_custom_group, gcfg, group_opts, region_plan, rx
-from .ruleutil import DOMAIN_RX, adblock_providers, dns_policy_of, rule_policy_index
+from .groups import clean_custom_group, gcfg, group_opts, names_rx, pick_plan, region_plan, rx, rx_or, sub_orig_nodes, sub_removed
+from .ruleutil import DOMAIN_RX, adblock_providers, complete_rule, dns_policy_of, rule_policy_index
 from .sb_common import active_core
 from .sysopt import sh
 def build_config(d, strict=False):
@@ -23,6 +23,9 @@ def build_config(d, strict=False):
         if s.get("filter"):
             pv["filter"] = s["filter"]
         exc = s.get("exclude", DEFAULT_EXCLUDE)
+        gone = sub_removed(s)
+        if gone:  # 用户从订阅里删除的节点：按原名精确排除，与订阅自己的排除正则取并集
+            exc = rx_or(exc, names_rx(gone))
         if exc:
             pv["exclude-filter"] = exc
         providers[s["name"]] = pv
@@ -66,6 +69,7 @@ def build_config(d, strict=False):
     # 自定义策略组
     custom_groups, cnames, exposed = [], [], []
     region_set = set(rnames)
+    orig = None
     for cg in d.get("custom_groups") or []:
         try:
             cg = clean_custom_group(cg)
@@ -79,8 +83,17 @@ def build_config(d, strict=False):
         g["_members"] = members
         if cg["icon"]:
             g["icon"] = cg["icon"]
-        if cg["filter"] and cg["subs"] and use:
-            g["use"], g["filter"] = list(use), cg["filter"]
+        uflt = cg["filter"] if cg["filter"] and cg["subs"] and use else ""
+        picks = {}
+        if cg["sub_nodes"] and use:
+            if orig is None:
+                orig = sub_orig_nodes(d)
+            picks = pick_plan(d, cg, orig)
+        if uflt or picks:
+            # mihomo 的 proxies 里不能写订阅节点名：勾选的订阅节点用 use（只引用涉及的订阅）+ 精确匹配的 filter 表达；
+            # filter 只作用于 use 引用的订阅，手动节点照常写在 proxies 里。同时有用户正则时两者取并集，用户正则原有的语义不变
+            g["use"] = list(use) if uflt else [s for s in use if s in picks]
+            g["filter"] = rx_or(uflt, names_rx([n for v in picks.values() for n in v]) if picks else "")
         custom_groups.append(g)
         cnames.append(cg["name"])
         if cg["expose"]:
@@ -133,7 +146,9 @@ def build_config(d, strict=False):
             "mmdb": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.metadb",
         },
         "profile": {"store-selected": True, "store-fake-ip": True},
-        "sniffer": {"enable": bool(d.get("sniffer", True)), "sniff": {
+        # skip-domain：米家设备连云端的 TLS 握手里 SNI 是「Mijia Cloud」，嗅探后按这个假域名改写目标会连不上，设备频繁离线；
+        # Apple 推送长连接被嗅探改写后会断开重连，消息推送延迟。两者都是 mihomo 官方示例里的跳过项
+        "sniffer": {"enable": bool(d.get("sniffer", True)), "skip-domain": ["Mijia Cloud", "+.push.apple.com"], "sniff": {
             "HTTP": {"ports": [80, "8080-8880"], "override-destination": True},
             "TLS": {"ports": [443, 8443]}, "QUIC": {"ports": [443, 8443]}}},
         "dns": dns, "tun": tun, "hosts": hosts,
@@ -283,7 +298,7 @@ def mihomo_tun(d):
 
 def fix_rule_policy(rule, policies):
     """自定义规则引用了不存在的策略组时改用节点选择，避免整份配置无法加载"""
-    rule = rule.strip()
+    rule = complete_rule(rule.strip(), G_SEL)
     if not rule or rule.startswith("#"):
         return None
     parts = rule.split(",")

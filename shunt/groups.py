@@ -36,11 +36,15 @@ def sb_provider_nodes(d):
 
 
 def sb_sub_outbounds(d):
+    """{订阅名: [(去重后的名称, 节点)]}；用户从订阅里删除的节点（removed，按原名精确匹配）在这里跳过，不用重新下载就生效"""
     taken = {n["proxy"]["name"] for n in d.get("nodes", [])} | reserved_names(d)
     out = {}
     for s in d["subs"]:
         lst = []
+        gone = set(sub_removed(s))
         for p in sb_sub_cache(s["name"]).get("nodes") or []:
+            if str(p.get("name") or "") in gone:
+                continue
             base = str(p.get("name") or "").strip() or "node"
             name, k = base, 2
             while name in taken:
@@ -145,6 +149,111 @@ def all_node_names(d):
 
 
 NAME_BAD = re.compile(r"[,#\n\r\t\"]")
+NODE_NAME_MAX = 300  # 订阅节点名长度上限（removed / sub_nodes 校验）
+NODE_LIST_MAX = 5000  # 一个订阅的已删节点 / 一个策略组勾选的订阅节点最多这么多条
+
+
+def sub_removed(s):
+    """订阅里被用户删除的节点名（原名，精确匹配）；字段缺失或格式不对时为空（兼容旧 data.json）"""
+    v = s.get("removed") if isinstance(s, dict) else None
+    return [x for x in v if isinstance(x, str) and x] if isinstance(v, list) else []
+
+
+def node_name_ok(n):
+    return isinstance(n, str) and 0 < len(n) <= NODE_NAME_MAX and "\n" not in n and "\r" not in n
+
+
+def clean_removed(v, label="已删除节点"):
+    """校验并规范化订阅的 removed：文本列表，去重，保持顺序"""
+    if v is None:
+        return []
+    if not isinstance(v, list):
+        raise ValueError(f"{label}应为列表")
+    out = []
+    for x in v:
+        if not node_name_ok(x):
+            raise ValueError(f"{label}里有无效的节点名（应为 1–{NODE_NAME_MAX} 字的文本）")
+        if x not in out:
+            out.append(x)
+    if len(out) > NODE_LIST_MAX:
+        raise ValueError(f"{label}过多（最多 {NODE_LIST_MAX} 个）")
+    return out
+
+
+def clean_sub_nodes(v):
+    """自定义组勾选的订阅节点 [{sub, name}]：校验、去重、保持顺序"""
+    if v is None:
+        return []
+    if not isinstance(v, list):
+        raise ValueError("勾选的订阅节点应为列表")
+    out, seen = [], set()
+    for x in v:
+        if not isinstance(x, dict) or not isinstance(x.get("sub"), str) or not x["sub"].strip() or not node_name_ok(x.get("name")):
+            raise ValueError("勾选的订阅节点格式不正确（需要订阅名和节点名）")
+        k = (x["sub"].strip(), x["name"])
+        if k not in seen:
+            seen.add(k)
+            out.append({"sub": k[0], "name": k[1]})
+    if len(out) > NODE_LIST_MAX:
+        raise ValueError(f"勾选的订阅节点过多（最多 {NODE_LIST_MAX} 个）")
+    return out
+
+
+def names_rx(names):
+    """精确匹配这些节点名的正则 ^(?:a|b)$：名字里的 [ ] ( ) | . + 空格等全部转义；
+    反引号写成 \\x60（mihomo 把 filter / exclude-filter 里的反引号当作多条正则的分隔符）"""
+    return "^(?:" + "|".join(re.escape(n).replace("`", r"\x60") for n in names) + ")$"
+
+
+def rx_or(a, b):
+    """两条正则取并集（命中任一条即可）。含反引号的是 mihomo 的多条正则写法，用反引号连接，语义同样是并集"""
+    if not a:
+        return b or ""
+    if not b:
+        return a
+    if "`" in a or "`" in b:
+        return f"{a}`{b}"
+    return f"(?:{a})|{b}"
+
+
+def sub_orig_nodes(d):
+    """{订阅名: 节点原名集合}，只含当前确实可用的节点（已删除的不算）；某订阅还不知道节点（没下载过 / 核心没加载）时不在结果里。
+    sing-box：面板缓存里的原名；mihomo：核心 / 文件缓存里的 provider 节点名（provider 不改名，就是原名）"""
+    out = {}
+    if active_core(d) == "singbox":
+        for s in d["subs"]:
+            c = sb_sub_cache(s["name"])
+            if c.get("updated") or c.get("nodes"):
+                gone = set(sub_removed(s))
+                out[s["name"]] = {str(p.get("name") or "") for p in c.get("nodes") or []} - gone
+        return out
+    pn = provider_nodes()
+    for s in d["subs"]:
+        if s["name"] in pn:
+            out[s["name"]] = set(pn[s["name"]] or []) - set(sub_removed(s))
+    return out
+
+
+def pick_plan(d, cg, orig=None):
+    """自定义组勾选的订阅节点里还有效的部分 → {订阅名: [节点原名]}（按订阅顺序）。
+    订阅已删除、节点已从订阅删除、或订阅里已经没有这个节点（已知节点名单时）都跳过，不让整份配置加载失败"""
+    sn = cg.get("sub_nodes") or []
+    if not sn:
+        return {}
+    if orig is None:
+        orig = sub_orig_nodes(d)
+    subs = {s["name"]: s for s in d["subs"]}
+    want = {}
+    for x in sn:
+        s = subs.get(x["sub"])
+        if not s or x["name"] in sub_removed(s):
+            continue
+        if x["sub"] in orig and x["name"] not in orig[x["sub"]]:
+            continue
+        lst = want.setdefault(x["sub"], [])
+        if x["name"] not in lst:
+            lst.append(x["name"])
+    return {s["name"]: want[s["name"]] for s in d["subs"] if s["name"] in want}
 
 
 def clean_custom_group(b):
@@ -163,22 +272,24 @@ def clean_custom_group(b):
     flt = str(b.get("filter") or "").strip()
     if flt and rx(flt) is None:
         raise ValueError(f"筛选正则无效：{flt}")
-    if not members and not flt:
-        raise ValueError("请至少选择一个成员，或填写筛选正则")
+    sub_nodes = clean_sub_nodes(b.get("sub_nodes"))
+    if not members and not flt and not sub_nodes:
+        raise ValueError("请至少选择一个成员（策略组 / 手动节点 / 订阅节点），或填写筛选正则")
     icon = str(b.get("icon") or "").strip()
     if icon and not re.match(r"^https?://\S{4,500}$", icon):
         raise ValueError("图标必须是 http(s) 图片地址")
     g = {"name": name, "type": t, "proxies": members, "filter": flt, "subs": bool(b.get("subs", True)),
-         "expose": bool(b.get("expose", True)), "icon": icon}
+         "expose": bool(b.get("expose", True)), "icon": icon, "sub_nodes": sub_nodes}
     if t != "select":
         try:
             iv = int(b.get("interval") or 0)
-            tol = int(b.get("tolerance") or 0)
+            # 容差留空 = 跟随全局（策略组设置里的容差）；以前留空存成 0，全局改成 50 后自定义组仍按 0 频繁切换节点
+            tol = None if b.get("tolerance") in (None, "") else int(b.get("tolerance"))
         except (TypeError, ValueError):
             raise ValueError("测速间隔 / 容差必须是数字")
         if iv and not 30 <= iv <= 86400:
             raise ValueError("测速间隔应在 30–86400 秒之间")
-        if not 0 <= tol <= 1000:
+        if tol is not None and not 0 <= tol <= 1000:
             raise ValueError("容差应在 0–1000 ms 之间")
         g.update(interval=iv, tolerance=tol)
         if t == "load-balance":

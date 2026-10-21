@@ -6,7 +6,7 @@ import ipaddress, re
 
 from .base import DNS_LISTS, G_SEL, PROXY_MODES
 from .data import safe
-from .groups import NAME_BAD, clean_custom_group
+from .groups import NAME_BAD, clean_custom_group, clean_removed
 from .devroute import clean_device_routes
 
 RS_BEHAVIORS = ("domain", "ipcidr", "classical")
@@ -131,8 +131,22 @@ def rename_sub_clashes(subs):
     return out, renames
 
 
+def rename_sub_refs(groups, renames):
+    """恢复时订阅被自动改名：自定义组里勾选的订阅节点 {sub, name} 跟着改指新名字（订阅自己的 removed 名单在订阅对象里，自然随它走）"""
+    m = dict(renames or [])
+    if not m:
+        return groups
+    out = []
+    for g in groups or []:
+        if isinstance(g, dict) and isinstance(g.get("sub_nodes"), list):
+            g = dict(g, sub_nodes=[dict(x, sub=m.get(x.get("sub"), x.get("sub"))) if isinstance(x, dict) else x for x in g["sub_nodes"]])
+        out.append(g)
+    return out
+
+
 def clean_subs(v):
     seen = set()
+    out = []
     for i, s in enumerate(_list(v, "订阅")):
         if not isinstance(s, dict):
             raise ValueError(f"订阅第 {i + 1} 项格式不正确")
@@ -144,7 +158,10 @@ def clean_subs(v):
         for k in ("filter", "exclude"):
             if s.get(k) is not None and not isinstance(s[k], str):
                 raise ValueError(f"订阅「{name}」的 {k} 应为文本")
-    return v
+        if "removed" in s:  # 从订阅里删除的节点（v8.4.0）；旧备份没有这个字段
+            s = dict(s, removed=clean_removed(s["removed"], f"订阅「{name}」的已删除节点"))
+        out.append(s)
+    return out
 
 
 def clean_nodes(v):

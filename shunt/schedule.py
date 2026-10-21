@@ -84,7 +84,7 @@ def subs_update(names=None, d=None, where=None):
     else:
         okl, bad = [], []
         for nm in names or [s["name"] for s in d["subs"]]:
-            code, raw = core("PUT", "/providers/proxies/" + quote(nm), timeout=120)
+            code, raw = core("PUT", "/providers/proxies/" + quote(nm, safe=""), timeout=120)
             if code >= 300:
                 bad.append(nm + "：" + raw.decode(errors="ignore")[:100])
             else:

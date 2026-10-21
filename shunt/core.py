@@ -1,5 +1,5 @@
 """核心交互"""
-import itertools, os, threading, time
+import itertools, json, os, threading, time
 
 from .base import CONF_DIR, LOCK, wd_hold
 from .errlog import log_err
@@ -149,7 +149,9 @@ def _reload_core(prev):
 
 
 def group_sig(cfg):
-    return [(g["name"], g["type"], g.get("filter", ""), tuple(g.get("proxies") or [])) for g in cfg.get("proxy-groups") or []]
+    # use / exclude-filter 也要比：订阅节点勾选（v8.4.0）按 use 引用订阅，只比 proxies 会漏掉引用的订阅变化
+    return [(g["name"], g["type"], g.get("filter", ""), g.get("exclude-filter", ""), tuple(g.get("use") or []),
+             tuple(g.get("proxies") or [])) for g in cfg.get("proxy-groups") or []]
 
 
 def refresh_regions():
@@ -160,11 +162,14 @@ def refresh_regions():
     if active_core() == "singbox":
         cur = read_json(SB_CONF, None)
         new = build_singbox(load())[0]
-        sig = lambda c: [(o["tag"], tuple(o.get("outbounds") or [])) for o in (c or {}).get("outbounds") or [] if o.get("outbounds")]
+        # 比较全部出站（节点参数 + 策略组成员），按 JSON 往返后的形式比：sing-box 的订阅由面板下载后写进配置，
+        # 机场换了节点的密码 / 服务器 / 端口但名字不变时，以前只比策略组成员，判定「无变化」不重载，
+        # 核心一直用旧参数连接（手动「更新」订阅也一样），节点全部不通
+        sig = lambda c: json.dumps((c or {}).get("outbounds") or [], ensure_ascii=False, sort_keys=True)
         if cur and sig(cur) == sig(new):
-            return True, "地区分组无变化"
+            return True, "节点与地区分组无变化"
         ok, msg = reload_core()
-        return ok, "地区分组已按最新订阅节点更新" if ok else msg
+        return ok, "已按最新订阅节点更新配置" if ok else msg
     cur = read_json(os.path.join(CONF_DIR, "config.yaml"), None)
     if not cur:
         return False, "当前配置不存在"
@@ -173,6 +178,18 @@ def refresh_regions():
     ok, msg = reload_core()
     print(time.strftime("%F %T"), "[groups] 订阅节点变化，已重新生成地区分组：", ok, msg[:120], flush=True)
     return ok, "地区分组已按最新订阅节点更新" if ok else msg
+
+
+def refresh_later(delay=8):
+    """过一会儿按核心里最新的订阅节点名单再核对一次策略组（有变化才重载；核心没在运行时什么都不做）"""
+    def run():
+        try:
+            refresh_regions()
+        except Exception as e:
+            print("refresh regions error", e, flush=True)
+    t = threading.Timer(delay, run)
+    t.daemon = True
+    t.start()
 
 
 def refresh_after_sub(name, wait=90):
