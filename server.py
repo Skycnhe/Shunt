@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "8.4.4"
+PANEL_VERSION = "8.4.5"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -334,7 +334,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "8.4.4"
+PANEL_VERSION = "8.4.5"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -1465,6 +1465,19 @@ from .groups import clean_custom_group, gcfg, group_opts, names_rx, pick_plan, r
 from .ruleutil import DOMAIN_RX, adblock_providers, complete_rule, dns_policy_of, rule_policy_index
 from .sb_common import active_core
 from .sysopt import sh
+
+
+def drop_provider_cache(name):
+    """删掉订阅在 mihomo 里的本地缓存 ./providers/<名>.yaml。
+    mihomo 加载 provider 时只要本地文件存在就先用它，按文件修改时间等满一个更新间隔才去下载，不看地址变没变：
+    改了订阅链接（换机场 / 重置 token）或删掉后用同名重新添加，以前要等到间隔（默认 24 小时）才换成新链接的节点"""
+    try:
+        os.remove(os.path.join(CONF_DIR, "providers", safe(name) + ".yaml"))
+        return True
+    except OSError:
+        return False
+
+
 def build_config(d, strict=False):
     providers = {}
     for s in d["subs"]:
@@ -4247,9 +4260,9 @@ from .mihomo import check_config, dns_cfg, mh_bin, write_config
 from .sb_common import CORES, SB_API, SB_BIN, SB_CONF, SB_REPO, SB_STATE, active_core, write_core_file
 from .sb_subs import sb_update_subs
 from .sb_config import check_sb_config, sb_sync_assets, sb_version, write_sb_config
-from .core_update import LGBM_FILE, _cu, bin_version, copy_replace, lgbm_fetch, mh_fetch, open_url, release_digest
+from .core_update import LGBM_FILE, MANUAL_NOTE, _cu, bin_version, copy_replace, lgbm_fetch, mh_fetch, open_url, release_digest
 from .sysopt import sh, svc_restart
-from .notify import core_alive, notify, set_manual_stop
+from .notify import WD, core_alive, notify, set_manual_stop
 from .migrate import restore_selections, snapshot_selections
 def sb_arch():
     m = os.uname().machine
@@ -4475,6 +4488,10 @@ def sb_update_job(channel, gh, force=False):
             if not ok:
                 copy_replace(SB_BIN + ".bak", SB_BIN)
                 raise ValueError("新版 sing-box 不兼容当前配置，已恢复原版本：" + err)
+        note = ""
+        if active_core() == "singbox" and WD["manual_stop"]:  # 手动停止了核心：只替换程序，不替用户拉起来
+            note = f"（{MANUAL_NOTE}）"
+        elif active_core() == "singbox":
             _cu("重启核心", 85, "正在重启核心")
             svc_restart(timeout=90)
             for _ in range(30):
@@ -4485,7 +4502,7 @@ def sb_update_job(channel, gh, force=False):
                 copy_replace(SB_BIN + ".bak", SB_BIN)
                 svc_restart(timeout=90)
                 raise ValueError("新版 sing-box 30 秒内未响应，已恢复原版本")
-        CORE_UPD.update(ok=True, message=f"sing-box 已从 {cur or '未安装'} 更新到 {nv}" + ("，旧版本已备份" if cur else ""))
+        CORE_UPD.update(ok=True, message=f"sing-box 已从 {cur or '未安装'} 更新到 {nv}" + ("，旧版本已备份" if cur else "") + note)
     except Exception as e:
         CORE_UPD.update(ok=False, message=str(e))
     finally:
@@ -4902,7 +4919,7 @@ def restore(name, check_data=None, apply_data=None):
                     os.replace(DATA_FILE + ".new", DATA_FILE)
             finally:
                 shutil.rmtree(tmpd, ignore_errors=True)
-        return True, "已恢复到 %s（已自动备份当前版本 %s）。恢复 server.py 后需重启面板生效。" % (name, cur)
+        return True, "已恢复到 %s（已自动备份当前版本 %s）。" % (name, cur)
     except Exception as e:
         return False, "恢复失败：%s" % e
 '''
@@ -5097,7 +5114,7 @@ from .mihomo import mh_bin, write_config
 from .core import reload_core
 from .sb_common import CORES, active_core
 from .sysopt import proxy_opener, sh, svc_restart
-from .notify import core_alive, notify
+from .notify import WD, core_alive, notify
 CORE_REPO = os.environ.get("CORE_REPO", "https://github.com/MetaCubeX/mihomo/releases")
 CORE_CHANNELS = {"stable": "latest/download", "alpha": "download/Prerelease-Alpha"}
 SMART_REPO = os.environ.get("SMART_REPO", "https://github.com/vernesong/mihomo/releases")  # 只发布 Alpha 预览版
@@ -5210,8 +5227,12 @@ def _cu(stage, pct=None, msg=None):
     CORE_UPD["log"].appendleft(f"{time.strftime('%H:%M:%S')} {msg or stage}")
 
 
+MANUAL_NOTE = "核心已手动停止，没有替你启动；下次启动核心时使用新程序"
+
+
 def _core_swap_and_restart(src, label, kind="mihomo"):
-    """把 src 换成正式核心并重启；30 秒内控制接口没起来就自动换回原来的核心"""
+    """把 src 换成正式核心并重启；30 秒内控制接口没起来就自动换回原来的核心。
+    返回 (成功, 提示)：成功时提示非空表示核心被手动停止、只替换了程序"""
     B = mh_bin(kind)
     bak = B + ".bak"
     had_old = os.path.isfile(B)
@@ -5227,6 +5248,9 @@ def _core_swap_and_restart(src, label, kind="mihomo"):
     if active_core() != kind:  # 这个内核没在运行：只替换程序，切换过去时生效
         _cu("完成", 95, f"已替换为 {label}（当前内核是 {CORES[active_core()]}，切到 {CORES[kind]} 时生效）")
         return True, ""
+    if WD["manual_stop"]:  # 用户手动停止了核心：只替换程序，不替用户把核心拉起来（与定时重启、保存设置一致）
+        _cu("完成", 95, f"已替换为 {label}（{MANUAL_NOTE}）")
+        return True, MANUAL_NOTE
     _cu("重启核心", 90, f"已替换为 {label}，正在重启核心")
     svc_restart(timeout=90)
     for _ in range(30):
@@ -5323,7 +5347,8 @@ def core_update_job(channel, gh, force=False, kind="mihomo"):
         ok, err = _core_swap_and_restart(tmp, nv, kind)
         if not ok:
             raise ValueError(err)
-        CORE_UPD.update(ok=True, message=f"{CORES[kind]} 已从 {cur or '无'} 更新到 {nv}" + ("，旧版本已备份，可一键回滚" if cur else ""))
+        CORE_UPD.update(ok=True, message=f"{CORES[kind]} 已从 {cur or '无'} 更新到 {nv}" + ("，旧版本已备份，可一键回滚" if cur else "")
+                        + (f"（{err}）" if err else ""))
         tg = load()
         if tg.get("tg_token") and tg.get("tg_chat"):
             notify(f"⬆️ {CORES[kind]} 内核已更新：{cur or '无'} → {nv}")
@@ -5383,7 +5408,7 @@ def core_rollback_job(kind="mihomo"):
         ok, err = _core_swap_and_restart(B + ".bak", old, kind)
         if not ok:
             raise ValueError(err)
-        CORE_UPD.update(ok=True, message=f"已回滚：{cur} → {old}（{cur} 保留为备份）")
+        CORE_UPD.update(ok=True, message=f"已回滚：{cur} → {old}（{cur} 保留为备份）" + (f"；{err}" if err else ""))
     except Exception as e:
         CORE_UPD.update(ok=False, message=str(e))
     finally:
@@ -6528,10 +6553,16 @@ def check_nodes():
     if not pg:
         return
     code, raw = core("GET", f"/group/{quote(G_MANUAL)}/delay?url={quote(HC)}&timeout=5000", timeout=30)
+    # 只有 200（逐个节点的结果）和 504（mihomo：全部节点超时）是测速结论；502 等是核心没应答（重载 / 重启中、请求超时），
+    # 以前也当成「全部超时」，会误发一条「所有节点均测速超时」，下一轮又发「已恢复」
+    if code not in (200, 504):
+        return
     try:
         res = json.loads(raw) if code == 200 else {}
     except Exception:
-        res = {}
+        return
+    if not isinstance(res, dict):
+        return
     all_down = not any(v for v in res.values() if isinstance(v, int) and v > 0)
     st = load_notified()
     if all_down != bool(st.get("allnodes")):
@@ -8088,7 +8119,10 @@ def run_task(name):
     if name == "geo_update" and active_core(d) == "singbox":
         bad = sb_sync_assets(d, force=True)
         ok, msg = reload_core()
-        return not bad and ok, "GEO / 规则集已更新" if not bad else "部分规则集更新失败：" + "；".join(bad)[:200]
+        if bad:
+            return False, "部分规则集更新失败：" + "；".join(bad)[:200]
+        # 重载失败时以前仍报「GEO / 规则集已更新」（事件里显示「✗ GEO / 规则集已更新」），看不出是重载出了问题
+        return ok, "GEO / 规则集已更新" if ok else "规则集已下载，但重载核心失败：" + str(msg)[:200]
     if name == "sub_update":
         bad = []
         for s in d["subs"]:
@@ -9313,7 +9347,7 @@ from .groups import (
     sub_orig_nodes, sub_removed
 )
 from .ruleutil import complete_rule
-from .mihomo import bad_rule_policies, build_config, dns_cfg, safe_dev, validate_dns
+from .mihomo import bad_rule_policies, build_config, dns_cfg, drop_provider_cache, safe_dev, validate_dns
 from .core import conns_snapshot, refresh_after_sub, refresh_later, refresh_regions, reload_core
 from .corehttp import core, core_json
 from .sb_common import CORES, SB_BIN, SB_STATE, active_core, core_conf_path
@@ -9322,7 +9356,7 @@ from .sb_config import build_singbox, sb_ab_loaded, sb_fake_providers, sb_fake_r
 from .sb_switch import core_switch_job, sb_arch, sb_remote_version, sb_update_job
 from .panel_update import self_rollback, self_update
 from .core_update import (
-    CORE_CHANNELS, CORE_UPD, LGBM_FILE, bin_version, core_check, core_job_start, core_rollback_job, core_upd_status, core_update_job,
+    CORE_CHANNELS, CORE_UPD, LGBM_FILE, MANUAL_NOTE, bin_version, core_check, core_job_start, core_rollback_job, core_upd_status, core_update_job,
     lgbm_fetch, lgbm_fetch_reload
 )
 from .sysopt import SVC_OP, core_procs, delay_test, favicon, kill_core_procs, nft_ok, opt_apply, opt_status, rc_run, sh, speed_test, svc_restart
@@ -10257,11 +10291,13 @@ class H(BaseHTTPRequestHandler):
                     shutil.copy2(SB_BIN, tmp)
                     os.replace(SB_BIN + ".bak", SB_BIN)
                     os.replace(tmp, SB_BIN + ".bak")
-                    if active_core() == "singbox":
+                    # 手动停止了核心时只换程序，不替用户把核心拉起来
+                    manual = active_core() == "singbox" and WD["manual_stop"]
+                    if active_core() == "singbox" and not manual:
                         svc_restart(timeout=90)
                 finally:
                     CORE_UPD["busy"] = False
-                return self.reply(True, f"已回滚到 sing-box {sb_version()}")
+                return self.reply(True, f"已回滚到 sing-box {sb_version()}" + (f"（{MANUAL_NOTE}）" if manual else ""))
             ch = b.get("channel") or "stable"
             ok, msg = core_job_start(sb_update_job, ch, load().get("gh_proxy") or "", bool(b.get("force")))
             return self.send(200 if ok else 409, {"message": msg})
@@ -10550,8 +10586,15 @@ class H(BaseHTTPRequestHandler):
             new = {"name": name, "url": url, "filter": flt, "exclude": exc}
             if old and sub_removed(old):  # 编辑订阅时保留「从订阅删除」的节点名单
                 new["removed"] = sub_removed(old)
-            d["subs"] = [s for s in d["subs"] if s["name"] != name] + [new]
+            # 编辑时留在原位置：以前先删再追加到末尾，订阅顺序一变，sing-box 里不同订阅的同名节点去重后缀（「HK (2)」）
+            # 会互换，已选中的节点 / 自定义组成员悄悄指向另一个订阅的节点；mihomo 的 use 顺序与节点排列也跟着变
+            if old:
+                d["subs"] = [new if s["name"] == name else s for s in d["subs"]]
+            else:
+                d["subs"].append(new)
         prev = update(save_sub)
+        if not cur or cur.get("url") != url:  # 新订阅 / 换了链接：旧链接留下的 mihomo 缓存不能再用（sing-box 下载失败时也会拿它兜底）
+            drop_provider_cache(name)
         if active_core() == "singbox":  # 先由面板下载节点，再生成配置
             okl, bad = sb_update_subs([name])
             ok, msg = reload_core(prev)
@@ -10566,7 +10609,10 @@ class H(BaseHTTPRequestHandler):
     @api_route("/api/subs", "DELETE")
     def api_subs_delete(self, m, p, b, q):
         prev = update(lambda d: d.update(subs=[s for s in d["subs"] if s["name"] != b.get("name")]))
-        return self.reply(*reload_core(prev))
+        ok, msg = reload_core(prev)
+        if ok and isinstance(b.get("name"), str) and b["name"] and not any(s["name"] == b["name"] for s in load()["subs"]):
+            drop_provider_cache(b["name"])  # 以后用同名重新添加（换了链接）时不会先加载这份旧节点
+        return self.reply(ok, msg)
 
     @api_route("/api/subs/nodes", "GET")
     def api_subs_nodes_get(self, m, p, b, q):
@@ -11006,6 +11052,7 @@ class H(BaseHTTPRequestHandler):
             st["prev"] = update(fn)
 
         ok, msg = backup_mod.restore((b.get("name") or "").strip(), check_data=check, apply_data=apply)
+        restored = ok  # 程序文件（server.py / index.html）已换成备份里的版本
         if ok and "prev" in st:
             ab_compose(load())
             rok, rmsg = reload_core(st["prev"])
@@ -11013,7 +11060,13 @@ class H(BaseHTTPRequestHandler):
                 tp_apply()
             msg += ("核心已重载：" if rok else "设置已撤销：") + rmsg
             ok = rok
-        return self.reply(ok, msg + renames_note(st.get("renames")))
+        if restored:
+            # index.html 按文件修改时间立即换成备份版本，正在运行的却还是当前的 server.py：不重启就是新旧前后端混跑。
+            # 以前要用户自己重启面板，前端的「是否现在重启」又判断了后端从不返回的 j.ok，从来不会出现
+            restart_self()
+            msg += "；面板正在重启"
+        # 程序文件已换（面板要重启）时也回 200，前端据 restart 刷新页面；ok=False 表示设置部分已撤销（见 message）
+        return self.send(200 if ok or restored else 500, {"message": msg + renames_note(st.get("renames")), "ok": ok, "restart": restored})
 
     @api_route("/api/backup/delete", "POST")
     def api_backup_delete(self, m, p, b, q):

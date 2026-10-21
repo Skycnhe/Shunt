@@ -18,7 +18,7 @@ from .groups import (
     sub_orig_nodes, sub_removed
 )
 from .ruleutil import complete_rule
-from .mihomo import bad_rule_policies, build_config, dns_cfg, safe_dev, validate_dns
+from .mihomo import bad_rule_policies, build_config, dns_cfg, drop_provider_cache, safe_dev, validate_dns
 from .core import conns_snapshot, refresh_after_sub, refresh_later, refresh_regions, reload_core
 from .corehttp import core, core_json
 from .sb_common import CORES, SB_BIN, SB_STATE, active_core, core_conf_path
@@ -27,7 +27,7 @@ from .sb_config import build_singbox, sb_ab_loaded, sb_fake_providers, sb_fake_r
 from .sb_switch import core_switch_job, sb_arch, sb_remote_version, sb_update_job
 from .panel_update import self_rollback, self_update
 from .core_update import (
-    CORE_CHANNELS, CORE_UPD, LGBM_FILE, bin_version, core_check, core_job_start, core_rollback_job, core_upd_status, core_update_job,
+    CORE_CHANNELS, CORE_UPD, LGBM_FILE, MANUAL_NOTE, bin_version, core_check, core_job_start, core_rollback_job, core_upd_status, core_update_job,
     lgbm_fetch, lgbm_fetch_reload
 )
 from .sysopt import SVC_OP, core_procs, delay_test, favicon, kill_core_procs, nft_ok, opt_apply, opt_status, rc_run, sh, speed_test, svc_restart
@@ -962,11 +962,13 @@ class H(BaseHTTPRequestHandler):
                     shutil.copy2(SB_BIN, tmp)
                     os.replace(SB_BIN + ".bak", SB_BIN)
                     os.replace(tmp, SB_BIN + ".bak")
-                    if active_core() == "singbox":
+                    # 手动停止了核心时只换程序，不替用户把核心拉起来
+                    manual = active_core() == "singbox" and WD["manual_stop"]
+                    if active_core() == "singbox" and not manual:
                         svc_restart(timeout=90)
                 finally:
                     CORE_UPD["busy"] = False
-                return self.reply(True, f"已回滚到 sing-box {sb_version()}")
+                return self.reply(True, f"已回滚到 sing-box {sb_version()}" + (f"（{MANUAL_NOTE}）" if manual else ""))
             ch = b.get("channel") or "stable"
             ok, msg = core_job_start(sb_update_job, ch, load().get("gh_proxy") or "", bool(b.get("force")))
             return self.send(200 if ok else 409, {"message": msg})
@@ -1255,8 +1257,15 @@ class H(BaseHTTPRequestHandler):
             new = {"name": name, "url": url, "filter": flt, "exclude": exc}
             if old and sub_removed(old):  # 编辑订阅时保留「从订阅删除」的节点名单
                 new["removed"] = sub_removed(old)
-            d["subs"] = [s for s in d["subs"] if s["name"] != name] + [new]
+            # 编辑时留在原位置：以前先删再追加到末尾，订阅顺序一变，sing-box 里不同订阅的同名节点去重后缀（「HK (2)」）
+            # 会互换，已选中的节点 / 自定义组成员悄悄指向另一个订阅的节点；mihomo 的 use 顺序与节点排列也跟着变
+            if old:
+                d["subs"] = [new if s["name"] == name else s for s in d["subs"]]
+            else:
+                d["subs"].append(new)
         prev = update(save_sub)
+        if not cur or cur.get("url") != url:  # 新订阅 / 换了链接：旧链接留下的 mihomo 缓存不能再用（sing-box 下载失败时也会拿它兜底）
+            drop_provider_cache(name)
         if active_core() == "singbox":  # 先由面板下载节点，再生成配置
             okl, bad = sb_update_subs([name])
             ok, msg = reload_core(prev)
@@ -1271,7 +1280,10 @@ class H(BaseHTTPRequestHandler):
     @api_route("/api/subs", "DELETE")
     def api_subs_delete(self, m, p, b, q):
         prev = update(lambda d: d.update(subs=[s for s in d["subs"] if s["name"] != b.get("name")]))
-        return self.reply(*reload_core(prev))
+        ok, msg = reload_core(prev)
+        if ok and isinstance(b.get("name"), str) and b["name"] and not any(s["name"] == b["name"] for s in load()["subs"]):
+            drop_provider_cache(b["name"])  # 以后用同名重新添加（换了链接）时不会先加载这份旧节点
+        return self.reply(ok, msg)
 
     @api_route("/api/subs/nodes", "GET")
     def api_subs_nodes_get(self, m, p, b, q):
@@ -1711,6 +1723,7 @@ class H(BaseHTTPRequestHandler):
             st["prev"] = update(fn)
 
         ok, msg = backup_mod.restore((b.get("name") or "").strip(), check_data=check, apply_data=apply)
+        restored = ok  # 程序文件（server.py / index.html）已换成备份里的版本
         if ok and "prev" in st:
             ab_compose(load())
             rok, rmsg = reload_core(st["prev"])
@@ -1718,7 +1731,13 @@ class H(BaseHTTPRequestHandler):
                 tp_apply()
             msg += ("核心已重载：" if rok else "设置已撤销：") + rmsg
             ok = rok
-        return self.reply(ok, msg + renames_note(st.get("renames")))
+        if restored:
+            # index.html 按文件修改时间立即换成备份版本，正在运行的却还是当前的 server.py：不重启就是新旧前后端混跑。
+            # 以前要用户自己重启面板，前端的「是否现在重启」又判断了后端从不返回的 j.ok，从来不会出现
+            restart_self()
+            msg += "；面板正在重启"
+        # 程序文件已换（面板要重启）时也回 200，前端据 restart 刷新页面；ok=False 表示设置部分已撤销（见 message）
+        return self.send(200 if ok or restored else 500, {"message": msg + renames_note(st.get("renames")), "ok": ok, "restart": restored})
 
     @api_route("/api/backup/delete", "POST")
     def api_backup_delete(self, m, p, b, q):

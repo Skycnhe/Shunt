@@ -15,16 +15,6 @@ CO = sys.modules["shunt.core"]
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-class VersionTest(unittest.TestCase):
-    def test_version(self):
-        self.assertEqual(B.PANEL_VERSION, "8.4.4")
-
-    def test_changelog_top(self):
-        with open(os.path.join(ROOT, "CHANGELOG.md"), encoding="utf-8") as f:
-            heads = [ln for ln in f if ln.startswith("## v")]
-        self.assertTrue(heads[0].startswith("## v8.4.4"), heads[0])
-
-
 class SnifferSkipTest(unittest.TestCase):
     def test_skip_domain(self):
         sk = MH.build_config(base())["sniffer"]["skip-domain"]

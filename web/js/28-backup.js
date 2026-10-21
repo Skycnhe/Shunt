@@ -28,13 +28,15 @@ async function createBackup(btn){
   }catch(e){toast("备份失败")}finally{if(btn)btn.disabled=false}
 }
 
+// 后端恢复程序文件后会自动重启面板（不重启就是备份里的 index.html 配当前的 server.py）：等几秒刷新页面。
+// 以前判断后端从不返回的 j.ok，重启提示从来不出现；失败时只显示「恢复失败」，看不到原因
 async function restoreBackup(name){
-  if(!confirm("恢复到 "+name+"？\n\n会先自动备份当前版本，恢复后需重启面板生效。"))return;
-  try{
-    var j=await api("/api/backup/restore","POST",{name:name});
-    toast(j.message||"");
-    if(j.ok&&confirm("已恢复。是否现在重启面板？"))location.reload();
-  }catch(e){toast("恢复失败")}
+  if(!confirm("恢复到 "+name+"？\n\n会先自动备份当前版本，恢复后面板自动重启。"))return;
+  var j;
+  try{j=await api("/api/backup/restore","POST",{name:name})}
+  catch(e){toast("恢复失败："+e.message);loadBackups();return}
+  toast(j.message||"已恢复");
+  if(j.restart)setTimeout(function(){location.reload()},5000);else loadBackups();
 }
 
 async function delBackup(name){

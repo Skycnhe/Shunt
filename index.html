@@ -754,7 +754,7 @@ nav button{font-size:15.5px;font-weight:600;opacity:.85}nav button.on{font-weigh
       <label class="btn g filebtn">从文件恢复…<input type="file" id="restore-file" accept=".json,application/json" onchange="restore()"></label></div>
       <div class="mut small" style="margin-top:6px">备份含订阅链接、手动节点、广告拦截与 DNS 设置和 Telegram Token，请妥善保管</div></div>
     <div data-sg="bak" class="card"><div class="row"><h3 class="sp" style="margin:0">版本备份</h3><button class="btn g sm" onclick="createBackup(this)">立即备份</button></div>
-      <div class="mut small" style="margin:4px 0 6px">更新面板时会自动备份当前版本（带版本号）。想回到某个版本，点「恢复」后重启面板生效；只保留最近 10 个</div>
+      <div class="mut small" style="margin:4px 0 6px">更新面板时会自动备份当前版本（带版本号）。想回到某个版本，点「恢复」，面板会自动重启；只保留最近 10 个</div>
       <div id="verbak-list" class="small"><span class="mut">加载中…</span></div></div>
     </div>
   </section>
@@ -900,9 +900,10 @@ async function loadQS(){let px;try{px=await loadPX()}catch(e){$('#qs-card').clas
   try{const j=await api('/api/direct_delay');if(j.ms>0)DIRECT_D=j.ms}catch(e){}
   const g=px[SEL];$('#qs-card').classList.toggle('hide',!g);if(!g)return;PROXIES=px;
   const ch=nowChain(SEL);$('#qs-now').textContent=ch.length?'当前：'+ch.join(' → '):'';
-  $('#qs').innerHTML=g.all.map((n,j)=>{if(HIDEDEAD&&n!==g.now&&isDead(n))return '';const d=lastDelay(n),p=px[n]||{},sub=p.type==='Smart'?'智能竞技':p.now?'→ '+p.now:(p.type==='LoadBalance'?'负载均衡':'');
-    return `<div class="node ${n===g.now?'sel':''}" onclick="qsPick(${j})" title="${esc(n)}"><div class="n">${esc(n)}</div><div class="d"><span class="mut" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(sub)}</span><span class="${dcls(d)}">${dtxt(d)}</span></div></div>`}).join('')}
-async function qsPick(j){const n=PROXIES[SEL].all[j];try{await core('/proxies/'+encodeURIComponent(SEL),'PUT',{name:n});toast(SEL+' → '+n);loadQS()}catch(e){toast(e.message)}}
+  $('#qs').innerHTML=g.all.map(n=>{if(HIDEDEAD&&n!==g.now&&isDead(n))return '';const d=lastDelay(n),p=px[n]||{},sub=p.type==='Smart'?'智能竞技':p.now?'→ '+p.now:(p.type==='LoadBalance'?'负载均衡':'');
+    return `<div class="node ${n===g.now?'sel':''}" onclick="qsPick(${jsq(n)})" title="${esc(n)}"><div class="n">${esc(n)}</div><div class="d"><span class="mut" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(sub)}</span><span class="${dcls(d)}">${dtxt(d)}</span></div></div>`}).join('')}
+// 按名字切换（不按序号）：从节点页切回概览时 PROXIES 已被节点页换成新数据、这里的列表还没重画，序号会指到别的组
+async function qsPick(n){if(typeof n!=='string'||!n)return;try{await core('/proxies/'+encodeURIComponent(SEL),'PUT',{name:n});toast(SEL+' → '+n);loadQS()}catch(e){toast(e.message)}}
 async function qsTest(b){b.disabled=true;b.textContent='测速中…';
   const gs=[SEL].concat((PROXIES[SEL]?.all||[]).filter(n=>PROXIES[n]?.all));
   await Promise.all(gs.map(testGroupKeep));
@@ -1294,7 +1295,7 @@ async function ruleTest(){const t=$('#rt-target').value.trim();if(!t)return toas
     $('#rt-result').innerHTML=h}catch(e){$('#rt-result').innerHTML=`<span class="bad">${esc(e.message)}</span>`}b.disabled=false}
 
 // 广告拦截
-let AB=null,_abt=0;
+let AB=null,_abt=0,AB_SAVING=false;
 async function loadAB(){try{AB=await api('/api/adblock')}catch(e){return toast(e.message)}renderAB();clearTimeout(_abt);if(AB.updating)_abt=setTimeout(loadAB,2500)}
 function abLists(){return AB.lists.map(({name,url,enabled})=>({name,url,enabled}))}
 function renderAB(){const a=AB;$('#ab-on').checked=a.enabled;$('#ab-on').onchange=e=>abSave({enabled:e.target.checked},e.target.checked?'广告拦截已开启':'广告拦截已关闭');
@@ -1320,12 +1321,16 @@ function renderAB(){const a=AB;$('#ab-on').checked=a.enabled;$('#ab-on').onchang
   if(document.activeElement!==$('#ab-white'))$('#ab-white').value=a.white.join('\n');
   const top=a.stats.top||[],mx=top.length?top[0][1]:1;
   $('#ab-top').innerHTML=top.map(([d,n])=>`<tr><td class="w">${esc(d)}</td><td><div class="bar" style="width:${Math.max(2,n/mx*100)}%"></div></td><td>${n}</td></tr>`).join('')||'<tr><td class="mut" colspan="3">今天还没有拦截记录</td></tr>'}
-async function abSave(patch,msg){try{toast('正在应用…');const j=await api('/api/adblock','PUT',patch);toast(msg&&!/下载/.test(j.message)?msg:j.message);}catch(e){toast(e.message)}loadAB()}
-function abPreset(i){const p=AB.presets[i];abSave({lists:abLists().concat([{name:p.name,url:p.url,enabled:true}]),enabled:true},'已添加 '+p.name)}
-function abAdd(){const url=$('#ab-url').value.trim(),name=$('#ab-name').value.trim();if(!/^https?:\/\//.test(url))return toast('请填写列表地址');
+async function abSave(patch,msg){AB_SAVING=true;try{toast('正在应用…');const j=await api('/api/adblock','PUT',patch);toast(msg&&!/下载/.test(j.message)?msg:j.message);}catch(e){toast(e.message)}
+  try{await loadAB()}finally{AB_SAVING=false}}
+// 列表的增删 / 开关都提交整份列表（按当前 AB 拼出来）：上一次保存（含重载核心，要几秒）还没完成时再改，
+// 拼出来的列表里还是旧状态，会把上一次的修改覆盖回去（连点两个开关，第一个又被关回去）。保存期间先拦住
+function abBusy(){if(!AB_SAVING)return false;toast('正在应用上一次修改，请稍候再试');renderAB();return true}
+function abPreset(i){if(abBusy())return;const p=AB.presets[i];abSave({lists:abLists().concat([{name:p.name,url:p.url,enabled:true}]),enabled:true},'已添加 '+p.name)}
+function abAdd(){if(abBusy())return;const url=$('#ab-url').value.trim(),name=$('#ab-name').value.trim();if(!/^https?:\/\//.test(url))return toast('请填写列表地址');
   $('#ab-url').value='';$('#ab-name').value='';abSave({lists:abLists().concat([{name,url,enabled:true}])})}
-function abDel(i){if(!confirm('删除列表 '+AB.lists[i].name+'？'))return;const l=abLists();l.splice(i,1);abSave({lists:l},'已删除')}
-function abToggle(i,v){const l=abLists();l[i].enabled=v;abSave({lists:l},v?'已启用':'已停用')}
+function abDel(i){if(abBusy())return;if(!confirm('删除列表 '+AB.lists[i].name+'？'))return;const l=abLists();l.splice(i,1);abSave({lists:l},'已删除')}
+function abToggle(i,v){if(abBusy())return;const l=abLists();l[i].enabled=v;abSave({lists:l},v?'已启用':'已停用')}
 async function abUpdate(id){try{const j=await api('/api/adblock/update','POST',id?{ids:[id]}:{});toast(j.message)}catch(e){toast(e.message)}setTimeout(loadAB,800)}
 function abSaveBW(){abSave({black:lines($('#ab-black').value),white:lines($('#ab-white').value)},'自定义规则已生效')}
 async function abCheck(){const d=$('#ab-check').value.trim();if(!d)return toast('请输入域名');
@@ -1653,7 +1658,7 @@ function corePoll(){$('#core-prog').classList.remove('hide');['#core-btn','#core
     $('#core-bar').style.width=(j.pct||0)+'%';$('#core-log').textContent=(j.log||[]).join('\n');
     if(!j.busy){clearInterval(CORE_POLL);CORE_POLL=null;['#core-btn','#core-rb','#core-chk'].forEach(x=>$(x).disabled=false);
       $('#core-r').innerHTML=`<span class="${j.ok?'ok':'bad'}">● ${esc(j.message||'')}</span>`;toast(j.ok?'内核操作完成':'内核操作失败');
-      if(j.ok){await loadState();api('/api/coreupdate?channel='+coreCh()).then(coreShow).catch(()=>{})}}};
+      if(j.ok){await loadState();api('/api/coreupdate?channel='+coreCh()+'&core='+coreKind()).then(coreShow).catch(()=>{})}}};
   tick();CORE_POLL=setInterval(tick,1500)}
 async function rollbackPanel(){if(!confirm('回滚到上次更新前的面板版本？'))return;try{const j=await api('/api/selfupdate','POST',{action:'rollback'});toast(j.message);setTimeout(()=>location.reload(),5000)}catch(e){toast(e.message)}}
 
@@ -1743,13 +1748,15 @@ async function createBackup(btn){
   }catch(e){toast("备份失败")}finally{if(btn)btn.disabled=false}
 }
 
+// 后端恢复程序文件后会自动重启面板（不重启就是备份里的 index.html 配当前的 server.py）：等几秒刷新页面。
+// 以前判断后端从不返回的 j.ok，重启提示从来不出现；失败时只显示「恢复失败」，看不到原因
 async function restoreBackup(name){
-  if(!confirm("恢复到 "+name+"？\n\n会先自动备份当前版本，恢复后需重启面板生效。"))return;
-  try{
-    var j=await api("/api/backup/restore","POST",{name:name});
-    toast(j.message||"");
-    if(j.ok&&confirm("已恢复。是否现在重启面板？"))location.reload();
-  }catch(e){toast("恢复失败")}
+  if(!confirm("恢复到 "+name+"？\n\n会先自动备份当前版本，恢复后面板自动重启。"))return;
+  var j;
+  try{j=await api("/api/backup/restore","POST",{name:name})}
+  catch(e){toast("恢复失败："+e.message);loadBackups();return}
+  toast(j.message||"已恢复");
+  if(j.restart)setTimeout(function(){location.reload()},5000);else loadBackups();
 }
 
 async function delBackup(name){

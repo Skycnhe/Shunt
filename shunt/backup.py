@@ -202,6 +202,6 @@ def restore(name, check_data=None, apply_data=None):
                     os.replace(DATA_FILE + ".new", DATA_FILE)
             finally:
                 shutil.rmtree(tmpd, ignore_errors=True)
-        return True, "已恢复到 %s（已自动备份当前版本 %s）。恢复 server.py 后需重启面板生效。" % (name, cur)
+        return True, "已恢复到 %s（已自动备份当前版本 %s）。" % (name, cur)
     except Exception as e:
         return False, "恢复失败：%s" % e

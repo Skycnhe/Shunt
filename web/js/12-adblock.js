@@ -1,5 +1,5 @@
 // 广告拦截
-let AB=null,_abt=0;
+let AB=null,_abt=0,AB_SAVING=false;
 async function loadAB(){try{AB=await api('/api/adblock')}catch(e){return toast(e.message)}renderAB();clearTimeout(_abt);if(AB.updating)_abt=setTimeout(loadAB,2500)}
 function abLists(){return AB.lists.map(({name,url,enabled})=>({name,url,enabled}))}
 function renderAB(){const a=AB;$('#ab-on').checked=a.enabled;$('#ab-on').onchange=e=>abSave({enabled:e.target.checked},e.target.checked?'广告拦截已开启':'广告拦截已关闭');
@@ -25,12 +25,16 @@ function renderAB(){const a=AB;$('#ab-on').checked=a.enabled;$('#ab-on').onchang
   if(document.activeElement!==$('#ab-white'))$('#ab-white').value=a.white.join('\n');
   const top=a.stats.top||[],mx=top.length?top[0][1]:1;
   $('#ab-top').innerHTML=top.map(([d,n])=>`<tr><td class="w">${esc(d)}</td><td><div class="bar" style="width:${Math.max(2,n/mx*100)}%"></div></td><td>${n}</td></tr>`).join('')||'<tr><td class="mut" colspan="3">今天还没有拦截记录</td></tr>'}
-async function abSave(patch,msg){try{toast('正在应用…');const j=await api('/api/adblock','PUT',patch);toast(msg&&!/下载/.test(j.message)?msg:j.message);}catch(e){toast(e.message)}loadAB()}
-function abPreset(i){const p=AB.presets[i];abSave({lists:abLists().concat([{name:p.name,url:p.url,enabled:true}]),enabled:true},'已添加 '+p.name)}
-function abAdd(){const url=$('#ab-url').value.trim(),name=$('#ab-name').value.trim();if(!/^https?:\/\//.test(url))return toast('请填写列表地址');
+async function abSave(patch,msg){AB_SAVING=true;try{toast('正在应用…');const j=await api('/api/adblock','PUT',patch);toast(msg&&!/下载/.test(j.message)?msg:j.message);}catch(e){toast(e.message)}
+  try{await loadAB()}finally{AB_SAVING=false}}
+// 列表的增删 / 开关都提交整份列表（按当前 AB 拼出来）：上一次保存（含重载核心，要几秒）还没完成时再改，
+// 拼出来的列表里还是旧状态，会把上一次的修改覆盖回去（连点两个开关，第一个又被关回去）。保存期间先拦住
+function abBusy(){if(!AB_SAVING)return false;toast('正在应用上一次修改，请稍候再试');renderAB();return true}
+function abPreset(i){if(abBusy())return;const p=AB.presets[i];abSave({lists:abLists().concat([{name:p.name,url:p.url,enabled:true}]),enabled:true},'已添加 '+p.name)}
+function abAdd(){if(abBusy())return;const url=$('#ab-url').value.trim(),name=$('#ab-name').value.trim();if(!/^https?:\/\//.test(url))return toast('请填写列表地址');
   $('#ab-url').value='';$('#ab-name').value='';abSave({lists:abLists().concat([{name,url,enabled:true}])})}
-function abDel(i){if(!confirm('删除列表 '+AB.lists[i].name+'？'))return;const l=abLists();l.splice(i,1);abSave({lists:l},'已删除')}
-function abToggle(i,v){const l=abLists();l[i].enabled=v;abSave({lists:l},v?'已启用':'已停用')}
+function abDel(i){if(abBusy())return;if(!confirm('删除列表 '+AB.lists[i].name+'？'))return;const l=abLists();l.splice(i,1);abSave({lists:l},'已删除')}
+function abToggle(i,v){if(abBusy())return;const l=abLists();l[i].enabled=v;abSave({lists:l},v?'已启用':'已停用')}
 async function abUpdate(id){try{const j=await api('/api/adblock/update','POST',id?{ids:[id]}:{});toast(j.message)}catch(e){toast(e.message)}setTimeout(loadAB,800)}
 function abSaveBW(){abSave({black:lines($('#ab-black').value),white:lines($('#ab-white').value)},'自定义规则已生效')}
 async function abCheck(){const d=$('#ab-check').value.trim();if(!d)return toast('请输入域名');

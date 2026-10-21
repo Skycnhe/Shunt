@@ -83,6 +83,7 @@ class VersionRestoreTest(ApiCase):
         self.p = [mock.patch.object(BK, "BACKUP_DIR", self.dir), mock.patch.object(BK, "BASE", self.base),
                   mock.patch.object(WA, "reload_core", return_value=(True, "ok")),
                   mock.patch.object(WA, "tp_apply", return_value=(0, "")),
+                  mock.patch.object(WA, "restart_self"),  # v8.4.5 起恢复程序文件后自动重启面板
                   mock.patch.object(WA, "ab_compose")]
         for x in self.p:
             x.start()

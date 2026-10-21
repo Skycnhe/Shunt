@@ -11,6 +11,19 @@ from .groups import clean_custom_group, gcfg, group_opts, names_rx, pick_plan, r
 from .ruleutil import DOMAIN_RX, adblock_providers, complete_rule, dns_policy_of, rule_policy_index
 from .sb_common import active_core
 from .sysopt import sh
+
+
+def drop_provider_cache(name):
+    """删掉订阅在 mihomo 里的本地缓存 ./providers/<名>.yaml。
+    mihomo 加载 provider 时只要本地文件存在就先用它，按文件修改时间等满一个更新间隔才去下载，不看地址变没变：
+    改了订阅链接（换机场 / 重置 token）或删掉后用同名重新添加，以前要等到间隔（默认 24 小时）才换成新链接的节点"""
+    try:
+        os.remove(os.path.join(CONF_DIR, "providers", safe(name) + ".yaml"))
+        return True
+    except OSError:
+        return False
+
+
 def build_config(d, strict=False):
     providers = {}
     for s in d["subs"]:
