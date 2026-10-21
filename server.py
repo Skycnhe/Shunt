@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "10.3.0"
+PANEL_VERSION = "10.3.1"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -311,7 +311,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "10.3.0"
+PANEL_VERSION = "10.3.1"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -1234,7 +1234,7 @@ def provider_nodes(fresh=False):
     data = None
     if active_core() == "singbox":  # sing-box 的订阅由面板下载解析，节点名直接取缓存
         data = sb_provider_nodes(load())
-        _prov_set(now, data)
+        prov_set(now, data)
         return data
     j = None if os.environ.get("PANEL_OFFLINE") else core_json("/providers/proxies", timeout=3)
     if j is not None:
@@ -1249,11 +1249,12 @@ def provider_nodes(fresh=False):
                 log_err("保存订阅节点列表", e)
     if data is None:
         data = read_json(PROV_FILE, {})
-    _prov_set(now, data)
+    prov_set(now, data)
     return data
 
 
-def _prov_set(now, data):
+def prov_set(now, data):
+    """更新订阅节点名单缓存；名单有变化时 rev 加一。直接 PROV.update 不会推进 rev（以前 sing-box 更新订阅后策略组名单一直是旧的）"""
     if PROV["data"] is not None and data != PROV["data"]:
         PROV["rev"] += 1
     PROV.update(t=now, data=data)
@@ -1482,7 +1483,7 @@ ROUTES_MAX = 500
 MAC_RX = re.compile(r"([0-9a-f]{2}:){5}[0-9a-f]{2}")
 APPLIED_FILE = os.path.join(PANEL_DIR, "devroute_applied.json")
 SEEN = {}  # mac -> 上次解析到的 IP 列表：设备暂时不在 ARP 表里（休眠）时沿用，不让规则时有时无、核心反复重载
-STATE = {"last": None, "applied": None, "loaded": False}  # last：最近一次生成配置时的 MAC 解析结果；applied：写入正式配置时的
+STATE = {"last": None, "applied": None, "loaded": False, "stamp": None}  # last：最近一次生成配置时的 MAC 解析结果；applied：写入正式配置时的
 _LOGGED = set()  # 已记过日志的跳过原因（生成配置很频繁，同一原因只记一次）
 _LOCK = threading.Lock()
 
@@ -1583,8 +1584,20 @@ def mac_mapping(d, tables=None):
     arp, n6 = tables or _tables(d)
     owner = {ip: str(m).lower() for ip, m in list(arp.items()) + list(n6.items())}
     out = {}
+    applied = None
     for mac in macs:
         ips = resolve_mac(mac, arp, n6)
+        if not ips and mac not in SEEN:
+            # 本进程还没见过这台设备（面板刚重启、或 init.d 启动核心时的 --gen 进程）：沿用正式配置里记下的 IP。
+            # 以前 --gen 进程 SEEN 为空，休眠设备的规则在核心重启时被丢掉，而面板进程靠 SEEN 算出的结果与它内存里的「已应用」相同，
+            # 不会再重载，设备醒来后规则也一直缺失
+            if applied is None:
+                applied = applied_sig() or {}
+            prev = applied.get(mac)
+            ips = [x for x in prev if isinstance(x, str)] if isinstance(prev, list) else []
+            ips = [ip for ip in ips if owner.get(ip, mac) == mac]
+            out[mac] = ips
+            continue
         with _LOCK:
             if ips:
                 SEEN[mac] = ips
@@ -1682,13 +1695,27 @@ def mark_applied(sig=None):
             with open(APPLIED_FILE + ".tmp", "w") as f:
                 json.dump(sig or {}, f)
             os.replace(APPLIED_FILE + ".tmp", APPLIED_FILE)
+            STATE["stamp"] = _stamp()
     except OSError:
         pass
 
 
+def _stamp():
+    """已应用记录文件的身份（inode, 修改时间, 大小）；不存在时为 None"""
+    try:
+        st = os.stat(APPLIED_FILE)
+    except OSError:
+        return None
+    return (st.st_ino, st.st_mtime_ns, st.st_size)
+
+
 def applied_sig():
-    if not STATE["loaded"]:
+    """当前正式配置里 MAC → IP 的解析结果。文件被别的进程改写过（核心每次启动前 init.d 都会跑 --gen 重新生成配置）就重新读：
+    以前只在面板启动时读一次，核心重启后面板仍按旧记录比较，与实际配置不一致时该重载的不重载"""
+    st = _stamp()
+    if not STATE["loaded"] or (st is not None and st != STATE.get("stamp")):
         STATE["loaded"] = True
+        STATE["stamp"] = st
         try:
             with open(APPLIED_FILE) as f:
                 v = json.load(f)
@@ -3321,7 +3348,10 @@ def sb_update_subs(names=None, d=None):
     with res_lock:  # 超时还没结束的线程之后再写结果也不影响这里返回的快照
         ok_out = list(ok)
         bad_out = list(bad) + [f"{s['name']}：下载超时" for s, t in zip(subs, ths) if t.is_alive()]
-    PROV.update(t=0, data=None)
+    # 只让缓存过期、保留旧名单：下次 provider_nodes 拿新名单与它比较，有变化才能推进 provider_rev()。
+    # 以前把 data 清成 None，比较时没有旧名单，rev 永远不变：sing-box 下订阅更新出新地区后，/api/state 的策略组名单
+    # （策略下拉框、按设备分流目标）一直按旧缓存返回，直到下次改设置
+    PROV["t"] = 0
     return ok_out, bad_out
 
 
@@ -3802,7 +3832,7 @@ from .base import (
     AB_DIR, BUILTIN_POLICIES, CN_ECS, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, UA, dl_check, wd_hold)
 from .errlog import log_err, log_tail
 from .data import auto_name, lb_dropped_names, lb_names, lb_old_name, load, safe, write_json
-from .groups import PROV, clean_custom_group, gcfg, pick_plan, rx, sub_orig_nodes
+from .groups import clean_custom_group, gcfg, pick_plan, prov_set, rx, sub_orig_nodes
 from .mihomo import BUILTIN_GEO, build_config, build_rule_providers, dns_cfg, policy_parts, tun_params, write_atomic, write_config
 from .corehttp import core_json
 from .devroute import note_written
@@ -3818,7 +3848,8 @@ from .notify import core_alive
 def build_singbox(d):
     """把 build_config 生成的 mihomo 结构翻译成 sing-box 配置；返回 (配置, 警告列表, 需要的规则集文件)"""
     sub_out = sb_sub_outbounds(d)
-    PROV.update(t=time.time(), data={k: [n for n, _ in v] for k, v in sub_out.items()})
+    # 经 prov_set 写入：名单变了要推进 provider_rev()，/api/state 的策略组缓存和 /api/ping 版本号才会更新
+    prov_set(time.time(), {k: [n for n, _ in v] for k, v in sub_out.items()})
     cfg = build_config(d)
     v6 = bool(d.get("ipv6"))
     gc = gcfg(d)
@@ -8416,7 +8447,9 @@ def sched_loop():
                 last = min([sb_sub_cache(s["name"]).get("updated", 0) for s in d["subs"]] or [0])
                 if time.time() - max(last, SCHED["done"].get("sb_subs", 0)) >= iv:
                     SCHED["done"]["sb_subs"] = time.time()
-                    _, bad_, _ = subs_update(d=d)
+                    # 给 where：刷新地区组出错只记日志。以前异常抛出到循环外，本轮已记为「今天已执行」的定点任务
+                    # （定时重启核心 / 更新 GEO / 健康检查等）随之被跳过，当天不再执行
+                    _, bad_, _ = subs_update(d=d, where="订阅自动更新：刷新地区分组")
                     if bad_:
                         sched_event("订阅自动更新：✗ " + "；".join(bad_)[:200])
             bm = bg_meta()

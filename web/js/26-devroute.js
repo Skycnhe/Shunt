@@ -29,7 +29,10 @@ async function drSubmit(){const a=$('#dr-addr').value.trim(),t=$('#dr-target').v
   if(await drSave(l))drReset()}
 function drEdit(i){const e=drList()[i];if(!e)return;DR_EDIT=i;$('#dr-name').value=e.name||'';$('#dr-addr').value=e.mac||e.ip||'';
   $('#dr-add').textContent='保存';$('#dr-cancel').classList.remove('hide');renderDR();$('#dr-addr').focus()}
-function drDel(i){const l=drList();if(!l[i]||!confirm(`删除「${l[i].name||l[i].ip||l[i].mac}」的分流设置？`))return;l.splice(i,1);if(DR_EDIT===i)DR_EDIT=-1;drSave(l)}
+// 删除正在编辑的条目前面的一条时，编辑序号跟着前移（保存失败时还原）：以前不调整，点「保存」会覆盖掉后面一条、正在编辑的那条不变；
+// 删除的正是正在编辑的条目时清空表单（以前表单还留着，点「保存」会把刚删的又加回来）
+async function drDel(i){const l=drList();if(!l[i]||!confirm(`删除「${l[i].name||l[i].ip||l[i].mac}」的分流设置？`))return;l.splice(i,1);
+  const e=DR_EDIT;if(e===i)DR_EDIT=-1;else if(e>i)DR_EDIT=e-1;if(!await drSave(l)){DR_EDIT=e;return}if(e===i)drReset()}
 function drToggle(i,on){const l=drList();if(!l[i])return;l[i].enabled=on;drSave(l)}
 // 从设备列表快速设置：已有条目则编辑，否则预填名称和地址（有 MAC 用 MAC，换 IP 也跟着走）
 function drQuick(ip){go('设置');setTimeout(()=>{if(SG!=='net'){SG='net';localStorage.setItem('mp_sg',SG);renderSG()}

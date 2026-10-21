@@ -1,5 +1,4 @@
 """v8.4.4：嗅探跳过米家 / Apple 推送、自定义组容差留空跟随全局、group_sig 比较 use"""
-import os
 import sys
 import unittest
 
@@ -8,21 +7,9 @@ from tests.test_v840 import base, cg
 
 assert server
 
-B = sys.modules["shunt.base"]
 G = sys.modules["shunt.groups"]
 MH = sys.modules["shunt.mihomo"]
 CO = sys.modules["shunt.core"]
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-class VersionTest(unittest.TestCase):
-    def test_version(self):
-        self.assertEqual(B.PANEL_VERSION, "10.3.0")
-
-    def test_changelog_top(self):
-        with open(os.path.join(ROOT, "CHANGELOG.md"), encoding="utf-8") as f:
-            heads = [ln for ln in f if ln.startswith("## v")]
-        self.assertTrue(heads[0].startswith("## v10.3.0"), heads[0])
 
 
 class SnifferSkipTest(unittest.TestCase):

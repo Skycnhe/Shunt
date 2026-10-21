@@ -162,7 +162,9 @@ def sched_loop():
                 last = min([sb_sub_cache(s["name"]).get("updated", 0) for s in d["subs"]] or [0])
                 if time.time() - max(last, SCHED["done"].get("sb_subs", 0)) >= iv:
                     SCHED["done"]["sb_subs"] = time.time()
-                    _, bad_, _ = subs_update(d=d)
+                    # 给 where：刷新地区组出错只记日志。以前异常抛出到循环外，本轮已记为「今天已执行」的定点任务
+                    # （定时重启核心 / 更新 GEO / 健康检查等）随之被跳过，当天不再执行
+                    _, bad_, _ = subs_update(d=d, where="订阅自动更新：刷新地区分组")
                     if bad_:
                         sched_event("订阅自动更新：✗ " + "；".join(bad_)[:200])
             bm = bg_meta()

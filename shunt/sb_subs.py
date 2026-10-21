@@ -253,7 +253,10 @@ def sb_update_subs(names=None, d=None):
     with res_lock:  # 超时还没结束的线程之后再写结果也不影响这里返回的快照
         ok_out = list(ok)
         bad_out = list(bad) + [f"{s['name']}：下载超时" for s, t in zip(subs, ths) if t.is_alive()]
-    PROV.update(t=0, data=None)
+    # 只让缓存过期、保留旧名单：下次 provider_nodes 拿新名单与它比较，有变化才能推进 provider_rev()。
+    # 以前把 data 清成 None，比较时没有旧名单，rev 永远不变：sing-box 下订阅更新出新地区后，/api/state 的策略组名单
+    # （策略下拉框、按设备分流目标）一直按旧缓存返回，直到下次改设置
+    PROV["t"] = 0
     return ok_out, bad_out
 
 

@@ -63,7 +63,7 @@ def provider_nodes(fresh=False):
     data = None
     if active_core() == "singbox":  # sing-box 的订阅由面板下载解析，节点名直接取缓存
         data = sb_provider_nodes(load())
-        _prov_set(now, data)
+        prov_set(now, data)
         return data
     j = None if os.environ.get("PANEL_OFFLINE") else core_json("/providers/proxies", timeout=3)
     if j is not None:
@@ -78,11 +78,12 @@ def provider_nodes(fresh=False):
                 log_err("保存订阅节点列表", e)
     if data is None:
         data = read_json(PROV_FILE, {})
-    _prov_set(now, data)
+    prov_set(now, data)
     return data
 
 
-def _prov_set(now, data):
+def prov_set(now, data):
+    """更新订阅节点名单缓存；名单有变化时 rev 加一。直接 PROV.update 不会推进 rev（以前 sing-box 更新订阅后策略组名单一直是旧的）"""
     if PROV["data"] is not None and data != PROV["data"]:
         PROV["rev"] += 1
     PROV.update(t=now, data=data)

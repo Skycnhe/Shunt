@@ -13,7 +13,7 @@ ROUTES_MAX = 500
 MAC_RX = re.compile(r"([0-9a-f]{2}:){5}[0-9a-f]{2}")
 APPLIED_FILE = os.path.join(PANEL_DIR, "devroute_applied.json")
 SEEN = {}  # mac -> 上次解析到的 IP 列表：设备暂时不在 ARP 表里（休眠）时沿用，不让规则时有时无、核心反复重载
-STATE = {"last": None, "applied": None, "loaded": False}  # last：最近一次生成配置时的 MAC 解析结果；applied：写入正式配置时的
+STATE = {"last": None, "applied": None, "loaded": False, "stamp": None}  # last：最近一次生成配置时的 MAC 解析结果；applied：写入正式配置时的
 _LOGGED = set()  # 已记过日志的跳过原因（生成配置很频繁，同一原因只记一次）
 _LOCK = threading.Lock()
 
@@ -114,8 +114,20 @@ def mac_mapping(d, tables=None):
     arp, n6 = tables or _tables(d)
     owner = {ip: str(m).lower() for ip, m in list(arp.items()) + list(n6.items())}
     out = {}
+    applied = None
     for mac in macs:
         ips = resolve_mac(mac, arp, n6)
+        if not ips and mac not in SEEN:
+            # 本进程还没见过这台设备（面板刚重启、或 init.d 启动核心时的 --gen 进程）：沿用正式配置里记下的 IP。
+            # 以前 --gen 进程 SEEN 为空，休眠设备的规则在核心重启时被丢掉，而面板进程靠 SEEN 算出的结果与它内存里的「已应用」相同，
+            # 不会再重载，设备醒来后规则也一直缺失
+            if applied is None:
+                applied = applied_sig() or {}
+            prev = applied.get(mac)
+            ips = [x for x in prev if isinstance(x, str)] if isinstance(prev, list) else []
+            ips = [ip for ip in ips if owner.get(ip, mac) == mac]
+            out[mac] = ips
+            continue
         with _LOCK:
             if ips:
                 SEEN[mac] = ips
@@ -213,13 +225,27 @@ def mark_applied(sig=None):
             with open(APPLIED_FILE + ".tmp", "w") as f:
                 json.dump(sig or {}, f)
             os.replace(APPLIED_FILE + ".tmp", APPLIED_FILE)
+            STATE["stamp"] = _stamp()
     except OSError:
         pass
 
 
+def _stamp():
+    """已应用记录文件的身份（inode, 修改时间, 大小）；不存在时为 None"""
+    try:
+        st = os.stat(APPLIED_FILE)
+    except OSError:
+        return None
+    return (st.st_ino, st.st_mtime_ns, st.st_size)
+
+
 def applied_sig():
-    if not STATE["loaded"]:
+    """当前正式配置里 MAC → IP 的解析结果。文件被别的进程改写过（核心每次启动前 init.d 都会跑 --gen 重新生成配置）就重新读：
+    以前只在面板启动时读一次，核心重启后面板仍按旧记录比较，与实际配置不一致时该重载的不重载"""
+    st = _stamp()
+    if not STATE["loaded"] or (st is not None and st != STATE.get("stamp")):
         STATE["loaded"] = True
+        STATE["stamp"] = st
         try:
             with open(APPLIED_FILE) as f:
                 v = json.load(f)
