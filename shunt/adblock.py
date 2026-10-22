@@ -4,7 +4,7 @@ from collections import deque
 from urllib.parse import quote
 
 from .errlog import log_err
-from .base import AB_DIR, AB_STATS_FILE, CONF_DIR, FAKEIP_NETS, UA, dl_check, udp_dns_query
+from .base import AB_DIR, AB_STATS_FILE, CONF_DIR, FAKEIP_NETS, UA, dl_check, read_full, udp_dns_query
 from .data import load, read_json, write_json
 from .mihomo import build_config
 from .core import reload_core
@@ -156,7 +156,7 @@ def download(url, timeout=60, limit=40 << 20):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": UA})
             with proxy_opener(use_proxy).open(req, timeout=timeout) as r:
-                data = r.read(limit + 1)
+                data = read_full(r, limit + 1)
                 if len(data) > limit:
                     raise ValueError("文件过大（超过 40MB）")
                 return data.decode("utf-8", "ignore")

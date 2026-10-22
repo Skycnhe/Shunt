@@ -12,10 +12,25 @@ function renderSkins(){const el=$('#skins');if(!el)return;const c=curSkin();
   el.innerHTML=SKINS.map(([k,n,bg,a,b,l])=>`<button class="skin ${c===k?'on':''}" onclick="applySkin('${k}')"><div class="pv" style="background:radial-gradient(60px 50px at 20% 10%,${a}66,transparent),radial-gradient(70px 60px at 90% 90%,${b}66,transparent),${bg}">
     <b style="background:linear-gradient(135deg,${a},${b})"></b><i style="background:${l?'rgba(255,255,255,.7)':'rgba(255,255,255,.08)'}"></i></div><span class="nm">${n}</span></button>`).join('')}
 let BG=(()=>{try{return Object.assign({src:'',blur:6,dim:45},JSON.parse(localStorage.getItem('mp_bg')||'{}'))}catch{return {src:'',blur:6,dim:45}}})();
+// 路由器上的图（链接下载 / 每日壁纸）不经过上传时的压缩，可能是 4K 以上的原图：整张解码后再加模糊、铺满固定层，
+// iOS Safari 等会超出图层 / 内存上限，只画出一部分。显示前在本机缩到最长边 2560px（只处理同源 /bg，外链图会污染画布）
+const BG_MAXPX=2560;let BGFIT={src:'',url:''};
+function bgFit(src,cb){if(!src||!src.startsWith('/bg')||typeof document.createElement!=='function'){cb(src);return}
+  if(BGFIT.src===src){cb(BGFIT.url||src);return}
+  const img=new Image();img.onload=()=>{const w=img.naturalWidth,h=img.naturalHeight,m=Math.max(w,h);
+      if(!m||m<=BG_MAXPX){BGFIT={src,url:''};cb(src);return}
+      try{const s=BG_MAXPX/m,c=document.createElement('canvas');c.width=Math.round(w*s);c.height=Math.round(h*s);
+        c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+        c.toBlob(b=>{if(!b){cb(src);return}if(BGFIT.url)URL.revokeObjectURL(BGFIT.url);BGFIT={src,url:URL.createObjectURL(b)};cb(BGFIT.url)},'image/jpeg',.9)}
+      catch(e){cb(src)}};
+  img.onerror=()=>cb(src);img.src=src}
 function bgApply(){const d=document.documentElement,on=!!BG.src;d.classList.toggle('has-bg',on);
   const im=$('#bgimg'),dm=$('#bgdim');if(!im)return;
-  im.style.backgroundImage=on?`url("${BG.src.replace(/"/g,'%22')}")`:'';im.style.filter=BG.blur?`blur(${BG.blur}px)`:'';dm.style.opacity=(BG.dim/100).toFixed(2);
-  const pv=$('#bg-pv');if(pv){pv.style.backgroundImage=on?`url("${BG.src.replace(/"/g,'%22')}")`:'';pv.textContent=on?'':'未设置'}
+  im.style.filter=BG.blur?`blur(${BG.blur}px)`:'';dm.style.opacity=(BG.dim/100).toFixed(2);
+  const pv=$('#bg-pv');if(pv)pv.textContent=on?'':'未设置';
+  if(!on){im.style.backgroundImage='';if(pv)pv.style.backgroundImage=''}
+  else{const want=BG.src;bgFit(want,u=>{if(BG.src!==want)return;const css=`url("${u.replace(/"/g,'%22')}")`;
+    im.style.backgroundImage=css;const p2=$('#bg-pv');if(p2)p2.style.backgroundImage=css})}
   if($('#bg-blur')){$('#bg-blur').value=BG.blur;$('#bg-dim').value=BG.dim;$('#bg-blur-v').textContent=BG.blur+'px';$('#bg-dim-v').textContent=BG.dim+'%'}}
 function bgSave(){localStorage.setItem('mp_bg',JSON.stringify(BG));bgApply()}
 function bgSet(){BG.blur=+$('#bg-blur').value;BG.dim=+$('#bg-dim').value;bgSave()}

@@ -263,8 +263,10 @@ nav .ico{display:none}nav .more{display:none}
   --blob1:rgba(60,220,170,.36);--blob2:rgba(80,170,255,.28);--blob3:rgba(200,255,150,.3);--blob4:rgba(150,240,220,.4);--k-sel:#0a6fa8;--k-auto:#0b7d45}
 :root[data-skin] .logo{box-shadow:0 4px 14px color-mix(in srgb,var(--pri) 45%,transparent)}
 /* 背景图 */
-#bgimg{position:fixed;inset:-30px;z-index:-2;background-size:cover;background-position:center;display:none;pointer-events:none}
-#bgdim{position:fixed;inset:0;z-index:-1;display:none;pointer-events:none;background:var(--bg)}
+/* 高度按「地址栏收起后」的大视口（100lvh）：iOS / 安卓浏览器滚动时地址栏收起，按 inset 算的固定层只有小视口高，底部会露出一截；
+   translateZ 让模糊层单独合成，避免 Safari 滚动时只重绘一部分 */
+#bgimg{position:fixed;top:-30px;left:-30px;right:-30px;height:calc(100vh + 60px);height:calc(100lvh + 60px);z-index:-2;background-size:cover;background-position:center;display:none;pointer-events:none;transform:translateZ(0)}
+#bgdim{position:fixed;top:0;left:0;right:0;height:100vh;height:100lvh;z-index:-1;display:none;pointer-events:none;background:var(--bg)}
 :root.has-bg #bgimg,:root.has-bg #bgdim{display:block}:root.has-bg body::before{display:none}:root.has-bg{background:var(--bg)}
 .skins{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:10px}
 .skin{position:relative;border-radius:14px;padding:0;border:2px solid transparent;cursor:pointer;overflow:hidden;background:none;color:inherit;text-align:left;transition:transform .15s}

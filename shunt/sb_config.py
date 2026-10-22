@@ -2,7 +2,7 @@
 import ipaddress, json, os, re, shlex, signal, threading, time, urllib.request, urllib.error
 
 from .base import (
-    AB_DIR, BUILTIN_POLICIES, CN_ECS, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, UA, dl_check, wd_hold)
+    AB_DIR, BUILTIN_POLICIES, CN_ECS, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, UA, dl_check, read_full, wd_hold)
 from .errlog import log_err
 from .data import auto_name, lb_dropped_names, lb_names, lb_old_name, load, safe, write_json
 from .groups import PROV, clean_custom_group, gcfg, pick_plan, rx, sub_orig_nodes
@@ -510,7 +510,7 @@ def sb_sync_assets(d, force=False, need=None):
                         continue
                     try:
                         with proxy_opener(use_proxy).open(urllib.request.Request(u, headers={"User-Agent": UA}), timeout=30) as r:
-                            data = r.read(40 << 20)
+                            data = read_full(r, 40 << 20)
                         break
                     except Exception as e:
                         err = str(e)[:120]

@@ -43,16 +43,6 @@ def run_node(js):
     return json.loads(r.stdout)
 
 
-class VersionTest(unittest.TestCase):
-    def test_version(self):
-        self.assertEqual(B.PANEL_VERSION, "8.4.5")
-
-    def test_changelog_top(self):
-        with open(os.path.join(ROOT, "CHANGELOG.md"), encoding="utf-8") as f:
-            heads = [ln for ln in f if ln.startswith("## v")]
-        self.assertTrue(heads[0].startswith("## v8.4.5"), heads[0])
-
-
 class SubProviderCacheTest(ApiCase):
     """改了订阅链接 / 删除订阅：删掉 mihomo 的 ./providers/<名>.yaml（mihomo 有本地文件就先用，等满间隔才下载新链接）；
     编辑订阅时留在原位置"""

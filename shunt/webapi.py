@@ -9,9 +9,9 @@ from . import adblock, stats
 from .base import (
     AB_DIR, AB_PRESETS, BUILTIN_POLICIES, CERT, DEFAULT_EXCLUDE, DNS_DEFAULT, DNS_LISTS, GROUP_TYPES, G_MANUAL, G_SEL, HC, KEY,
     LB_STRATEGIES, LOCK, MAX_BODY, MIHOMO_BIN, MIHOMO_LOG, PANEL_VERSION, PRIMARY_REGIONS, PROXY_MODES, REGIONS, SMART_BIN, SVC, TPROXY_SH,
-    TUN_STACKS, upd_begin, upd_busy_msg, wd_hold
+    TUN_STACKS, UPD_STATE, CONF_DIR, upd_begin, upd_busy_msg, wd_hold
 )
-from .data import HISTORY_FILE, HISTORY_SKIP, auto_name, config_version, lb_names, load, migrate_names, normalize, read_json, region_lb_set, save, update
+from .data import HISTORY_FILE, HISTORY_SKIP, auto_name, config_version, lb_names, load, migrate_names, normalize, read_json, region_lb_set, safe, save, update
 from .links import add_links, q1, reserved_names
 from .groups import (
     NODE_LIST_MAX, all_node_names, clean_custom_group, gcfg, node_name_ok, provider_nodes, provider_rev, region_plan, rx, sb_sub_outbounds,
@@ -22,7 +22,7 @@ from .mihomo import bad_rule_policies, build_config, dns_cfg, drop_provider_cach
 from .core import conns_snapshot, refresh_after_sub, refresh_later, refresh_regions, reload_core
 from .corehttp import core, core_json
 from .sb_common import CORES, SB_BIN, SB_STATE, active_core, core_conf_path
-from .sb_subs import sb_update_subs
+from .sb_subs import parse_sub_text, sb_update_subs
 from .sb_config import build_singbox, sb_ab_loaded, sb_fake_providers, sb_fake_rule_providers, sb_rule_need, sb_sync_assets, sb_version, write_active_config
 from .sb_switch import core_switch_job, sb_arch, sb_remote_version, sb_update_job
 from .panel_update import self_rollback, self_update
@@ -367,6 +367,51 @@ def sub_nodes_view(d):
     return {"subs": out, "core": active_core(d)}
 
 
+SUB_FETCH_KEYS = ("url", "filter", "exclude")  # sing-box：面板下载订阅时就按筛选 / 排除过滤，缓存里只有过滤后的节点
+
+
+def sub_caches_sync(prev, d):
+    """恢复设置 / 配置快照 / 版本备份改动了订阅时，按订阅处理旧缓存（与 POST/DELETE /api/subs 一致）。
+    以前只有订阅页的添加 / 编辑 / 删除会删 mihomo 的 ./providers/<名>.yaml：恢复出一份换了链接的订阅后，
+    mihomo 有本地文件就先用，按文件时间等满更新间隔（默认 24 小时）才下载新链接；sing-box 则一直用面板缓存里旧链接的节点。
+    返回 sing-box 需要重新下载的订阅名（新增 / 链接、筛选、排除变化）"""
+    old = {s["name"]: s for s in (prev or {}).get("subs") or [] if isinstance(s, dict) and s.get("name")}
+    new = {s["name"]: s for s in d.get("subs") or [] if isinstance(s, dict) and s.get("name")}
+    for n, s in old.items():
+        if n not in new or new[n].get("url") != s.get("url"):
+            drop_provider_cache(n)
+    for n in new:
+        if n not in old:
+            drop_provider_cache(n)  # 以前删掉的同名订阅留下的缓存
+    return [n for n, s in new.items() if n not in old or any(s.get(k) != old[n].get(k) for k in SUB_FETCH_KEYS)]
+
+
+def sub_refetch(names):
+    """sing-box 下重新下载 sub_caches_sync 返回的订阅；返回附加提示（失败原因）"""
+    if not names or active_core() != "singbox":
+        return ""
+    _, bad = sb_update_subs(names)
+    return ("；订阅下载失败（稍后自动重试或在订阅页手动更新）：" + "；".join(bad)[:300]) if bad else ""
+
+
+def removed_only_left(name, flt, exc, gone):
+    """mihomo：编辑订阅的筛选 / 排除后，provider 里是否只剩「已从订阅删除」的节点。
+    这样 provider 过滤后一个节点都没有，mihomo 解析失败、订阅之后每次更新都失败（v8.4.1 禁止删光节点的同一个问题，
+    以前改筛选正则就能绕过去）。按 mihomo 缓存的订阅原文判断；没有缓存、正则含反引号（mihomo 多条写法）时不判断"""
+    if not gone or "`" in flt or "`" in exc:
+        return False
+    try:
+        with open(os.path.join(CONF_DIR, "providers", safe(name) + ".yaml"), encoding="utf-8", errors="ignore") as f:
+            nodes, _ = parse_sub_text(f.read())
+    except (OSError, ValueError):
+        return False
+    rf, re_ = (rx(flt) if flt else None), (rx(exc) if exc else None)
+    if (flt and rf is None) or (exc and re_ is None):
+        return False
+    left = {str(p.get("name")) for p in nodes if (not rf or rf.search(str(p.get("name")))) and not (re_ and re_.search(str(p.get("name"))))}
+    return bool(left) and left <= set(gone)
+
+
 RESTORE_KEYS = ("mode", "tproxy", "subs", "rules", "rulesets", "bypass", "tests", "sub_interval", "region_groups",
                 "nodes", "ipv6", "watchdog", "tg_token", "tg_chat", "proxy_mode", "tun", "log_limit", "adblock", "dns",
                 "devices", "schedule", "groups_cfg", "custom_groups", "sniffer", "gh_proxy")
@@ -703,6 +748,16 @@ class H(BaseHTTPRequestHandler):
         cur = load()["adblock"]
         lists = []
         seen = set()
+        # 形状校验：lists 里混了非对象、black/white 不是列表时以前回 500；black 是字符串时还会被逐字符拆成条目
+        if not isinstance(b.get("lists", []), list) or not all(isinstance(x, dict) for x in b.get("lists", [])):
+            return self.send(400, {"message": "列表格式不正确"})
+        for key in ("black", "white"):
+            if not isinstance(b.get(key, []), list):
+                return self.send(400, {"message": "黑名单 / 白名单格式不正确"})
+        try:
+            int(b.get("interval", cur["interval"]) or 0)
+        except (TypeError, ValueError):
+            return self.send(400, {"message": "更新间隔无效"})
         for l in b.get("lists", cur["lists"]):
             url = str(l.get("url") or "").strip()
             name = str(l.get("name") or "").strip()[:40] or (url.split("/")[2] if url.count("/") >= 2 else "")
@@ -713,7 +768,7 @@ class H(BaseHTTPRequestHandler):
                 continue
             seen.add(lid)
             lists.append({"id": lid, "name": name or lid, "url": url, "enabled": bool(l.get("enabled", True))})
-        clean = lambda xs: [x.strip() for x in xs if str(x).strip()][:20000]
+        clean = lambda xs: [str(x).strip() for x in xs if str(x).strip()][:20000]
         new = {"enabled": bool(b.get("enabled", cur["enabled"])), "lists": lists,
                "black": clean(b.get("black", cur["black"])), "white": clean(b.get("white", cur["white"])),
                "interval": int(b.get("interval", cur["interval"]) or 0), "dns": bool(b.get("dns", cur["dns"]))}
@@ -904,6 +959,8 @@ class H(BaseHTTPRequestHandler):
 
     def api(self, m, p, q):
         b = self.body() if m in ("POST", "PUT", "PATCH", "DELETE") else {}  # 请求体已在 route() 里完整读入
+        if not isinstance(b, dict):  # [1] / "x" / 123 这类合法 JSON：以前各接口 b.get 抛 AttributeError，回 500 并写一条错误堆栈
+            return self.send(400, {"message": "请求体必须是 JSON 对象"})
         # 透传到 mihomo external-controller
         if p.startswith("/api/core/") and active_core() == "singbox":
             sub = p[len("/api/core"):]
@@ -1252,6 +1309,11 @@ class H(BaseHTTPRequestHandler):
                 re.compile(pat)
             except re.error as e:
                 return self.send(400, {"message": f"正则表达式无效：{pat}（{e}）"})
+        if (cur and cur.get("url") == url and active_core() != "singbox"
+                and (flt, exc) != (cur.get("filter") or "", cur.get("exclude", DEFAULT_EXCLUDE) or "")
+                and removed_only_left(name, flt, exc, sub_removed(cur))):
+            return self.send(400, {"message": f"按新的筛选 / 排除规则，订阅「{name}」只剩已从订阅删除的节点，mihomo 会因为订阅里一个节点都没有而加载失败；"
+                                              "请先在节点页恢复需要的节点，或调整筛选规则"})
         def save_sub(d):
             old = next((s for s in d["subs"] if s["name"] == name), None)
             new = {"name": name, "url": url, "filter": flt, "exclude": exc}
@@ -1511,11 +1573,12 @@ class H(BaseHTTPRequestHandler):
             d.update({k: v for k, v in snap["data"].items() if k not in HISTORY_SKIP})
             migrate_names(d)
         prev = update(apply_snap)
+        note = sub_refetch(sub_caches_sync(prev, load()))
         ab_compose(load())
         ok, msg = reload_core(prev)
         if ok:
             tp_apply()
-        return self.reply(ok, ("已恢复到 " + time.strftime("%m-%d %H:%M", time.localtime(snap["t"])) + " 的配置") if ok else msg)
+        return self.reply(ok, ("已恢复到 " + time.strftime("%m-%d %H:%M", time.localtime(snap["t"])) + " 的配置" + note) if ok else msg)
 
     @api_route("/api/dnsquery", "POST")
     def api_dnsquery_post(self, m, p, b, q):
@@ -1573,7 +1636,11 @@ class H(BaseHTTPRequestHandler):
             if v and not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", v):
                 return self.send(400, {"message": f"时间格式应为 HH:MM：{v}"})
             sc[k] = v
-        sc["latency"] = int(b.get("latency") or 0) if int(b.get("latency") or 0) in (0, 10, 30, 60, 180) else 0
+        try:  # latency:"abc" / [1] 以前 int() 抛异常回 500
+            lat = int(b.get("latency") or 0)
+        except (TypeError, ValueError):
+            return self.send(400, {"message": "定时测速间隔无效"})
+        sc["latency"] = lat if lat in (0, 10, 30, 60, 180) else 0
         update(lambda d: d.update(schedule=sc))
         return self.send(200, {"message": "定时任务已保存"})
 
@@ -1688,6 +1755,16 @@ class H(BaseHTTPRequestHandler):
 
     @api_route("/api/backup/restore", "POST")
     def api_backup_restore(self, m, p, b, q):
+        # 与面板在线更新 / 内核更新互斥：以前恢复不占忙标志，与在线更新同时进行时两边交替覆盖 server.py / index.html，
+        # 可能留下新旧混合的文件；内核替换到一半时恢复又会 restart_self 重启面板
+        if not upd_begin("panel"):
+            return self.send(409, {"message": upd_busy_msg()})
+        try:
+            return self._backup_restore(b)
+        finally:
+            UPD_STATE["busy"] = False
+
+    def _backup_restore(self, b):
         from . import backup as backup_mod
         st = {}
 
@@ -1725,6 +1802,9 @@ class H(BaseHTTPRequestHandler):
         ok, msg = backup_mod.restore((b.get("name") or "").strip(), check_data=check, apply_data=apply)
         restored = ok  # 程序文件（server.py / index.html）已换成备份里的版本
         if ok and "prev" in st:
+            note = sub_refetch(sub_caches_sync(st["prev"], load()))
+            if note:
+                msg += note.lstrip("；") + "；"
             ab_compose(load())
             rok, rmsg = reload_core(st["prev"])
             if rok:
@@ -1822,11 +1902,12 @@ class H(BaseHTTPRequestHandler):
         if err:
             return self.send(400, {"message": "备份内容无效：" + err})
         prev = update(apply_backup)
+        note = sub_refetch(sub_caches_sync(prev, load()))
         ab_compose(load())
         ok, msg = reload_core(prev)
         if ok:
             tp_apply()
-        return self.reply(ok, ("已恢复，" if ok else "") + msg + renames_note(renames))
+        return self.reply(ok, ("已恢复，" if ok else "") + msg + renames_note(renames) + (note if ok else ""))
 
     @api_route("/api/logticket", "POST")
     def api_logticket_post(self, m, p, b, q):

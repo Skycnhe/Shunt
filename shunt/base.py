@@ -241,7 +241,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "8.4.5"
+PANEL_VERSION = "8.4.6"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -324,6 +324,17 @@ def dl_check(url, via_proxy=False):
     """下载入口统一校验：目标非公网地址时抛 IOError（调用方已有通用异常处理）"""
     if url_host_forbidden(url, via_proxy=via_proxy):
         raise IOError(f"目标地址非公网，已拦截（SSRF 防护）：{urlsplit(url).hostname}")
+
+
+def read_full(r, limit):
+    """读 urllib 响应体，最多 limit 字节；连接提前断开（Content-Length 没收满）时抛 IOError。
+    http.client 的 read(n) 在对方中途断开时不报错，只返回已收到的部分：以前背景图只存下半张（浏览器只画出上半截），
+    订阅 / 规则集 / 广告列表只解析出前面一部分，节点或规则悄悄变少"""
+    data = r.read(limit)
+    left = getattr(r, "length", None)
+    if left and len(data) < limit:
+        raise IOError(f"下载不完整：连接中途断开（收到 {len(data)} 字节，还差 {left} 字节）")
+    return data
 
 
 class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):

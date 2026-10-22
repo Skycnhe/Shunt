@@ -3,7 +3,7 @@ import base64, json, os, re, threading, time, urllib.request, urllib.error
 from urllib.parse import quote
 
 from .errlog import log_err
-from .base import G_MANUAL, G_SEL, HC, NOTIFY_FILE, PANEL_DIR, UA, WD_INTERVAL, dl_check
+from .base import G_MANUAL, G_SEL, HC, NOTIFY_FILE, PANEL_DIR, UA, WD_INTERVAL, dl_check, read_full
 from .data import load, read_json, write_json
 from .core import refresh_regions
 from .corehttp import core, core_json
@@ -116,11 +116,25 @@ def bg_save(data_url):
         return False, "图片不能超过 8MB"
     if bg_type(raw[:16]) is None:
         return False, "只支持 JPG / PNG / WebP / GIF"
-    tmp = BG_FILE + ".tmp"
-    with open(tmp, "wb") as f:
-        f.write(raw)
-    os.replace(tmp, BG_FILE)
+    _bg_write(raw)
     return True, "背景图已保存"
+
+
+_BG_LOCK = threading.Lock()
+
+
+def _bg_write(raw):
+    """写背景图：上传与每日刷新 / 链接下载可能同时发生，以前共用 bg.img.tmp，两边各自 truncate + 写同一个文件，
+    换上去的可能是两张图拼起来的坏文件（只显示出一部分）"""
+    with _BG_LOCK:
+        tmp = f"{BG_FILE}.tmp{threading.get_ident()}"
+        try:
+            with open(tmp, "wb") as f:
+                f.write(raw)
+            os.replace(tmp, BG_FILE)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
 
 
 BG_META = BG_FILE + ".json"  # 链接背景图：{"url": 链接, "daily": 每天刷新, "t": 上次下载时间}
@@ -163,7 +177,7 @@ def bg_fetch(url):
         req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "image/avif,image/webp,image/*,*/*;q=0.8"})
         try:
             with proxy_opener(proxy).open(req, timeout=20) as r:
-                raw = r.read(BG_MAX + 1)
+                raw = read_full(r, BG_MAX + 1)
             break
         except urllib.error.HTTPError as e:
             err = f"HTTP {e.code}"
@@ -175,10 +189,7 @@ def bg_fetch(url):
         return False, "图片不能超过 8MB"
     if bg_type(raw[:16]) is None:
         return False, "链接返回的不是 JPG / PNG / WebP / GIF 图片"
-    tmp = BG_FILE + ".tmp"
-    with open(tmp, "wb") as f:
-        f.write(raw)
-    os.replace(tmp, BG_FILE)
+    _bg_write(raw)
     return True, "背景图已下载到路由器"
 
 

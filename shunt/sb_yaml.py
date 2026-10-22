@@ -1,5 +1,5 @@
 """极简 YAML 读取（只为解析 Clash 订阅里的 proxies 列表；面板保持零依赖）"""
-import json, re
+import copy, json, re
 def _y_strip_comment(s):
     q = None
     for i, ch in enumerate(s):
@@ -130,7 +130,8 @@ def _y_depth(s):
     return n
 
 
-_FLOW_KEY = re.compile(r"""^\s*(?:-\s+)*(?:(?:"(?:[^"\\]|\\.)*"|'[^']*'|[^\s'"{}\[\],:#-][^:#]*?|-[^\s:#][^:#]*?)\s*:\s+)?""")
+_FLOW_KEY = re.compile(r"""^\s*(?:-\s+)*(?:(?:"(?:[^"\\]|\\.)*"|'[^']*'|[^\s'"{}\[\],:#&*-][^:#]*?|-[^\s:#][^:#]*?)\s*:\s+)?(?:&[^\s{}\[\],]+\s+)?""")
+_ANCHOR = re.compile(r"^&([^\s{}\[\],]+)(?:\s+|$)")
 
 
 def _y_flow_start(c):
@@ -141,7 +142,8 @@ def _y_flow_start(c):
 
 
 def yaml_lite(text):
-    """块状 / 流式映射与列表、引号字符串、注释；不支持锚点等高级语法"""
+    """块状 / 流式映射与列表、引号字符串、注释、锚点 &a / 别名 *a / 合并键 <<: *a（机场常用来复用节点参数）。
+    以前不认锚点：「- &a {name: …}」整条被当成一个字符串、「- &a」后面的块状节点整段丢掉，没有 PyYAML 的设备上这些节点静默消失"""
     raw = []
     for line in text.replace("\t", "  ").splitlines():
         if line.strip() in ("---", "...") or not line.strip() or line.lstrip().startswith("#"):
@@ -180,12 +182,45 @@ def yaml_lite(text):
         m = re.match(r"^([^:{}\[\],]+?)\s*:(?:\s+(.*)|$)", t)
         return (m.group(1).strip(), (m.group(2) or "").strip()) if m else None
 
+    anchors = {}
+
+    def anchor(v):
+        """去掉值开头的锚点 &a，返回 (锚点名或 None, 剩下的值)"""
+        m = _ANCHOR.match(v)
+        return (m.group(1), v[m.end():].strip()) if m else (None, v)
+
+    def alias(v):
+        if isinstance(v, str) and re.fullmatch(r"\*[^\s{}\[\],]+", v):
+            return copy.deepcopy(anchors[v[1:]]) if v[1:] in anchors else v
+        if isinstance(v, dict):
+            return merge({k: alias(x) for k, x in v.items()})
+        if isinstance(v, list):
+            return [alias(x) for x in v]
+        return v
+
+    def merge(m):
+        """<<: *a / <<: [*a, *b]：合并进来，自己写的键优先"""
+        if "<<" not in m:
+            return m
+        src = m.pop("<<")
+        out = {}
+        for x in (src if isinstance(src, list) else [src]):
+            if isinstance(x, dict):
+                out.update({k: v for k, v in x.items() if k not in out})
+        out.update(m)
+        return out
+
     def inline(v):
+        name, v = anchor(v)
         if v.startswith(("{", "[")):
-            return _y_flow(v)[0]
-        if v in ("|", ">", "|-", ">-"):
-            return ""
-        return _y_scalar(v)
+            r = alias(_y_flow(v)[0])
+        elif v in ("|", ">", "|-", ">-"):
+            r = ""
+        else:
+            r = alias(_y_scalar(v)) if v else None
+        if name:
+            anchors[name] = r
+        return r
 
     def block(i, ind):
         if i >= len(lines):
@@ -194,6 +229,19 @@ def yaml_lite(text):
             out = []
             while i < len(lines) and lines[i][0] == ind and (lines[i][1].startswith("- ") or lines[i][1] == "-"):
                 rest = lines[i][1][1:].strip()
+                name, rest = anchor(rest)
+                if name and not rest:  # 「- &a」后面跟块状映射
+                    if i + 1 < len(lines) and lines[i + 1][0] > ind:
+                        v, i = block(i + 1, lines[i + 1][0])
+                    else:
+                        v, i = None, i + 1
+                    anchors[name] = v
+                    out.append(v)
+                    continue
+                if name:
+                    rest = "&" + name + " " + rest  # 行内值：交给 inline 记录锚点
+                    if not rest[len(name) + 2:].startswith(("{", "[")) and split_kv(rest[len(name) + 2:]) is not None:
+                        rest = rest[len(name) + 2:]  # 「- &a key: v」锚点给整个映射：少见，按普通映射解析（锚点不记录）
                 if not rest:
                     if i + 1 < len(lines) and lines[i + 1][0] > ind:
                         v, i = block(i + 1, lines[i + 1][0])
@@ -201,7 +249,7 @@ def yaml_lite(text):
                         v, i = None, i + 1
                     out.append(v)
                     continue
-                kv = None if rest.startswith(("{", "[")) else split_kv(rest)
+                kv = None if rest.startswith(("{", "[", "&")) else split_kv(rest)
                 if kv is None:
                     out.append(inline(rest))
                     i += 1
@@ -219,7 +267,14 @@ def yaml_lite(text):
                 continue
             k, v = kv
             i += 1
-            if v and v not in ("|", ">", "|-", ">-"):
+            name, rest = anchor(v) if v else (None, v)
+            if name and not rest:  # 「key: &a」后面跟块状值
+                if i < len(lines) and (lines[i][0] > ind or (lines[i][0] == ind and lines[i][1].startswith("- "))):
+                    out[str(k)], i = block(i, lines[i][0])
+                else:
+                    out[str(k)] = None
+                anchors[name] = out[str(k)]
+            elif v and v not in ("|", ">", "|-", ">-"):
                 out[str(k)] = inline(v)
             elif i < len(lines) and (lines[i][0] > ind or (lines[i][0] == ind and lines[i][1].startswith("- "))):
                 if v in ("|", ">", "|-", ">-"):
@@ -232,7 +287,7 @@ def yaml_lite(text):
                     out[str(k)], i = block(i, lines[i][0])
             else:
                 out[str(k)] = None
-        return out, i
+        return merge(out), i
 
     if not lines:
         return None
