@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "10.3.1"
+PANEL_VERSION = "10.3.2"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -311,7 +311,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "10.3.1"
+PANEL_VERSION = "10.3.2"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -394,6 +394,17 @@ def dl_check(url, via_proxy=False):
     """下载入口统一校验：目标非公网地址时抛 IOError（调用方已有通用异常处理）"""
     if url_host_forbidden(url, via_proxy=via_proxy):
         raise IOError(f"目标地址非公网，已拦截（SSRF 防护）：{urlsplit(url).hostname}")
+
+
+def read_full(r, limit):
+    """读 urllib 响应体，最多 limit 字节；连接提前断开（Content-Length 没收满）时抛 IOError。
+    http.client 的 read(n) 在对方中途断开时不报错，只返回已收到的部分：以前背景图只存下半张（浏览器只画出上半截），
+    订阅 / 规则集 / 广告列表只解析出前面一部分，节点或规则悄悄变少"""
+    data = r.read(limit)
+    left = getattr(r, "length", None)
+    if left and len(data) < limit:
+        raise IOError(f"下载不完整：连接中途断开（收到 {len(data)} 字节，还差 {left} 字节）")
+    return data
 
 
 class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -1751,6 +1762,19 @@ from .groups import clean_custom_group, gcfg, group_opts, names_rx, pick_plan, r
 from .ruleutil import DOMAIN_RX, adblock_providers, complete_rule, dns_policy_of, rule_policy_index
 from .sb_common import active_core
 from .sysopt import sh
+
+
+def drop_provider_cache(name):
+    """删掉订阅在 mihomo 里的本地缓存 ./providers/<名>.yaml。
+    mihomo 加载 provider 时只要本地文件存在就先用它，按文件修改时间等满一个更新间隔才去下载，不看地址变没变：
+    改了订阅链接（换机场 / 重置 token）或删掉后用同名重新添加，以前要等到间隔（默认 24 小时）才换成新链接的节点"""
+    try:
+        os.remove(os.path.join(CONF_DIR, "providers", safe(name) + ".yaml"))
+        return True
+    except OSError:
+        return False
+
+
 def build_config(d, strict=False):
     providers = {}
     for s in d["subs"]:
@@ -1884,7 +1908,10 @@ def build_config(d, strict=False):
             "geosite": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat",
             "mmdb": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.metadb",
         },
-        "profile": {"store-selected": True, "store-fake-ip": True},
+        # store-fake-ip 关闭：开启时 mihomo 每次热重载（PUT /configs）都会丢掉旧的 fake-ip 映射，客户端还在用缓存的旧 fake IP
+        # 时（系统 / 浏览器 DNS 缓存、长连接重连）连接被丢弃，非嗅探端口直到重新解析前都不通；Hk002 的保存设置、订阅变化、
+        # 按设备分流 MAC 变化都会热重载。关闭后（mihomo v1.19.33 起）热重载保留映射，代价是核心重启后映射清空、从头分配
+        "profile": {"store-selected": True, "store-fake-ip": False},
         # skip-domain：米家设备连云端的 TLS 握手里 SNI 是「Mijia Cloud」，嗅探后按这个假域名改写目标会连不上，设备频繁离线；
         # Apple 推送长连接被嗅探改写后会断开重连，消息推送延迟。两者都是 mihomo 官方示例里的跳过项
         "sniffer": {"enable": bool(d.get("sniffer", True)), "skip-domain": ["Mijia Cloud", "+.push.apple.com"], "sniff": {
@@ -2854,7 +2881,7 @@ def write_core_file(kind):
 
 '''
 _SRC['shunt.sb_yaml'] = '''"""极简 YAML 读取（只为解析 Clash 订阅里的 proxies 列表；面板保持零依赖）"""
-import json, re
+import copy, json, re
 def _y_strip_comment(s):
     q = None
     for i, ch in enumerate(s):
@@ -2985,7 +3012,8 @@ def _y_depth(s):
     return n
 
 
-_FLOW_KEY = re.compile(r"""^\\s*(?:-\\s+)*(?:(?:"(?:[^"\\\\]|\\\\.)*"|'[^']*'|[^\\s'"{}\\[\\],:#-][^:#]*?|-[^\\s:#][^:#]*?)\\s*:\\s+)?""")
+_FLOW_KEY = re.compile(r"""^\\s*(?:-\\s+)*(?:(?:"(?:[^"\\\\]|\\\\.)*"|'[^']*'|[^\\s'"{}\\[\\],:#&*-][^:#]*?|-[^\\s:#][^:#]*?)\\s*:\\s+)?(?:&[^\\s{}\\[\\],]+\\s+)?""")
+_ANCHOR = re.compile(r"^&([^\\s{}\\[\\],]+)(?:\\s+|$)")
 
 
 def _y_flow_start(c):
@@ -2996,7 +3024,8 @@ def _y_flow_start(c):
 
 
 def yaml_lite(text):
-    """块状 / 流式映射与列表、引号字符串、注释；不支持锚点等高级语法"""
+    """块状 / 流式映射与列表、引号字符串、注释、锚点 &a / 别名 *a / 合并键 <<: *a（机场常用来复用节点参数）。
+    以前不认锚点：「- &a {name: …}」整条被当成一个字符串、「- &a」后面的块状节点整段丢掉，没有 PyYAML 的设备上这些节点静默消失"""
     raw = []
     for line in text.replace("\\t", "  ").splitlines():
         if line.strip() in ("---", "...") or not line.strip() or line.lstrip().startswith("#"):
@@ -3035,12 +3064,45 @@ def yaml_lite(text):
         m = re.match(r"^([^:{}\\[\\],]+?)\\s*:(?:\\s+(.*)|$)", t)
         return (m.group(1).strip(), (m.group(2) or "").strip()) if m else None
 
+    anchors = {}
+
+    def anchor(v):
+        """去掉值开头的锚点 &a，返回 (锚点名或 None, 剩下的值)"""
+        m = _ANCHOR.match(v)
+        return (m.group(1), v[m.end():].strip()) if m else (None, v)
+
+    def alias(v):
+        if isinstance(v, str) and re.fullmatch(r"\\*[^\\s{}\\[\\],]+", v):
+            return copy.deepcopy(anchors[v[1:]]) if v[1:] in anchors else v
+        if isinstance(v, dict):
+            return merge({k: alias(x) for k, x in v.items()})
+        if isinstance(v, list):
+            return [alias(x) for x in v]
+        return v
+
+    def merge(m):
+        """<<: *a / <<: [*a, *b]：合并进来，自己写的键优先"""
+        if "<<" not in m:
+            return m
+        src = m.pop("<<")
+        out = {}
+        for x in (src if isinstance(src, list) else [src]):
+            if isinstance(x, dict):
+                out.update({k: v for k, v in x.items() if k not in out})
+        out.update(m)
+        return out
+
     def inline(v):
+        name, v = anchor(v)
         if v.startswith(("{", "[")):
-            return _y_flow(v)[0]
-        if v in ("|", ">", "|-", ">-"):
-            return ""
-        return _y_scalar(v)
+            r = alias(_y_flow(v)[0])
+        elif v in ("|", ">", "|-", ">-"):
+            r = ""
+        else:
+            r = alias(_y_scalar(v)) if v else None
+        if name:
+            anchors[name] = r
+        return r
 
     def block(i, ind):
         if i >= len(lines):
@@ -3049,6 +3111,19 @@ def yaml_lite(text):
             out = []
             while i < len(lines) and lines[i][0] == ind and (lines[i][1].startswith("- ") or lines[i][1] == "-"):
                 rest = lines[i][1][1:].strip()
+                name, rest = anchor(rest)
+                if name and not rest:  # 「- &a」后面跟块状映射
+                    if i + 1 < len(lines) and lines[i + 1][0] > ind:
+                        v, i = block(i + 1, lines[i + 1][0])
+                    else:
+                        v, i = None, i + 1
+                    anchors[name] = v
+                    out.append(v)
+                    continue
+                if name:
+                    rest = "&" + name + " " + rest  # 行内值：交给 inline 记录锚点
+                    if not rest[len(name) + 2:].startswith(("{", "[")) and split_kv(rest[len(name) + 2:]) is not None:
+                        rest = rest[len(name) + 2:]  # 「- &a key: v」锚点给整个映射：少见，按普通映射解析（锚点不记录）
                 if not rest:
                     if i + 1 < len(lines) and lines[i + 1][0] > ind:
                         v, i = block(i + 1, lines[i + 1][0])
@@ -3056,7 +3131,7 @@ def yaml_lite(text):
                         v, i = None, i + 1
                     out.append(v)
                     continue
-                kv = None if rest.startswith(("{", "[")) else split_kv(rest)
+                kv = None if rest.startswith(("{", "[", "&")) else split_kv(rest)
                 if kv is None:
                     out.append(inline(rest))
                     i += 1
@@ -3074,7 +3149,14 @@ def yaml_lite(text):
                 continue
             k, v = kv
             i += 1
-            if v and v not in ("|", ">", "|-", ">-"):
+            name, rest = anchor(v) if v else (None, v)
+            if name and not rest:  # 「key: &a」后面跟块状值
+                if i < len(lines) and (lines[i][0] > ind or (lines[i][0] == ind and lines[i][1].startswith("- "))):
+                    out[str(k)], i = block(i, lines[i][0])
+                else:
+                    out[str(k)] = None
+                anchors[name] = out[str(k)]
+            elif v and v not in ("|", ">", "|-", ">-"):
                 out[str(k)] = inline(v)
             elif i < len(lines) and (lines[i][0] > ind or (lines[i][0] == ind and lines[i][1].startswith("- "))):
                 if v in ("|", ">", "|-", ">-"):
@@ -3087,7 +3169,7 @@ def yaml_lite(text):
                     out[str(k)], i = block(i, lines[i][0])
             else:
                 out[str(k)] = None
-        return out, i
+        return merge(out), i
 
     if not lines:
         return None
@@ -3097,7 +3179,7 @@ _SRC['shunt.sb_subs'] = '''"""订阅：sing-box 不能自己拉取订阅，由�
 import json, os, re, threading, time, urllib.request, urllib.error
 
 from .errlog import log_err
-from .base import CONF_DIR, DEFAULT_EXCLUDE, PANEL_DIR, dl_check
+from .base import CONF_DIR, DEFAULT_EXCLUDE, PANEL_DIR, dl_check, read_full
 from .data import load, safe, write_json
 from .links import b64d, parse_link
 from .groups import PROV, rx, sub_cache_path
@@ -3211,7 +3293,9 @@ def parse_sub_text(text, fetch=None, depth=0):
         # 名称统一成文本：YAML 里 name: 2024 会解析成数字，后面的筛选正则 / 去重遇到数字会抛 TypeError，整个订阅更新失败
         out = [dict(p, name=str(p["name"]).strip()) for p in ps
                if isinstance(p, dict) and p.get("name") not in (None, "") and p.get("type") and str(p["name"]).strip()]
-        errs = []
+        # 读不出来的条目计入「无法识别已跳过」：以前静默丢弃，节点少了也没有任何提示
+        errs = [f"第 {i} 个节点无法识别" for i, p in enumerate(ps, 1)
+                if not (isinstance(p, dict) and p.get("name") not in (None, "") and p.get("type") and str(p["name"]).strip())]
         pv = y.get("proxy-providers") if isinstance(y.get("proxy-providers"), dict) else {}
         # 聚合配置：mihomo 自己会去拉 proxy-providers，sing-box 不会，这里由面板逐个下载展开
         for pname, prov in pv.items():
@@ -3259,7 +3343,7 @@ def _sub_get(url, ua):
         req = urllib.request.Request(url, headers={"User-Agent": ua})
         try:
             with proxy_opener(use_proxy).open(req, timeout=30) as r:
-                return r.read(20 << 20).decode("utf-8", "ignore")
+                return read_full(r, 20 << 20).decode("utf-8", "ignore")
         except Exception as e:
             last = e
     raise IOError(str(last)[:120])
@@ -3281,7 +3365,7 @@ def sb_fetch_sub(s, gh=""):
                 req = urllib.request.Request(s["url"], headers={"User-Agent": ua})
                 try:
                     with proxy_opener(use_proxy).open(req, timeout=30) as r:
-                        data = r.read(20 << 20)
+                        data = read_full(r, 20 << 20)
                         info = r.headers.get("subscription-userinfo") or ""
                     break
                 except Exception as e:
@@ -3829,7 +3913,7 @@ _SRC['shunt.sb_config'] = '''"""生成 sing-box 配置"""
 import ipaddress, json, os, re, shlex, signal, threading, time, urllib.request, urllib.error
 
 from .base import (
-    AB_DIR, BUILTIN_POLICIES, CN_ECS, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, UA, dl_check, wd_hold)
+    AB_DIR, BUILTIN_POLICIES, CN_ECS, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, UA, dl_check, read_full, wd_hold)
 from .errlog import log_err, log_tail
 from .data import auto_name, lb_dropped_names, lb_names, lb_old_name, load, safe, write_json
 from .groups import clean_custom_group, gcfg, pick_plan, prov_set, rx, sub_orig_nodes
@@ -4339,7 +4423,7 @@ def sb_sync_assets(d, force=False, need=None):
                         continue
                     try:
                         with proxy_opener(use_proxy).open(urllib.request.Request(u, headers={"User-Agent": UA}), timeout=30) as r:
-                            data = r.read(40 << 20)
+                            data = read_full(r, 40 << 20)
                         break
                     except Exception as e:
                         err = str(e)[:120]
@@ -4542,10 +4626,10 @@ from .mihomo import check_config, dns_cfg, mh_bin, write_config
 from .sb_common import CORES, SB_API, SB_BIN, SB_CONF, SB_REPO, SB_STATE, active_core, write_core_file
 from .sb_subs import sb_update_subs
 from .sb_config import check_sb_config, sb_sync_assets, sb_version, write_sb_config
-from .core_update import LGBM_FILE, _cu, bin_version, copy_replace, lgbm_fetch, mh_fetch, open_url, release_digest
+from .core_update import LGBM_FILE, MANUAL_NOTE, _cu, bin_version, copy_replace, lgbm_fetch, mh_fetch, open_url, release_digest
 from .sysopt import sh, svc_restart
 from .devroute import commit_applied
-from .notify import core_alive, notify, set_manual_stop
+from .notify import WD, core_alive, notify, set_manual_stop
 from .migrate import restore_selections, snapshot_selections
 def sb_arch():
     m = os.uname().machine
@@ -4773,6 +4857,10 @@ def sb_update_job(channel, gh, force=False):
             if not ok:
                 copy_replace(SB_BIN + ".bak", SB_BIN)
                 raise ValueError("新版 sing-box 不兼容当前配置，已恢复原版本：" + err)
+        note = ""
+        if active_core() == "singbox" and WD["manual_stop"]:  # 手动停止了核心：只替换程序，不替用户拉起来
+            note = f"（{MANUAL_NOTE}）"
+        elif active_core() == "singbox":
             _cu("重启核心", 85, "正在重启核心")
             svc_restart(timeout=90)
             for _ in range(30):
@@ -4783,7 +4871,7 @@ def sb_update_job(channel, gh, force=False):
                 copy_replace(SB_BIN + ".bak", SB_BIN)
                 svc_restart(timeout=90)
                 raise ValueError("新版 sing-box 30 秒内未响应，已恢复原版本")
-        CORE_UPD.update(ok=True, message=f"sing-box 已从 {cur or '未安装'} 更新到 {nv}" + ("，旧版本已备份" if cur else ""))
+        CORE_UPD.update(ok=True, message=f"sing-box 已从 {cur or '未安装'} 更新到 {nv}" + ("，旧版本已备份" if cur else "") + note)
     except Exception as e:
         CORE_UPD.update(ok=False, message=str(e))
     finally:
@@ -5202,7 +5290,7 @@ def restore(name, check_data=None, apply_data=None):
                     os.replace(DATA_FILE + ".new", DATA_FILE)
             finally:
                 shutil.rmtree(tmpd, ignore_errors=True)
-        return True, "已恢复到 %s（已自动备份当前版本 %s）。恢复 server.py 后需重启面板生效。" % (name, cur)
+        return True, "已恢复到 %s（已自动备份当前版本 %s）。" % (name, cur)
     except Exception as e:
         return False, "恢复失败：%s" % e
 '''
@@ -5382,7 +5470,7 @@ from .mihomo import mh_bin, write_config
 from .core import reload_core
 from .sb_common import CORES, active_core
 from .sysopt import proxy_opener, sh, svc_restart
-from .notify import core_alive, notify
+from .notify import WD, core_alive, notify
 CORE_REPO = os.environ.get("CORE_REPO", "https://github.com/MetaCubeX/mihomo/releases")
 CORE_CHANNELS = {"stable": "latest/download", "alpha": "download/Prerelease-Alpha"}
 SMART_REPO = os.environ.get("SMART_REPO", "https://github.com/vernesong/mihomo/releases")  # 只发布 Alpha 预览版
@@ -5499,8 +5587,12 @@ def _cu(stage, pct=None, msg=None):
     CORE_UPD["log"].appendleft(f"{time.strftime('%H:%M:%S')} {msg or stage}")
 
 
+MANUAL_NOTE = "核心已手动停止，没有替你启动；下次启动核心时使用新程序"
+
+
 def _core_swap_and_restart(src, label, kind="mihomo"):
-    """把 src 换成正式核心并重启；30 秒内控制接口没起来就自动换回原来的核心"""
+    """把 src 换成正式核心并重启；30 秒内控制接口没起来就自动换回原来的核心。
+    返回 (成功, 提示)：成功时提示非空表示核心被手动停止、只替换了程序"""
     B = mh_bin(kind)
     bak = B + ".bak"
     had_old = os.path.isfile(B)
@@ -5516,6 +5608,9 @@ def _core_swap_and_restart(src, label, kind="mihomo"):
     if active_core() != kind:  # 这个内核没在运行：只替换程序，切换过去时生效
         _cu("完成", 95, f"已替换为 {label}（当前内核是 {CORES[active_core()]}，切到 {CORES[kind]} 时生效）")
         return True, ""
+    if WD["manual_stop"]:  # 用户手动停止了核心：只替换程序，不替用户把核心拉起来（与定时重启、保存设置一致）
+        _cu("完成", 95, f"已替换为 {label}（{MANUAL_NOTE}）")
+        return True, MANUAL_NOTE
     _cu("重启核心", 90, f"已替换为 {label}，正在重启核心")
     svc_restart(timeout=90)
     for _ in range(30):
@@ -5612,7 +5707,8 @@ def core_update_job(channel, gh, force=False, kind="mihomo"):
         ok, err = _core_swap_and_restart(tmp, nv, kind)
         if not ok:
             raise ValueError(err)
-        CORE_UPD.update(ok=True, message=f"{CORES[kind]} 已从 {cur or '无'} 更新到 {nv}" + ("，旧版本已备份，可一键回滚" if cur else ""))
+        CORE_UPD.update(ok=True, message=f"{CORES[kind]} 已从 {cur or '无'} 更新到 {nv}" + ("，旧版本已备份，可一键回滚" if cur else "")
+                        + (f"（{err}）" if err else ""))
         tg = load()
         if tg.get("tg_token") and tg.get("tg_chat"):
             notify(f"⬆️ {CORES[kind]} 内核已更新：{cur or '无'} → {nv}")
@@ -5672,7 +5768,7 @@ def core_rollback_job(kind="mihomo"):
         ok, err = _core_swap_and_restart(B + ".bak", old, kind)
         if not ok:
             raise ValueError(err)
-        CORE_UPD.update(ok=True, message=f"已回滚：{cur} → {old}（{cur} 保留为备份）")
+        CORE_UPD.update(ok=True, message=f"已回滚：{cur} → {old}（{cur} 保留为备份）" + (f"；{err}" if err else ""))
     except Exception as e:
         CORE_UPD.update(ok=False, message=str(e))
     finally:
@@ -6811,10 +6907,16 @@ def check_nodes():
     if not pg:
         return
     code, raw = core("GET", f"/group/{quote(G_MANUAL)}/delay?url={quote(HC)}&timeout=5000", timeout=30)
+    # 只有 200（逐个节点的结果）和 504（mihomo：全部节点超时）是测速结论；502 等是核心没应答（重载 / 重启中、请求超时），
+    # 以前也当成「全部超时」，会误发一条「所有节点均测速超时」，下一轮又发「已恢复」
+    if code not in (200, 504):
+        return
     try:
         res = json.loads(raw) if code == 200 else {}
     except Exception:
-        res = {}
+        return
+    if not isinstance(res, dict):
+        return
     all_down = not any(v for v in res.values() if isinstance(v, int) and v > 0)
     st = load_notified()
     if all_down != bool(st.get("allnodes")):
@@ -6827,7 +6929,7 @@ import base64, json, os, re, threading, time, urllib.request, urllib.error
 from urllib.parse import quote
 
 from .errlog import log_err
-from .base import G_MANUAL, G_SEL, HC, NOTIFY_FILE, PANEL_DIR, UA, WD_INTERVAL, dl_check
+from .base import G_MANUAL, G_SEL, HC, NOTIFY_FILE, PANEL_DIR, UA, WD_INTERVAL, dl_check, read_full
 from .data import load, read_json, write_json
 from .core import refresh_regions
 from .corehttp import core, core_json
@@ -6940,11 +7042,25 @@ def bg_save(data_url):
         return False, "图片不能超过 8MB"
     if bg_type(raw[:16]) is None:
         return False, "只支持 JPG / PNG / WebP / GIF"
-    tmp = BG_FILE + ".tmp"
-    with open(tmp, "wb") as f:
-        f.write(raw)
-    os.replace(tmp, BG_FILE)
+    _bg_write(raw)
     return True, "背景图已保存"
+
+
+_BG_LOCK = threading.Lock()
+
+
+def _bg_write(raw):
+    """写背景图：上传与每日刷新 / 链接下载可能同时发生，以前共用 bg.img.tmp，两边各自 truncate + 写同一个文件，
+    换上去的可能是两张图拼起来的坏文件（只显示出一部分）"""
+    with _BG_LOCK:
+        tmp = f"{BG_FILE}.tmp{threading.get_ident()}"
+        try:
+            with open(tmp, "wb") as f:
+                f.write(raw)
+            os.replace(tmp, BG_FILE)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
 
 
 BG_META = BG_FILE + ".json"  # 链接背景图：{"url": 链接, "daily": 每天刷新, "t": 上次下载时间}
@@ -6987,7 +7103,7 @@ def bg_fetch(url):
         req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "image/avif,image/webp,image/*,*/*;q=0.8"})
         try:
             with proxy_opener(proxy).open(req, timeout=20) as r:
-                raw = r.read(BG_MAX + 1)
+                raw = read_full(r, BG_MAX + 1)
             break
         except urllib.error.HTTPError as e:
             err = f"HTTP {e.code}"
@@ -6999,10 +7115,7 @@ def bg_fetch(url):
         return False, "图片不能超过 8MB"
     if bg_type(raw[:16]) is None:
         return False, "链接返回的不是 JPG / PNG / WebP / GIF 图片"
-    tmp = BG_FILE + ".tmp"
-    with open(tmp, "wb") as f:
-        f.write(raw)
-    os.replace(tmp, BG_FILE)
+    _bg_write(raw)
     return True, "背景图已下载到路由器"
 
 
@@ -7555,7 +7668,7 @@ from collections import deque
 from urllib.parse import quote
 
 from .errlog import log_err
-from .base import AB_DIR, AB_STATS_FILE, CONF_DIR, FAKEIP_NETS, UA, dl_check, udp_dns_query
+from .base import AB_DIR, AB_STATS_FILE, CONF_DIR, FAKEIP_NETS, UA, dl_check, read_full, udp_dns_query
 from .data import load, read_json, write_json
 from .mihomo import build_config
 from .core import reload_core
@@ -7707,7 +7820,7 @@ def download(url, timeout=60, limit=40 << 20):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": UA})
             with proxy_opener(use_proxy).open(req, timeout=timeout) as r:
-                data = r.read(limit + 1)
+                data = read_full(r, limit + 1)
                 if len(data) > limit:
                     raise ValueError("文件过大（超过 40MB）")
                 return data.decode("utf-8", "ignore")
@@ -8392,7 +8505,10 @@ def run_task(name):
     if name == "geo_update" and active_core(d) == "singbox":
         bad = sb_sync_assets(d, force=True)
         ok, msg = reload_core()
-        return not bad and ok, "GEO / 规则集已更新" if not bad else "部分规则集更新失败：" + "；".join(bad)[:200]
+        if bad:
+            return False, "部分规则集更新失败：" + "；".join(bad)[:200]
+        # 重载失败时以前仍报「GEO / 规则集已更新」（事件里显示「✗ GEO / 规则集已更新」），看不出是重载出了问题
+        return ok, "GEO / 规则集已更新" if ok else "规则集已下载，但重载核心失败：" + str(msg)[:200]
     if name == "core_restart":
         if WD["manual_stop"]:  # 用户手动停止了核心：定时重启不能替用户把它拉起来
             return True, "核心已手动停止，跳过定时重启"
@@ -9610,25 +9726,25 @@ from . import adblock, stats
 from .base import (
     AB_DIR, AB_PRESETS, BUILTIN_POLICIES, CERT, DEFAULT_EXCLUDE, DNS_DEFAULT, DNS_LISTS, GROUP_TYPES, G_MANUAL, G_SEL, HC, KEY,
     LB_STRATEGIES, LOCK, MAX_BODY, MIHOMO_BIN, MIHOMO_LOG, PANEL_VERSION, PRIMARY_REGIONS, PROXY_MODES, REGIONS, SMART_BIN, SVC, TPROXY_SH,
-    TUN_STACKS, upd_begin, upd_busy_msg, wd_hold
+    TUN_STACKS, UPD_STATE, CONF_DIR, upd_begin, upd_busy_msg, wd_hold
 )
-from .data import HISTORY_FILE, HISTORY_SKIP, auto_name, config_version, lb_names, load, migrate_names, normalize, read_json, region_lb_set, save, update
+from .data import HISTORY_FILE, HISTORY_SKIP, auto_name, config_version, lb_names, load, migrate_names, normalize, read_json, region_lb_set, safe, save, update
 from .links import add_links, q1, reserved_names
 from .groups import (
     NODE_LIST_MAX, all_node_names, clean_custom_group, gcfg, node_name_ok, provider_nodes, provider_rev, region_plan, rx, sb_sub_outbounds,
     sub_orig_nodes, sub_removed
 )
 from .ruleutil import complete_rule
-from .mihomo import bad_rule_policies, build_config, dns_cfg, safe_dev, validate_dns
+from .mihomo import bad_rule_policies, build_config, dns_cfg, drop_provider_cache, safe_dev, validate_dns
 from .core import conns_snapshot, refresh_after_sub, refresh_later, refresh_regions, reload_core
 from .corehttp import core, core_json
 from .sb_common import CORES, SB_BIN, SB_STATE, active_core, core_conf_path
-from .sb_subs import sb_update_subs
+from .sb_subs import parse_sub_text, sb_update_subs
 from .sb_config import build_singbox, sb_ab_loaded, sb_fake_providers, sb_fake_rule_providers, sb_rule_need, sb_sync_assets, sb_version, write_active_config
 from .sb_switch import core_switch_job, sb_arch, sb_remote_version, sb_update_job
 from .panel_update import self_rollback, self_update
 from .core_update import (
-    CORE_CHANNELS, CORE_UPD, LGBM_FILE, bin_version, core_check, core_job_start, core_rollback_job, core_upd_status, core_update_job,
+    CORE_CHANNELS, CORE_UPD, LGBM_FILE, MANUAL_NOTE, bin_version, core_check, core_job_start, core_rollback_job, core_upd_status, core_update_job,
     lgbm_fetch, lgbm_fetch_reload
 )
 from .sysopt import SVC_OP, core_procs, delay_test, favicon, kill_core_procs, nft_ok, opt_apply, opt_status, rc_run, sh, speed_test, svc_restart
@@ -9972,6 +10088,53 @@ def sub_nodes_view(d):
         nodes = [{"name": disp, "orig": o, "groups": refs.get((s["name"], o), [])} for disp, o in lists.get(s["name"], []) if o not in gone]
         out.append({"name": s["name"], "known": s["name"] in known, "nodes": nodes, "removed": gone})
     return {"subs": out, "core": active_core(d)}
+
+
+SUB_FETCH_KEYS = ("url", "filter", "exclude")  # sing-box：面板下载订阅时就按筛选 / 排除过滤，缓存里只有过滤后的节点
+
+
+def sub_caches_sync(prev, d):
+    """恢复设置 / 配置快照 / 版本备份改动了订阅时，按订阅处理旧缓存（与 POST/DELETE /api/subs 一致）。
+    以前只有订阅页的添加 / 编辑 / 删除会删 mihomo 的 ./providers/<名>.yaml：恢复出一份换了链接的订阅后，
+    mihomo 有本地文件就先用，按文件时间等满更新间隔（默认 24 小时）才下载新链接；sing-box 则一直用面板缓存里旧链接的节点。
+    返回 sing-box 需要重新下载的订阅名（新增 / 链接、筛选、排除变化）"""
+    old = {s["name"]: s for s in (prev or {}).get("subs") or [] if isinstance(s, dict) and s.get("name")}
+    new = {s["name"]: s for s in d.get("subs") or [] if isinstance(s, dict) and s.get("name")}
+    for n, s in old.items():
+        if n not in new or new[n].get("url") != s.get("url"):
+            drop_provider_cache(n)
+    for n in new:
+        if n not in old:
+            drop_provider_cache(n)  # 以前删掉的同名订阅留下的缓存
+    return [n for n, s in new.items() if n not in old or any(s.get(k) != old[n].get(k) for k in SUB_FETCH_KEYS)]
+
+
+def sub_refetch(names, d):
+    """sing-box 下重新下载 sub_caches_sync 返回的订阅（d 为恢复后的数据）；返回附加提示（失败原因）。
+    只下载、不刷新策略组：调用方随后都会 reload_core，生成配置时 build_singbox → prov_set 推进 provider_rev。
+    不走 schedule.subs_update：它下载完还会 refresh_regions，有变化就先重载一次，接着 reload_core 再重载一次"""
+    if not names or active_core(d) != "singbox":
+        return ""
+    _, bad = sb_update_subs(names, d)
+    return ("；订阅下载失败（稍后自动重试或在订阅页手动更新）：" + "；".join(bad)[:300]) if bad else ""
+
+
+def removed_only_left(name, flt, exc, gone):
+    """mihomo：编辑订阅的筛选 / 排除后，provider 里是否只剩「已从订阅删除」的节点。
+    这样 provider 过滤后一个节点都没有，mihomo 解析失败、订阅之后每次更新都失败（v8.4.1 禁止删光节点的同一个问题，
+    以前改筛选正则就能绕过去）。按 mihomo 缓存的订阅原文判断；没有缓存、正则含反引号（mihomo 多条写法）时不判断"""
+    if not gone or "`" in flt or "`" in exc:
+        return False
+    try:
+        with open(os.path.join(CONF_DIR, "providers", safe(name) + ".yaml"), encoding="utf-8", errors="ignore") as f:
+            nodes, _ = parse_sub_text(f.read())
+    except (OSError, ValueError):
+        return False
+    rf, re_ = (rx(flt) if flt else None), (rx(exc) if exc else None)
+    if (flt and rf is None) or (exc and re_ is None):
+        return False
+    left = {str(p.get("name")) for p in nodes if (not rf or rf.search(str(p.get("name")))) and not (re_ and re_.search(str(p.get("name"))))}
+    return bool(left) and left <= set(gone)
 
 
 RESTORE_KEYS = ("mode", "tproxy", "subs", "rules", "rulesets", "bypass", "tests", "sub_interval", "region_groups",
@@ -10321,6 +10484,16 @@ class H(BaseHTTPRequestHandler):
         cur = load()["adblock"]
         lists = []
         seen = set()
+        # 形状校验：lists 里混了非对象、black/white 不是列表时以前回 500；black 是字符串时还会被逐字符拆成条目
+        if not isinstance(b.get("lists", []), list) or not all(isinstance(x, dict) for x in b.get("lists", [])):
+            return self.send(400, {"message": "列表格式不正确"})
+        for key in ("black", "white"):
+            if not isinstance(b.get(key, []), list):
+                return self.send(400, {"message": "黑名单 / 白名单格式不正确"})
+        try:
+            int(b.get("interval", cur["interval"]) or 0)
+        except (TypeError, ValueError):
+            return self.send(400, {"message": "更新间隔无效"})
         for l in b.get("lists", cur["lists"]):
             url = str(l.get("url") or "").strip()
             name = str(l.get("name") or "").strip()[:40] or (url.split("/")[2] if url.count("/") >= 2 else "")
@@ -10331,7 +10504,7 @@ class H(BaseHTTPRequestHandler):
                 continue
             seen.add(lid)
             lists.append({"id": lid, "name": name or lid, "url": url, "enabled": bool(l.get("enabled", True))})
-        clean = lambda xs: [x.strip() for x in xs if str(x).strip()][:20000]
+        clean = lambda xs: [str(x).strip() for x in xs if str(x).strip()][:20000]
         new = {"enabled": bool(b.get("enabled", cur["enabled"])), "lists": lists,
                "black": clean(b.get("black", cur["black"])), "white": clean(b.get("white", cur["white"])),
                "interval": int(b.get("interval", cur["interval"]) or 0), "dns": bool(b.get("dns", cur["dns"]))}
@@ -10516,6 +10689,8 @@ class H(BaseHTTPRequestHandler):
 
     def api(self, m, p, q):
         b = self.body() if m in ("POST", "PUT", "PATCH", "DELETE") else {}  # 请求体已在 route() 里完整读入
+        if not isinstance(b, dict):  # [1] / "x" / 123 这类合法 JSON：以前各接口 b.get 抛 AttributeError，回 500 并写一条错误堆栈
+            return self.send(400, {"message": "请求体必须是 JSON 对象"})
         # 透传到 mihomo external-controller
         if p.startswith("/api/core/") and active_core() == "singbox":
             sub = p[len("/api/core"):]
@@ -10574,11 +10749,13 @@ class H(BaseHTTPRequestHandler):
                     shutil.copy2(SB_BIN, tmp)
                     os.replace(SB_BIN + ".bak", SB_BIN)
                     os.replace(tmp, SB_BIN + ".bak")
-                    if active_core() == "singbox":
+                    # 手动停止了核心时只换程序，不替用户把核心拉起来
+                    manual = active_core() == "singbox" and WD["manual_stop"]
+                    if active_core() == "singbox" and not manual:
                         svc_restart(timeout=90)
                 finally:
                     CORE_UPD["busy"] = False
-                return self.reply(True, f"已回滚到 sing-box {sb_version()}")
+                return self.reply(True, f"已回滚到 sing-box {sb_version()}" + (f"（{MANUAL_NOTE}）" if manual else ""))
             ch = b.get("channel") or "stable"
             ok, msg = core_job_start(sb_update_job, ch, load().get("gh_proxy") or "", bool(b.get("force")))
             return self.send(200 if ok else 409, {"message": msg})
@@ -10854,13 +11031,25 @@ class H(BaseHTTPRequestHandler):
                 re.compile(pat)
             except re.error as e:
                 return self.send(400, {"message": f"正则表达式无效：{pat}（{e}）"})
+        if (cur and cur.get("url") == url and active_core() != "singbox"
+                and (flt, exc) != (cur.get("filter") or "", cur.get("exclude", DEFAULT_EXCLUDE) or "")
+                and removed_only_left(name, flt, exc, sub_removed(cur))):
+            return self.send(400, {"message": f"按新的筛选 / 排除规则，订阅「{name}」只剩已从订阅删除的节点，mihomo 会因为订阅里一个节点都没有而加载失败；"
+                                              "请先在节点页恢复需要的节点，或调整筛选规则"})
         def save_sub(d):
             old = next((s for s in d["subs"] if s["name"] == name), None)
             new = {"name": name, "url": url, "filter": flt, "exclude": exc}
             if old and sub_removed(old):  # 编辑订阅时保留「从订阅删除」的节点名单
                 new["removed"] = sub_removed(old)
-            d["subs"] = [s for s in d["subs"] if s["name"] != name] + [new]
+            # 编辑时留在原位置：以前先删再追加到末尾，订阅顺序一变，sing-box 里不同订阅的同名节点去重后缀（「HK (2)」）
+            # 会互换，已选中的节点 / 自定义组成员悄悄指向另一个订阅的节点；mihomo 的 use 顺序与节点排列也跟着变
+            if old:
+                d["subs"] = [new if s["name"] == name else s for s in d["subs"]]
+            else:
+                d["subs"].append(new)
         prev = update(save_sub)
+        if not cur or cur.get("url") != url:  # 新订阅 / 换了链接：旧链接留下的 mihomo 缓存不能再用（sing-box 下载失败时也会拿它兜底）
+            drop_provider_cache(name)
         if active_core() == "singbox":  # 先由面板下载节点，再生成配置
             okl, bad = sb_update_subs([name])
             ok, msg = reload_core(prev)
@@ -10875,7 +11064,10 @@ class H(BaseHTTPRequestHandler):
     @api_route("/api/subs", "DELETE")
     def api_subs_delete(self, m, p, b, q):
         prev = update(lambda d: d.update(subs=[s for s in d["subs"] if s["name"] != b.get("name")]))
-        return self.reply(*reload_core(prev))
+        ok, msg = reload_core(prev)
+        if ok and isinstance(b.get("name"), str) and b["name"] and not any(s["name"] == b["name"] for s in load()["subs"]):
+            drop_provider_cache(b["name"])  # 以后用同名重新添加（换了链接）时不会先加载这份旧节点
+        return self.reply(ok, msg)
 
     @api_route("/api/subs/nodes", "GET")
     def api_subs_nodes_get(self, m, p, b, q):
@@ -11103,11 +11295,13 @@ class H(BaseHTTPRequestHandler):
             d.update({k: v for k, v in snap["data"].items() if k not in HISTORY_SKIP})
             migrate_names(d)
         prev = update(apply_snap)
+        cur = load()
+        note = sub_refetch(sub_caches_sync(prev, cur), cur)
         ab_compose(load())
         ok, msg = reload_core(prev)
         if ok:
             tp_apply()
-        return self.reply(ok, ("已恢复到 " + time.strftime("%m-%d %H:%M", time.localtime(snap["t"])) + " 的配置") if ok else msg)
+        return self.reply(ok, ("已恢复到 " + time.strftime("%m-%d %H:%M", time.localtime(snap["t"])) + " 的配置" + note) if ok else msg)
 
     @api_route("/api/dnsquery", "POST")
     def api_dnsquery_post(self, m, p, b, q):
@@ -11165,7 +11359,11 @@ class H(BaseHTTPRequestHandler):
             if v and not re.fullmatch(r"([01]\\d|2[0-3]):[0-5]\\d", v):
                 return self.send(400, {"message": f"时间格式应为 HH:MM：{v}"})
             sc[k] = v
-        sc["latency"] = int(b.get("latency") or 0) if int(b.get("latency") or 0) in (0, 10, 30, 60, 180) else 0
+        try:  # latency:"abc" / [1] 以前 int() 抛异常回 500
+            lat = int(b.get("latency") or 0)
+        except (TypeError, ValueError):
+            return self.send(400, {"message": "定时测速间隔无效"})
+        sc["latency"] = lat if lat in (0, 10, 30, 60, 180) else 0
         update(lambda d: d.update(schedule=sc))
         return self.send(200, {"message": "定时任务已保存"})
 
@@ -11284,6 +11482,16 @@ class H(BaseHTTPRequestHandler):
 
     @api_route("/api/backup/restore", "POST")
     def api_backup_restore(self, m, p, b, q):
+        # 与面板在线更新 / 内核更新互斥：以前恢复不占忙标志，与在线更新同时进行时两边交替覆盖 server.py / index.html，
+        # 可能留下新旧混合的文件；内核替换到一半时恢复又会 restart_self 重启面板
+        if not upd_begin("panel"):
+            return self.send(409, {"message": upd_busy_msg()})
+        try:
+            return self._backup_restore(b)
+        finally:
+            UPD_STATE["busy"] = False
+
+    def _backup_restore(self, b):
         from . import backup as backup_mod
         st = {}
 
@@ -11319,14 +11527,25 @@ class H(BaseHTTPRequestHandler):
             st["prev"] = update(fn)
 
         ok, msg = backup_mod.restore((b.get("name") or "").strip(), check_data=check, apply_data=apply)
+        restored = ok  # 程序文件（server.py / index.html）已换成备份里的版本
         if ok and "prev" in st:
+            cur = load()
+            note = sub_refetch(sub_caches_sync(st["prev"], cur), cur)
+            if note:
+                msg += note.lstrip("；") + "；"
             ab_compose(load())
             rok, rmsg = reload_core(st["prev"])
             if rok:
                 tp_apply()
             msg += ("核心已重载：" if rok else "设置已撤销：") + rmsg
             ok = rok
-        return self.reply(ok, msg + renames_note(st.get("renames")))
+        if restored:
+            # index.html 按文件修改时间立即换成备份版本，正在运行的却还是当前的 server.py：不重启就是新旧前后端混跑。
+            # 以前要用户自己重启面板，前端的「是否现在重启」又判断了后端从不返回的 j.ok，从来不会出现
+            restart_self()
+            msg += "；面板正在重启"
+        # 程序文件已换（面板要重启）时也回 200，前端据 restart 刷新页面；ok=False 表示设置部分已撤销（见 message）
+        return self.send(200 if ok or restored else 500, {"message": msg + renames_note(st.get("renames")), "ok": ok, "restart": restored})
 
     @api_route("/api/backup/delete", "POST")
     def api_backup_delete(self, m, p, b, q):
@@ -11411,11 +11630,13 @@ class H(BaseHTTPRequestHandler):
         if err:
             return self.send(400, {"message": "备份内容无效：" + err})
         prev = update(apply_backup)
+        cur = load()
+        note = sub_refetch(sub_caches_sync(prev, cur), cur)
         ab_compose(load())
         ok, msg = reload_core(prev)
         if ok:
             tp_apply()
-        return self.reply(ok, ("已恢复，" if ok else "") + msg + renames_note(renames))
+        return self.reply(ok, ("已恢复，" if ok else "") + msg + renames_note(renames) + (note if ok else ""))
 
     @api_route("/api/logticket", "POST")
     def api_logticket_post(self, m, p, b, q):

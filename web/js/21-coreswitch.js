@@ -32,7 +32,7 @@ function corePoll(){$('#core-prog').classList.remove('hide');['#core-btn','#core
     $('#core-bar').style.width=(j.pct||0)+'%';$('#core-log').textContent=(j.log||[]).join('\n');
     if(!j.busy){clearInterval(CORE_POLL);CORE_POLL=null;['#core-btn','#core-rb','#core-chk'].forEach(x=>$(x).disabled=false);
       $('#core-r').innerHTML=`<span class="${j.ok?'ok':'bad'}">● ${esc(j.message||'')}</span>`;toast(j.ok?'内核操作完成':'内核操作失败');
-      if(j.ok){await loadState();api('/api/coreupdate?channel='+coreCh()).then(coreShow).catch(()=>{})}}};
+      if(j.ok){await loadState();api('/api/coreupdate?channel='+coreCh()+'&core='+coreKind()).then(coreShow).catch(()=>{})}}};
   tick();CORE_POLL=setInterval(tick,1500)}
 async function rollbackPanel(){if(!confirm('回滚到上次更新前的面板版本？'))return;try{const j=await api('/api/selfupdate','POST',{action:'rollback'});toast(j.message);setTimeout(()=>location.reload(),5000)}catch(e){toast(e.message)}}
 

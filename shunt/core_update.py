@@ -10,7 +10,7 @@ from .mihomo import mh_bin, write_config
 from .core import reload_core
 from .sb_common import CORES, active_core
 from .sysopt import proxy_opener, sh, svc_restart
-from .notify import core_alive, notify
+from .notify import WD, core_alive, notify
 CORE_REPO = os.environ.get("CORE_REPO", "https://github.com/MetaCubeX/mihomo/releases")
 CORE_CHANNELS = {"stable": "latest/download", "alpha": "download/Prerelease-Alpha"}
 SMART_REPO = os.environ.get("SMART_REPO", "https://github.com/vernesong/mihomo/releases")  # 只发布 Alpha 预览版
@@ -127,8 +127,12 @@ def _cu(stage, pct=None, msg=None):
     CORE_UPD["log"].appendleft(f"{time.strftime('%H:%M:%S')} {msg or stage}")
 
 
+MANUAL_NOTE = "核心已手动停止，没有替你启动；下次启动核心时使用新程序"
+
+
 def _core_swap_and_restart(src, label, kind="mihomo"):
-    """把 src 换成正式核心并重启；30 秒内控制接口没起来就自动换回原来的核心"""
+    """把 src 换成正式核心并重启；30 秒内控制接口没起来就自动换回原来的核心。
+    返回 (成功, 提示)：成功时提示非空表示核心被手动停止、只替换了程序"""
     B = mh_bin(kind)
     bak = B + ".bak"
     had_old = os.path.isfile(B)
@@ -144,6 +148,9 @@ def _core_swap_and_restart(src, label, kind="mihomo"):
     if active_core() != kind:  # 这个内核没在运行：只替换程序，切换过去时生效
         _cu("完成", 95, f"已替换为 {label}（当前内核是 {CORES[active_core()]}，切到 {CORES[kind]} 时生效）")
         return True, ""
+    if WD["manual_stop"]:  # 用户手动停止了核心：只替换程序，不替用户把核心拉起来（与定时重启、保存设置一致）
+        _cu("完成", 95, f"已替换为 {label}（{MANUAL_NOTE}）")
+        return True, MANUAL_NOTE
     _cu("重启核心", 90, f"已替换为 {label}，正在重启核心")
     svc_restart(timeout=90)
     for _ in range(30):
@@ -240,7 +247,8 @@ def core_update_job(channel, gh, force=False, kind="mihomo"):
         ok, err = _core_swap_and_restart(tmp, nv, kind)
         if not ok:
             raise ValueError(err)
-        CORE_UPD.update(ok=True, message=f"{CORES[kind]} 已从 {cur or '无'} 更新到 {nv}" + ("，旧版本已备份，可一键回滚" if cur else ""))
+        CORE_UPD.update(ok=True, message=f"{CORES[kind]} 已从 {cur or '无'} 更新到 {nv}" + ("，旧版本已备份，可一键回滚" if cur else "")
+                        + (f"（{err}）" if err else ""))
         tg = load()
         if tg.get("tg_token") and tg.get("tg_chat"):
             notify(f"⬆️ {CORES[kind]} 内核已更新：{cur or '无'} → {nv}")
@@ -300,7 +308,7 @@ def core_rollback_job(kind="mihomo"):
         ok, err = _core_swap_and_restart(B + ".bak", old, kind)
         if not ok:
             raise ValueError(err)
-        CORE_UPD.update(ok=True, message=f"已回滚：{cur} → {old}（{cur} 保留为备份）")
+        CORE_UPD.update(ok=True, message=f"已回滚：{cur} → {old}（{cur} 保留为备份）" + (f"；{err}" if err else ""))
     except Exception as e:
         CORE_UPD.update(ok=False, message=str(e))
     finally:

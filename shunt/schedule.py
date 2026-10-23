@@ -107,7 +107,10 @@ def run_task(name):
     if name == "geo_update" and active_core(d) == "singbox":
         bad = sb_sync_assets(d, force=True)
         ok, msg = reload_core()
-        return not bad and ok, "GEO / 规则集已更新" if not bad else "部分规则集更新失败：" + "；".join(bad)[:200]
+        if bad:
+            return False, "部分规则集更新失败：" + "；".join(bad)[:200]
+        # 重载失败时以前仍报「GEO / 规则集已更新」（事件里显示「✗ GEO / 规则集已更新」），看不出是重载出了问题
+        return ok, "GEO / 规则集已更新" if ok else "规则集已下载，但重载核心失败：" + str(msg)[:200]
     if name == "core_restart":
         if WD["manual_stop"]:  # 用户手动停止了核心：定时重启不能替用户把它拉起来
             return True, "核心已手动停止，跳过定时重启"

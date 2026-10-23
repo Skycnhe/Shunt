@@ -10,9 +10,10 @@ async function loadQS(){let px;try{px=await loadPX()}catch(e){$('#qs-card').clas
   try{const j=await api('/api/direct_delay');if(j.ms>0)DIRECT_D=j.ms}catch(e){}
   const g=px[SEL];$('#qs-card').classList.toggle('hide',!g);if(!g)return;PROXIES=px;
   const ch=nowChain(SEL);$('#qs-now').textContent=ch.length?'当前：'+ch.join(' → '):'';
-  $('#qs').innerHTML=g.all.map((n,j)=>{if(HIDEDEAD&&n!==g.now&&isDead(n))return '';const d=lastDelay(n),p=px[n]||{},sub=p.type==='Smart'?'智能竞技':p.now?'→ '+p.now:(p.type==='LoadBalance'?'负载均衡':'');
-    return `<div class="node ${n===g.now?'sel':''}" onclick="qsPick(${j})" title="${esc(n)}"><div class="n">${esc(n)}</div><div class="d"><span class="mut" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(sub)}</span><span class="${dcls(d)}">${dtxt(d)}</span></div></div>`}).join('')}
-async function qsPick(j){const n=PROXIES[SEL].all[j];try{await core('/proxies/'+encodeURIComponent(SEL),'PUT',{name:n});toast(SEL+' → '+n);loadQS()}catch(e){toast(e.message)}}
+  $('#qs').innerHTML=g.all.map(n=>{if(HIDEDEAD&&n!==g.now&&isDead(n))return '';const d=lastDelay(n),p=px[n]||{},sub=p.type==='Smart'?'智能竞技':p.now?'→ '+p.now:(p.type==='LoadBalance'?'负载均衡':'');
+    return `<div class="node ${n===g.now?'sel':''}" onclick="qsPick(${jsq(n)})" title="${esc(n)}"><div class="n">${esc(n)}</div><div class="d"><span class="mut" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(sub)}</span><span class="${dcls(d)}">${dtxt(d)}</span></div></div>`}).join('')}
+// 按名字切换（不按序号）：从节点页切回概览时 PROXIES 已被节点页换成新数据、这里的列表还没重画，序号会指到别的组
+async function qsPick(n){if(typeof n!=='string'||!n)return;try{await core('/proxies/'+encodeURIComponent(SEL),'PUT',{name:n});toast(SEL+' → '+n);loadQS()}catch(e){toast(e.message)}}
 async function qsTest(b){b.disabled=true;b.textContent='测速中…';
   const gs=[SEL].concat((PROXIES[SEL]?.all||[]).filter(n=>PROXIES[n]?.all));
   await Promise.all(gs.map(testGroupKeep));

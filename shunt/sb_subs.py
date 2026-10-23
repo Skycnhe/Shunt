@@ -2,7 +2,7 @@
 import json, os, re, threading, time, urllib.request, urllib.error
 
 from .errlog import log_err
-from .base import CONF_DIR, DEFAULT_EXCLUDE, PANEL_DIR, dl_check
+from .base import CONF_DIR, DEFAULT_EXCLUDE, PANEL_DIR, dl_check, read_full
 from .data import load, safe, write_json
 from .links import b64d, parse_link
 from .groups import PROV, rx, sub_cache_path
@@ -116,7 +116,9 @@ def parse_sub_text(text, fetch=None, depth=0):
         # 名称统一成文本：YAML 里 name: 2024 会解析成数字，后面的筛选正则 / 去重遇到数字会抛 TypeError，整个订阅更新失败
         out = [dict(p, name=str(p["name"]).strip()) for p in ps
                if isinstance(p, dict) and p.get("name") not in (None, "") and p.get("type") and str(p["name"]).strip()]
-        errs = []
+        # 读不出来的条目计入「无法识别已跳过」：以前静默丢弃，节点少了也没有任何提示
+        errs = [f"第 {i} 个节点无法识别" for i, p in enumerate(ps, 1)
+                if not (isinstance(p, dict) and p.get("name") not in (None, "") and p.get("type") and str(p["name"]).strip())]
         pv = y.get("proxy-providers") if isinstance(y.get("proxy-providers"), dict) else {}
         # 聚合配置：mihomo 自己会去拉 proxy-providers，sing-box 不会，这里由面板逐个下载展开
         for pname, prov in pv.items():
@@ -164,7 +166,7 @@ def _sub_get(url, ua):
         req = urllib.request.Request(url, headers={"User-Agent": ua})
         try:
             with proxy_opener(use_proxy).open(req, timeout=30) as r:
-                return r.read(20 << 20).decode("utf-8", "ignore")
+                return read_full(r, 20 << 20).decode("utf-8", "ignore")
         except Exception as e:
             last = e
     raise IOError(str(last)[:120])
@@ -186,7 +188,7 @@ def sb_fetch_sub(s, gh=""):
                 req = urllib.request.Request(s["url"], headers={"User-Agent": ua})
                 try:
                     with proxy_opener(use_proxy).open(req, timeout=30) as r:
-                        data = r.read(20 << 20)
+                        data = read_full(r, 20 << 20)
                         info = r.headers.get("subscription-userinfo") or ""
                     break
                 except Exception as e:

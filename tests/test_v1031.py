@@ -27,16 +27,6 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MAC = "aa:bb:cc:dd:ee:31"
 
 
-class VersionTest(unittest.TestCase):
-    def test_version(self):
-        self.assertEqual(B.PANEL_VERSION, "10.3.1")
-
-    def test_changelog_top(self):
-        with open(os.path.join(ROOT, "CHANGELOG.md"), encoding="utf-8") as f:
-            heads = [ln for ln in f if ln.startswith("## v")]
-        self.assertTrue(heads[0].startswith("## v10.3.1"), heads[0])
-
-
 class SbProviderRevTest(unittest.TestCase):
     """sing-box：订阅更新后节点名单变化要推进 provider_rev()，/api/state 的策略组缓存才会失效"""
 

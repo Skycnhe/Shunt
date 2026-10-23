@@ -88,7 +88,7 @@ class SingboxFakeIP(unittest.TestCase):
         d["dns"] = dict(d["dns"], mode="fake-ip")
         cfg = server.build_config(d)
         self.assertEqual(cfg["dns"]["fake-ip-range"], "198.18.0.1/16")
-        self.assertTrue(cfg["profile"]["store-fake-ip"])
+        self.assertFalse(cfg["profile"]["store-fake-ip"])  # v10.3.2：关闭，热重载保留映射
 
 
 if __name__ == "__main__":

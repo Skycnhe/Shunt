@@ -12,6 +12,19 @@ from .groups import clean_custom_group, gcfg, group_opts, names_rx, pick_plan, r
 from .ruleutil import DOMAIN_RX, adblock_providers, complete_rule, dns_policy_of, rule_policy_index
 from .sb_common import active_core
 from .sysopt import sh
+
+
+def drop_provider_cache(name):
+    """删掉订阅在 mihomo 里的本地缓存 ./providers/<名>.yaml。
+    mihomo 加载 provider 时只要本地文件存在就先用它，按文件修改时间等满一个更新间隔才去下载，不看地址变没变：
+    改了订阅链接（换机场 / 重置 token）或删掉后用同名重新添加，以前要等到间隔（默认 24 小时）才换成新链接的节点"""
+    try:
+        os.remove(os.path.join(CONF_DIR, "providers", safe(name) + ".yaml"))
+        return True
+    except OSError:
+        return False
+
+
 def build_config(d, strict=False):
     providers = {}
     for s in d["subs"]:
@@ -145,7 +158,10 @@ def build_config(d, strict=False):
             "geosite": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat",
             "mmdb": "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.metadb",
         },
-        "profile": {"store-selected": True, "store-fake-ip": True},
+        # store-fake-ip 关闭：开启时 mihomo 每次热重载（PUT /configs）都会丢掉旧的 fake-ip 映射，客户端还在用缓存的旧 fake IP
+        # 时（系统 / 浏览器 DNS 缓存、长连接重连）连接被丢弃，非嗅探端口直到重新解析前都不通；Hk002 的保存设置、订阅变化、
+        # 按设备分流 MAC 变化都会热重载。关闭后（mihomo v1.19.33 起）热重载保留映射，代价是核心重启后映射清空、从头分配
+        "profile": {"store-selected": True, "store-fake-ip": False},
         # skip-domain：米家设备连云端的 TLS 握手里 SNI 是「Mijia Cloud」，嗅探后按这个假域名改写目标会连不上，设备频繁离线；
         # Apple 推送长连接被嗅探改写后会断开重连，消息推送延迟。两者都是 mihomo 官方示例里的跳过项
         "sniffer": {"enable": bool(d.get("sniffer", True)), "skip-domain": ["Mijia Cloud", "+.push.apple.com"], "sniff": {

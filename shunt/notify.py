@@ -308,10 +308,16 @@ def check_nodes():
     if not pg:
         return
     code, raw = core("GET", f"/group/{quote(G_MANUAL)}/delay?url={quote(HC)}&timeout=5000", timeout=30)
+    # 只有 200（逐个节点的结果）和 504（mihomo：全部节点超时）是测速结论；502 等是核心没应答（重载 / 重启中、请求超时），
+    # 以前也当成「全部超时」，会误发一条「所有节点均测速超时」，下一轮又发「已恢复」
+    if code not in (200, 504):
+        return
     try:
         res = json.loads(raw) if code == 200 else {}
     except Exception:
-        res = {}
+        return
+    if not isinstance(res, dict):
+        return
     all_down = not any(v for v in res.values() if isinstance(v, int) and v > 0)
     st = load_notified()
     if all_down != bool(st.get("allnodes")):
