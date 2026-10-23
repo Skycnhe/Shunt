@@ -328,9 +328,11 @@ class ScriptsTest(unittest.TestCase):
         for n in ("shunt-core", "mihomo"):
             with open(os.path.join(ROOT, "init.d", n), encoding="utf-8") as f:
                 s = f.read()
-            line = next(x for x in s.splitlines() if x.startswith("start_pre()"))
-            self.assertIn("--gen >/dev/null ||", line)
-            self.assertTrue(line.rstrip().endswith("return 0; }"))
+            # v8.4.11 起 start_pre 写成多行（面板已生成配置时跳过 --gen），取整个函数体检查
+            body = s[s.index("start_pre()"):]
+            body = body[:body.index("\n}") + 2]
+            self.assertIn("--gen >/dev/null ||", body)
+            self.assertTrue(body.rstrip().endswith("return 0\n}"))
 
     def test_clear_route_loops(self):
         with open(os.path.join(ROOT, "tproxy.sh"), encoding="utf-8") as f:

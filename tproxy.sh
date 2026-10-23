@@ -6,6 +6,9 @@
 #   dns    TUN 模式：只保留 “发往本机 53 端口的 DNS 重定向到 1053”（流量本身由 mihomo TUN 的 auto-route 接管）
 #   stop   删除本脚本创建的全部规则
 #   apply  按面板里的“代理方式”(TProxy / TUN / 关闭) 自动选择上面三者之一
+#          环境变量 TPENV_FILE：直接读这个文件里的参数（面板 / --gen 预先写好），不再起 Python 跑 --tpenv
+#          环境变量 WAIT_PID：核心 pid 文件。先等核心监听好端口再挂规则，核心已退出则不挂（init.d 的 start_post 用）
+#   leftovers  （或 stop leftovers）没有核心进程时清掉核心被 KILL 后残留的 TUN 策略路由与 auto-redirect 表（init.d 的 stop_post 用）
 TPROXY_PORT=7893
 DNS_PORT=1053
 MARK=0x162
@@ -21,7 +24,11 @@ load_env() {
   [ -n "$ENV_LOADED" ] && return 0  # apply 已加载过：start / dns_only 不再启动第二次 Python（每次都要加载整个面板）
   ENV_LOADED=1
   B_IP=""; B_MAC=""; B_IP6=""; LOCAL6=""; IPV6=0; MODE=""; DNS_ALL=0
-  ENV=$(python3 "$SERVER" --tpenv 2>/dev/null) && eval "$ENV"
+  if [ -n "$TPENV_FILE" ] && [ -r "$TPENV_FILE" ]; then
+    ENV=$(cat "$TPENV_FILE") && eval "$ENV"  # 面板进程 / --gen 刚写好的（同一份 tp_env 输出）：省一次 Python 启动
+  else
+    ENV=$(python3 "$SERVER" --tpenv 2>/dev/null) && eval "$ENV"
+  fi
   if [ -z "$MODE" ]; then  # 面板脚本不可用时直接读 data.json
     if grep -q '"proxy_mode": *"tun"' "$DATA" 2>/dev/null; then MODE=tun
     elif grep -q '"proxy_mode": *"off"' "$DATA" 2>/dev/null; then MODE=off
@@ -167,6 +174,56 @@ stop() {
   echo "透明代理规则已关闭"
 }
 
+port_up() {
+  # $1 = tcp | udp，$2 = 端口（4 位大写十六进制）。/proc/net 里 TCP 要处于 LISTEN（0A）；UDP 绑定即可（PROC_NET 供测试改目录）
+  for f in "${PROC_NET:-/proc/net}/$1" "${PROC_NET:-/proc/net}/${1}6"; do
+    [ -r "$f" ] || continue
+    awk -v p=":$2" -v t="$1" 'NR > 1 && substr($2, length($2) - 4) == p && (t == "udp" || $4 == "0A") { ok = 1; exit } END { exit !ok }' "$f" && return 0
+  done
+  return 1
+}
+
+wait_ready() {
+  # 等核心监听好 DNS（1053）及 TProxy（7893）端口再挂规则：以前 init.d 固定 sleep 1，核心早就绪也要白等，
+  # 大规则集加载超过 1 秒时又先挂上规则、流量被导向还没监听的端口。每 0.1 秒查一次，最多 10 秒（超时照常挂规则）；
+  # 核心进程已退出返回 1：不挂规则，局域网保持直连，不被导向不存在的端口
+  [ -n "$WAIT_PID" ] || return 0
+  case "$MODE" in tproxy|tun) ;; *) return 0 ;; esac
+  PID=$(cat "$WAIT_PID" 2>/dev/null)
+  END=$(( $(date +%s) + 10 ))
+  while :; do
+    if [ -n "$PID" ] && ! kill -0 "$PID" 2>/dev/null; then echo "核心进程已退出，未加载透明代理规则"; return 1; fi
+    if port_up udp 041D && { [ "$MODE" != tproxy ] || port_up tcp 1ED5; }; then return 0; fi
+    [ "$(date +%s)" -ge "$END" ] && { echo "等待核心监听端口超时（10 秒），照常加载规则"; return 0; }
+    sleep 0.1 2>/dev/null || sleep 1
+  done
+}
+
+leftovers() {
+  # 核心 15 秒没正常退出被 KILL 时，来不及撤 TUN 的 auto-route 策略路由（指向 2022 路由表，strict_route 还有 unreachable）
+  # 与 auto-redirect 的 nftables 表，留着会让局域网和本机断网。正常退出的核心已自己撤掉：先用 3 条命令看有没有残留，没有就结束；
+  # 有残留也只在一个核心进程都没有时才清（有核心在跑，含不受服务管理的，一律不动）
+  T=$(nft list tables 2>/dev/null | grep -E "^table inet (sing-box|mihomo)$")
+  R4=$(ip -4 rule show 2>/dev/null | grep -c "lookup 2022"); R6=$(ip -6 rule show 2>/dev/null | grep -c "lookup 2022")
+  [ -z "$T" ] && [ "${R4:-0}" = 0 ] && [ "${R6:-0}" = 0 ] && return 0
+  command -v pidof >/dev/null 2>&1 || return 0
+  pidof mihomo mihomo-smart sing-box >/dev/null 2>&1 && return 0
+  echo "$T" | grep -q "inet sing-box" && nft delete table inet sing-box 2>/dev/null
+  # inet mihomo：mihomo auto-redirect 的表（本脚本旧版的同名表含 bypass_mac，由 drop_legacy 处理，这里不碰）
+  if echo "$T" | grep -q "inet mihomo" && ! nft list set inet mihomo bypass_mac >/dev/null 2>&1; then
+    nft delete table inet mihomo 2>/dev/null
+  fi
+  # 两个内核的默认值：iproute2 路由表 2022、策略路由优先级从 9000 起。只有确实有指向 2022 的规则才清 9000～9099 这一段
+  for v in 4 6; do
+    eval "n=\${R$v:-0}"
+    [ "$n" = 0 ] && continue
+    for p in $(ip -$v rule show 2>/dev/null | awk -F: '$1 >= 9000 && $1 < 9100 { print $1 }'); do
+      ip -$v rule del pref "$p" 2>/dev/null
+    done
+  done
+  return 0
+}
+
 status() {
   if nft list chain inet $TABLE prerouting >/dev/null 2>&1; then echo tproxy
   elif nft list chain inet $TABLE dns >/dev/null 2>&1; then echo dns
@@ -176,14 +233,16 @@ status() {
 case "$1" in
   start) start ;;
   dns) dns_only ;;
-  stop) stop ;;
+  stop) stop; [ "$2" = leftovers ] && leftovers ;;  # init.d 的 stop_post：stop leftovers 一次调用做完
   status) status ;;
+  leftovers) leftovers ;;
   apply)
     load_env
+    wait_ready || exit 1
     case "$MODE" in
       tproxy) start ;;
       tun) dns_only ;;
       *) stop ;;
     esac ;;
-  *) echo "usage: $0 start|dns|stop|apply|status"; exit 1 ;;
+  *) echo "usage: $0 start|dns|stop|apply|status|leftovers"; exit 1 ;;
 esac

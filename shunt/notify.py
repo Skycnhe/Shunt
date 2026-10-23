@@ -95,8 +95,8 @@ def wd_event(msg, push=True, kind=""):
         notify(msg)
 
 
-def core_alive():
-    code, _ = core("GET", "/version", timeout=5)
+def core_alive(timeout=5):
+    code, _ = core("GET", "/version", timeout=timeout)
     return code == 200
 
 
