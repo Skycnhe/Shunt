@@ -7,6 +7,8 @@ from urllib.parse import quote
 from .base import BUILTIN_POLICIES, G_MANUAL, HC
 from .corehttp import core, core_json
 from .data import load, update
+from .nodeprobe import fill_absent
+from .sb_common import active_core
 
 HEALTH_STATE = {"running": False, "last_run": 0, "total": 0, "checked": 0}
 
@@ -100,9 +102,10 @@ def apply_results(results, d=None, universe=None):
 
 
 def merge_delay(members, code, data):
-    """把 /group/…/delay 的应答整理成 {节点: 延迟(0=失败)}。
+    """把 /group/…/delay 的应答整理成 {节点: 延迟(0=失败或缺席)}。
     mihomo 与 sing-box 的 clash API 都只返回测速成功的节点，失败的直接缺席；
-    mihomo 全部失败时返回 504，sing-box 返回空对象。全集取自组的 all 成员，缺席的记为失败"""
+    mihomo 全部失败时返回 504，sing-box 返回空对象。全集取自组的 all 成员。
+    mihomo 测完整组，缺席即失败；sing-box 同时只测 10 个、共用超时，缺席可能只是没轮到测，调用方要用 nodeprobe.fill_absent 补测"""
     ok = data if code == 200 and isinstance(data, dict) else {}
     nodes = [n for n in (members or list(ok)) if isinstance(n, str) and n not in BUILTIN_POLICIES]
     results = {}
@@ -137,6 +140,9 @@ def get_records(d=None):
     return d.get("health") or {}
 
 
+HEALTH_PROBE_BUDGET = 240  # sing-box 逐个补测的时间上限（每天一次的后台检查，比告警复核宽松；需小于 base.MASS_MAX_AGE）
+
+
 def run_check():
     """执行一次全量健康检查：经核心 delay 接口批量测速"""
     HEALTH_STATE["running"] = True
@@ -159,11 +165,25 @@ def run_check():
         results = merge_delay(members, code, data)
         if not results:
             return False, "手动选择组里没有节点"
+        universe = list(results)
         HEALTH_STATE["total"] = len(results)
-        HEALTH_STATE["checked"] = len(results)
-        apply_results(results, universe=results.keys())
+        undecided = 0
+        if code == 200 and active_core() == "singbox":
+            # sing-box 整组测速同时只测 10 个、共用超时，没轮到测的节点也不在结果里：缺席不等于失败，逐个补测；
+            # 补测也没有结论的节点（核心重载中、预算内没测完）本轮不记录，免得把可用节点记一天失败
+            fails = sum(1 for v in results.values() if not v)
+            HEALTH_STATE["checked"] = len(results) - fails
+            base_n = HEALTH_STATE["checked"]
+            results = fill_absent(results, HEALTH_PROBE_BUDGET, progress=lambda k: HEALTH_STATE.update(checked=base_n + k))
+            undecided = len(universe) - len(results)
+            if not results:
+                return False, "核心没有返回测速结果，本次未记录"
+        HEALTH_STATE["checked"] = len(universe)
+        apply_results(results, universe=universe)
         HEALTH_STATE["last_run"] = int(time.time())
         ok_count = sum(1 for v in results.values() if v > 0)
+        if undecided:
+            return True, f"检查完成：{ok_count}/{len(universe)} 个节点正常，{undecided} 个未测出结果（本次不记录）"
         return True, f"检查完成：{ok_count}/{len(results)} 个节点正常"
     finally:
         HEALTH_STATE["running"] = False

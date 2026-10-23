@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "8.4.7"
+PANEL_VERSION = "8.4.8"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -30,6 +30,7 @@ MODULES = [
     "validate",
     "core",
     "corehttp",
+    "nodeprobe",
     "sb_common",
     "sb_yaml",
     "sb_subs",
@@ -334,7 +335,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "8.4.7"
+PANEL_VERSION = "8.4.8"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -2537,6 +2538,105 @@ def core_json(path, timeout=10):
         return json.loads(raw)
     except Exception:
         return None
+'''
+_SRC['shunt.nodeprobe'] = '''"""逐个节点测速（/proxies/{节点}/delay），给整组测速结果不可靠的场合补测。
+
+sing-box（实测 1.14.3）的 /group/{组}/delay 同时只测 10 个节点、整组共用一个 timeout，应答里只列测通的节点：
+排在前面的失效节点占满并发等到超时，后面的可用节点根本没轮到测，也不会出现在结果里（全部没测到时照样 200 {}）。
+所以 sing-box 下「组结果里缺席」不等于「测速失败」，要逐个节点再测一次才能下结论。mihomo 的整组测速会测完全部节点，
+缺席就是失败（全部失败回 504），不需要补测。
+
+notify.check_nodes（全部超时告警前复核）、health.run_check（节点健康检查）、schedule 的定时测速共用这里的逻辑。
+"""
+import json
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout, as_completed
+from urllib.parse import quote
+
+from .base import HC, mass_begin, mass_end
+from .corehttp import core
+
+PROBE_WORKERS = 32   # 逐个节点测速的并发数
+PROBE_BUDGET = 90    # 默认最多用多少秒（期间按「全节点测速中」登记，看门狗暂停判定）；必须小于 base.MASS_MAX_AGE
+
+
+def node_delay(name):
+    """单节点测速：延迟毫秒（>0 可用）/ 0 超时或失败（两个内核都是 504 超时、503 测速出错）/
+    None 没有结论（核心没应答 502、节点已不在 404、应答解析不了等）"""
+    code, raw = core("GET", f"/proxies/{quote(name, safe='')}/delay?url={quote(HC)}&timeout=5000", timeout=20)
+    if code in (503, 504):
+        return 0
+    if code != 200:
+        return None
+    try:
+        v = json.loads(raw).get("delay")
+    except Exception:
+        return None
+    return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else 0
+
+
+def node_alive(name):
+    """True 可用 / False 超时或失败 / None 没有结论"""
+    v = node_delay(name)
+    return None if v is None else v > 0
+
+
+def probe_nodes(names, budget=PROBE_BUDGET, stop=None, progress=None):
+    """并发逐个测速，返回 {节点: 延迟 | 0 | None}；预算内没测完的节点记 None（没有结论）。
+    stop(节点, 结果) 返回真时提前结束（其余节点记 None）；progress(已完成数) 每测完一个调用一次"""
+    names = list(dict.fromkeys(n for n in names if isinstance(n, str) and n))
+    out = dict.fromkeys(names)
+    if not names:
+        return out
+    tok = mass_begin()  # 测速期间核心负载高，看门狗暂停判定
+    ex = ThreadPoolExecutor(min(PROBE_WORKERS, len(names)))
+    try:
+        futs = {ex.submit(node_delay, n): n for n in names}
+        done = 0
+        try:
+            for f in as_completed(futs, timeout=budget):
+                n = futs[f]
+                try:
+                    out[n] = f.result()
+                except Exception:
+                    out[n] = None
+                done += 1
+                if progress:
+                    progress(done)
+                if stop and stop(n, out[n]):
+                    break
+        except FuturesTimeout:
+            pass  # 节点太多，预算内没测完：剩下的保持 None
+        return out
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
+        mass_end(tok)
+
+
+def confirm_all_down(members, budget=PROBE_BUDGET):
+    """「全部超时」告警前逐个节点复核：True 全部失败 / False 有节点可用 / None 没有结论（核心重载中、预算内没测完）"""
+    names = [m for m in members if isinstance(m, str) and m]
+    if not names:
+        return True
+    res = probe_nodes(names, budget, stop=lambda n, v: bool(v))
+    vals = list(res.values())
+    if any(vals):
+        return False
+    return True if all(v == 0 for v in vals) else None
+
+
+def fill_absent(results, budget=PROBE_BUDGET, progress=None):
+    """sing-box 整组测速的结果 {节点: 延迟(0=缺席/失败)} → 缺席的逐个补测。
+    返回新的 {节点: 延迟}：测通的写延迟、确认失败的写 0，没有结论的节点不出现（本轮不记失败也不记成功）"""
+    miss = [n for n, v in results.items() if not v]
+    out = dict(results)
+    if not miss:
+        return out
+    for n, v in probe_nodes(miss, budget, progress=progress).items():
+        if v is None:
+            out.pop(n, None)
+        else:
+            out[n] = v
+    return out
 '''
 _SRC['shunt.sb_common'] = '''"""sing-box 内核"""
 import os
@@ -5000,6 +5100,8 @@ from urllib.parse import quote
 from .base import BUILTIN_POLICIES, G_MANUAL, HC
 from .corehttp import core, core_json
 from .data import load, update
+from .nodeprobe import fill_absent
+from .sb_common import active_core
 
 HEALTH_STATE = {"running": False, "last_run": 0, "total": 0, "checked": 0}
 
@@ -5093,9 +5195,10 @@ def apply_results(results, d=None, universe=None):
 
 
 def merge_delay(members, code, data):
-    """把 /group/…/delay 的应答整理成 {节点: 延迟(0=失败)}。
+    """把 /group/…/delay 的应答整理成 {节点: 延迟(0=失败或缺席)}。
     mihomo 与 sing-box 的 clash API 都只返回测速成功的节点，失败的直接缺席；
-    mihomo 全部失败时返回 504，sing-box 返回空对象。全集取自组的 all 成员，缺席的记为失败"""
+    mihomo 全部失败时返回 504，sing-box 返回空对象。全集取自组的 all 成员。
+    mihomo 测完整组，缺席即失败；sing-box 同时只测 10 个、共用超时，缺席可能只是没轮到测，调用方要用 nodeprobe.fill_absent 补测"""
     ok = data if code == 200 and isinstance(data, dict) else {}
     nodes = [n for n in (members or list(ok)) if isinstance(n, str) and n not in BUILTIN_POLICIES]
     results = {}
@@ -5130,6 +5233,9 @@ def get_records(d=None):
     return d.get("health") or {}
 
 
+HEALTH_PROBE_BUDGET = 240  # sing-box 逐个补测的时间上限（每天一次的后台检查，比告警复核宽松；需小于 base.MASS_MAX_AGE）
+
+
 def run_check():
     """执行一次全量健康检查：经核心 delay 接口批量测速"""
     HEALTH_STATE["running"] = True
@@ -5152,11 +5258,25 @@ def run_check():
         results = merge_delay(members, code, data)
         if not results:
             return False, "手动选择组里没有节点"
+        universe = list(results)
         HEALTH_STATE["total"] = len(results)
-        HEALTH_STATE["checked"] = len(results)
-        apply_results(results, universe=results.keys())
+        undecided = 0
+        if code == 200 and active_core() == "singbox":
+            # sing-box 整组测速同时只测 10 个、共用超时，没轮到测的节点也不在结果里：缺席不等于失败，逐个补测；
+            # 补测也没有结论的节点（核心重载中、预算内没测完）本轮不记录，免得把可用节点记一天失败
+            fails = sum(1 for v in results.values() if not v)
+            HEALTH_STATE["checked"] = len(results) - fails
+            base_n = HEALTH_STATE["checked"]
+            results = fill_absent(results, HEALTH_PROBE_BUDGET, progress=lambda k: HEALTH_STATE.update(checked=base_n + k))
+            undecided = len(universe) - len(results)
+            if not results:
+                return False, "核心没有返回测速结果，本次未记录"
+        HEALTH_STATE["checked"] = len(universe)
+        apply_results(results, universe=universe)
         HEALTH_STATE["last_run"] = int(time.time())
         ok_count = sum(1 for v in results.values() if v > 0)
+        if undecided:
+            return True, f"检查完成：{ok_count}/{len(universe)} 个节点正常，{undecided} 个未测出结果（本次不记录）"
         return True, f"检查完成：{ok_count}/{len(results)} 个节点正常"
     finally:
         HEALTH_STATE["running"] = False
@@ -6307,13 +6427,13 @@ def favicon(url, allowed=None):
 '''
 _SRC['shunt.notify'] = '''"""Telegram 通知"""
 import json, os, signal, socket, threading, time, urllib.request, urllib.error
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout, as_completed
 from collections import deque
 from urllib.parse import quote
 
-from .base import CORE_UPD, G_MANUAL, HC, MIHOMO_LOG, NOTIFY_FILE, PANEL_DIR, TPROXY_SH, WD_HOLD, mass_begin, mass_end, mass_testing
+from .base import CORE_UPD, G_MANUAL, HC, MIHOMO_LOG, NOTIFY_FILE, PANEL_DIR, TPROXY_SH, WD_HOLD, mass_testing
 from .data import load, read_json, write_json
 from .corehttp import core, core_json
+from .nodeprobe import confirm_all_down
 from .sb_common import CORE_PID, CORES, active_core
 from .sysopt import SVC_OP, proxy_opener, sh, svc_restart
 def tg_send(text, d=None):
@@ -6612,49 +6732,7 @@ def load_notified():
     return read_json(NOTIFY_FILE, {})
 
 
-NODE_CONFIRM_WORKERS = 32   # 逐个节点复核的并发数
 NODE_CONFIRM_BUDGET = 90    # 逐个节点复核最多用多少秒（期间看门狗按「全节点测速中」暂停判定）
-
-
-def node_alive(name):
-    """单节点测速：True 可用 / False 超时或失败（两个内核都是 504 超时、503 测速出错）/ None 没有结论（核心没应答、节点已不在等）"""
-    code, raw = core("GET", f"/proxies/{quote(name, safe='')}/delay?url={quote(HC)}&timeout=5000", timeout=20)
-    if code in (503, 504):
-        return False
-    if code != 200:
-        return None
-    try:
-        v = json.loads(raw).get("delay")
-    except Exception:
-        return None
-    return isinstance(v, int) and v > 0
-
-
-def confirm_all_down(members, budget=NODE_CONFIRM_BUDGET):
-    """「全部超时」前逐个节点复核。sing-box 的 /group/…/delay 同时只测 10 个节点、整组共用一个 timeout：
-    排在前面的失效节点占满并发等到超时，后面的可用节点根本没轮到测，照样返回 200 {}（mihomo 全部超时才回 504）。
-    订阅里失效节点一多就会误报「所有节点均测速超时」。返回 True 全部失败 / False 有节点可用 / None 没有结论"""
-    names = [m for m in members if isinstance(m, str) and m]
-    if not names:
-        return True
-    tok = mass_begin()  # 复核期间核心负载高，看门狗暂停判定
-    ex = ThreadPoolExecutor(min(NODE_CONFIRM_WORKERS, len(names)))
-    try:
-        futs = [ex.submit(node_alive, n) for n in names]
-        verdict = True
-        try:
-            for f in as_completed(futs, timeout=budget):
-                r = f.result()
-                if r:
-                    return False
-                if r is None:
-                    verdict = None  # 核心重载 / 重启中：本轮不下结论，也不误报
-        except FuturesTimeout:
-            return None  # 节点太多，时间内没测完
-        return verdict
-    finally:
-        ex.shutdown(wait=False, cancel_futures=True)
-        mass_end(tok)
 
 
 def check_nodes():
@@ -6681,7 +6759,7 @@ def check_nodes():
     st = load_notified()
     if all_down and not st.get("allnodes") and code == 200:
         # 200 却没有一个可用节点：sing-box 全部超时就是这样（也可能只是没轮到测），逐个节点复核后再告警
-        all_down = confirm_all_down((pg.get("all") or []) if isinstance(pg, dict) else [])
+        all_down = confirm_all_down((pg.get("all") or []) if isinstance(pg, dict) else [], NODE_CONFIRM_BUDGET)
         if all_down is None:
             return
     if all_down != bool(st.get("allnodes")):
@@ -8167,10 +8245,11 @@ from collections import deque
 from urllib.parse import quote
 
 from .errlog import log_err
-from .base import G_MANUAL, HC, PANEL_DIR
+from .base import BUILTIN_POLICIES, G_MANUAL, HC, PANEL_DIR
 from .data import load, read_json, write_json
 from .core import refresh_regions, reload_core
 from .corehttp import core, core_json
+from .nodeprobe import fill_absent
 from .sb_common import active_core
 from .groups import sb_sub_cache
 from .sb_subs import sb_update_subs
@@ -8237,6 +8316,9 @@ def sched_event(msg):
     print(time.strftime("%F %T"), "[schedule]", msg, flush=True)
 
 
+LATENCY_PROBE_BUDGET = 60  # sing-box 定时测速逐个补测的时间上限（定时任务在 sched_loop 里同步执行，不能拖太久）
+
+
 def run_task(name):
     d = load()
     if name == "sub_update" and active_core(d) == "singbox":
@@ -8276,12 +8358,19 @@ def run_task(name):
         # GLOBAL 只含 config 里的节点和策略组，订阅节点要经「🖐️ 手动选择」（含全部节点）测速
         code, raw = core("GET", f"/group/GLOBAL/delay?url={quote(HC)}&timeout=5000", timeout=120)
         n = 0
-        if core_json("/proxies/" + quote(G_MANUAL)):
+        pg = core_json("/proxies/" + quote(G_MANUAL))
+        if pg:
             c2, r2 = core("GET", f"/group/{quote(G_MANUAL)}/delay?url={quote(HC)}&timeout=5000", timeout=120)
             try:
-                n = sum(1 for v in json.loads(r2).values() if isinstance(v, int) and v > 0) if c2 == 200 else 0
+                res = json.loads(r2) if c2 == 200 else {}
             except Exception:
-                n = 0
+                res = {}
+            res = {k: v for k, v in res.items() if isinstance(v, int) and not isinstance(v, bool) and v > 0} if isinstance(res, dict) else {}
+            if c2 == 200 and active_core() == "singbox":
+                # sing-box 整组测速同时只测 10 个、共用超时：没轮到测的节点不在结果里，也没有刷新延迟，逐个补测
+                members = [m for m in ((pg.get("all") if isinstance(pg, dict) else None) or []) if isinstance(m, str) and m not in BUILTIN_POLICIES]
+                res = fill_absent({m: res.get(m, 0) for m in members}, LATENCY_PROBE_BUDGET)
+            n = sum(1 for v in res.values() if v > 0)
             code = 200 if (code == 200 or c2 in (200, 504)) else code
         return code == 200, f"节点测速完成，{n} 个节点可达"
     if name == "adblock":
