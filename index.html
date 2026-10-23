@@ -348,6 +348,29 @@ nav button{font-size:15.5px;font-weight:600;opacity:.85}nav button.on{font-weigh
   .hstats{order:4;flex:1 1 100%;margin-left:0}
   .hstats>.chip,.vchips .chip{flex:1 0 auto}.vchips{flex:2 0 auto;margin-left:0}
 }
+/* v10.3.4 手机端顶栏放大：图标 38px、Shunt 字样显示、启停按钮 / 状态胶囊 / 代理胶囊统一 40px 高（触控目标）、15px 字。
+   第一行 图标+Shunt … 主题 / GitHub，第二行 核心控制条铺满；很窄的屏幕（≤350px）按钮只留图标，不溢出 */
+@media (max-width:720px){
+  .hrow{row-gap:8px}
+  .hrow>.brand{order:1;gap:10px;font-size:21px}.brand b{display:inline}
+  .logo{width:38px;height:38px;border-radius:11px}.logo svg{width:24px;height:24px}
+  .hrow>.theme{order:2;margin-left:auto}.hrow>.gh{order:3;margin-left:0}
+  .hrow>.ib.round{width:40px;height:40px}.hrow>.ib.round svg{width:19px;height:19px}
+  .hrow>.corebox{order:4;flex:1 1 100%;min-width:0;gap:6px;padding:4px 4px 4px 12px}
+  .corebox .pill{font-size:15px;flex:none}.corebox .dot{width:9px;height:9px}
+  .corebox .ib{height:40px;padding:0 12px;font-size:15px;gap:6px;flex:1 1 auto;justify-content:center;min-width:44px}
+  .corebox .ib .tx{display:inline}.corebox .ib svg{width:18px;height:18px}
+  .corebox #h-mode{display:inline-flex;align-items:center;justify-content:center;height:40px;padding:0 12px;border-radius:999px;font-size:15px;font-weight:600;flex:none}
+  .corebox #h-mode:empty{display:none}
+  .hrow>.hstats{order:5}
+}
+@media (max-width:350px){.corebox .ib .tx{display:none}.corebox .ib{padding:0 10px}}
+/* 触屏的宽屏（平板、手机横屏或开了「桌面版网站」）：沿用桌面布局，代理胶囊与启停按钮同高，图标略大；鼠标操作的桌面端不变 */
+@media (min-width:721px) and (max-width:1100px) and (hover:none) and (pointer:coarse){
+  .logo{width:36px;height:36px;border-radius:10px}.logo svg{width:22px;height:22px}.brand{font-size:21px}
+  .corebox #h-mode{display:inline-flex;align-items:center;height:40px;padding:0 14px;border-radius:999px;font-size:15px;font-weight:600}
+  .corebox #h-mode:empty{display:none}
+}
 </style>
 </head>
 <body><div id="bgimg"></div><div id="bgdim"></div>

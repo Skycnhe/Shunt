@@ -22,6 +22,7 @@ MODULES = [
     "validate",
     "core",
     "corehttp",
+    "nodeprobe",
     "sb_common",
     "sb_yaml",
     "sb_subs",

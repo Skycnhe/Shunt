@@ -4,10 +4,11 @@ from collections import deque
 from urllib.parse import quote
 
 from .errlog import log_err
-from .base import G_MANUAL, HC, PANEL_DIR
+from .base import BUILTIN_POLICIES, G_MANUAL, HC, PANEL_DIR
 from .data import load, read_json, write_json
 from .core import refresh_regions, reload_core
 from .corehttp import core, core_json
+from .nodeprobe import fill_absent
 from .sb_common import active_core
 from .groups import sb_sub_cache
 from .sb_subs import sb_update_subs
@@ -99,6 +100,9 @@ def subs_update(names=None, d=None, where=None):
     return okl, bad, msg
 
 
+LATENCY_PROBE_BUDGET = 60  # sing-box 定时测速逐个补测的时间上限（定时任务在 sched_loop 里同步执行，不能拖太久）
+
+
 def run_task(name):
     d = load()
     if name == "sub_update":
@@ -123,12 +127,19 @@ def run_task(name):
         # GLOBAL 只含 config 里的节点和策略组，订阅节点要经「🖐️ 手动选择」（含全部节点）测速
         code, raw = core("GET", f"/group/GLOBAL/delay?url={quote(HC)}&timeout=5000", timeout=120)
         n = 0
-        if core_json("/proxies/" + quote(G_MANUAL)):
+        pg = core_json("/proxies/" + quote(G_MANUAL))
+        if pg:
             c2, r2 = core("GET", f"/group/{quote(G_MANUAL)}/delay?url={quote(HC)}&timeout=5000", timeout=120)
             try:
-                n = sum(1 for v in json.loads(r2).values() if isinstance(v, int) and v > 0) if c2 == 200 else 0
+                res = json.loads(r2) if c2 == 200 else {}
             except Exception:
-                n = 0
+                res = {}
+            res = {k: v for k, v in res.items() if isinstance(v, int) and not isinstance(v, bool) and v > 0} if isinstance(res, dict) else {}
+            if c2 == 200 and active_core() == "singbox":
+                # sing-box 整组测速同时只测 10 个、共用超时：没轮到测的节点不在结果里，也没有刷新延迟，逐个补测
+                members = [m for m in ((pg.get("all") if isinstance(pg, dict) else None) or []) if isinstance(m, str) and m not in BUILTIN_POLICIES]
+                res = fill_absent({m: res.get(m, 0) for m in members}, LATENCY_PROBE_BUDGET)
+            n = sum(1 for v in res.values() if v > 0)
             code = 200 if (code == 200 or c2 in (200, 504)) else code
         return code == 200, f"节点测速完成，{n} 个节点可达"
     if name == "adblock":

@@ -6,7 +6,6 @@
 - 整组测速同时只测 10 个节点、整组共用 timeout：30 个失效节点中间夹 1 个可用节点，5 次里 3 次返回 {}（可用节点没轮到测）
 """
 import json
-import os
 import sys
 import threading
 import unittest
@@ -19,23 +18,13 @@ assert server
 
 B = sys.modules["shunt.base"]
 N = sys.modules["shunt.notify"]
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+NP = sys.modules["shunt.nodeprobe"]  # v10.3.4 起逐个节点测速抽到 nodeprobe，notify / health / schedule 共用
 
 TIMEOUT_ALL = (200, b"{}\n")  # sing-box 1.14.3 全部超时（或可用节点没轮到测）时的真实应答
 NODE_TIMEOUT = (504, b'{"message":"Timeout"}\n')
 NODE_ERROR = (503, b'{"message":"An error occurred in the delay test"}\n')
 NOT_FOUND = (404, b'{"message":"Resource not found"}\n')
 UNREACHABLE = (502, json.dumps({"message": "mihomo 未运行或无法连接: refused"}).encode())
-
-
-class VersionTest(unittest.TestCase):
-    def test_version(self):
-        self.assertEqual(B.PANEL_VERSION, "10.3.3")
-
-    def test_changelog_top(self):
-        with open(os.path.join(ROOT, "CHANGELOG.md"), encoding="utf-8") as f:
-            heads = [ln for ln in f if ln.startswith("## v")]
-        self.assertTrue(heads[0].startswith("## v10.3.3"), heads[0])
 
 
 class SingBoxCheckNodesTest(unittest.TestCase):
@@ -56,7 +45,8 @@ class SingBoxCheckNodesTest(unittest.TestCase):
         d = dict(server.load(), tg_token="t", tg_chat="c", mode="rule")
         pg = {"type": "Selector", "name": B.G_MANUAL, "now": members[0] if members else "", "all": list(members)}
         with mock.patch.object(N, "load", return_value=d), mock.patch.object(N, "core_json", return_value=pg), \
-                mock.patch.object(N, "core", side_effect=fake_core), mock.patch.object(N, "load_notified", return_value=dict(st or {})), \
+                mock.patch.object(N, "core", side_effect=fake_core), mock.patch.object(NP, "core", side_effect=fake_core), \
+                mock.patch.object(N, "load_notified", return_value=dict(st or {})), \
                 mock.patch.object(N, "write_json") as wj, mock.patch.object(N, "notify") as nt:
             N.check_nodes()
         return wj, nt, calls
@@ -110,10 +100,10 @@ class SingBoxCheckNodesTest(unittest.TestCase):
 
         def slow(name):
             ev.wait(5)
-            return False
+            return 0
         try:
-            with mock.patch.object(N, "node_alive", side_effect=slow):
-                self.assertIsNone(N.confirm_all_down(["a", "b"], budget=0.2))
+            with mock.patch.object(NP, "node_delay", side_effect=slow):
+                self.assertIsNone(NP.confirm_all_down(["a", "b"], budget=0.2))
         finally:
             ev.set()
         self.assertFalse(B.MASS_TEST["active"])  # 测速登记已注销，看门狗恢复判定
@@ -121,8 +111,8 @@ class SingBoxCheckNodesTest(unittest.TestCase):
     def test_node_alive_parse(self):
         for resp, want in (((200, b'{"delay":31}'), True), ((200, b'{"delay":0}'), False), (NODE_TIMEOUT, False),
                            (NODE_ERROR, False), (NOT_FOUND, None), (UNREACHABLE, None), ((200, b"oops"), None)):
-            with mock.patch.object(N, "core", return_value=resp) as c:
-                self.assertIs(N.node_alive("香港 01/x"), want, resp)
+            with mock.patch.object(NP, "core", return_value=resp) as c:
+                self.assertIs(NP.node_alive("香港 01/x"), want, resp)
             self.assertIn("/proxies/%E9%A6%99%E6%B8%AF%2001%2Fx/delay?", c.call_args[0][1])
 
     def test_empty_group(self):
