@@ -33,16 +33,6 @@ NOT_FOUND = (404, b'{"message":"Resource not found"}\n')
 UNREACHABLE = (502, json.dumps({"message": "mihomo 未运行或无法连接: refused"}).encode())
 
 
-class VersionTest(unittest.TestCase):
-    def test_version(self):
-        self.assertEqual(B.PANEL_VERSION, "8.4.8")
-
-    def test_changelog_top(self):
-        with open(os.path.join(ROOT, "CHANGELOG.md"), encoding="utf-8") as f:
-            heads = [ln for ln in f if ln.startswith("## v")]
-        self.assertTrue(heads[0].startswith("## v8.4.8"), heads[0])
-
-
 def fake_core_factory(group, nodes, calls):
     def fake_core(method, path, body=None, timeout=10):
         p = unquote(path)
