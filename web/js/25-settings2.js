@@ -13,7 +13,7 @@ async function restore(){const inp=$('#restore-file'),f=inp.files[0];inp.value='
 let _rz=0;addEventListener('resize',()=>{clearTimeout(_rz);_rz=setTimeout(()=>{drawChart();if(TAB==='统计')drawDays()},120)});
 async function start(){
   try{await loadState()}catch(e){if(e.message==='未登录')return;toast('面板服务连接失败：'+e.message)}
-  $('#app').classList.remove('hide');nav();go(TAB);
+  $('#app').classList.remove('hide');go(tabFromHash(location.hash),1);
   const vis=f=>()=>{if(!document.hidden)f()};
   // 设备名单只在用得到它的概览 / 连接 / 统计页轮询（统计页 loadStats 自带）；站点延迟卡片只在概览，测速也只在概览跑
   timers.forEach(clearInterval);timers=[setInterval(tick,1000),setInterval(vis(()=>{if(TAB==='概览')testSites()}),60000),setInterval(vis(()=>loadState().catch(()=>{})),15000),
@@ -22,5 +22,4 @@ async function start(){
   loadDevs();tick();bgSync()}
 // 切回前台时立即刷新一次
 document.addEventListener('visibilitychange',()=>{if(document.hidden||$('#app').classList.contains('hide'))return;_skip=0;tick();loadState().catch(()=>{});if(TAB==='节点')loadProxies()});
-placeNav();
 start();  // 不再需要登录
