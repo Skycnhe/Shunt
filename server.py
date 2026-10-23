@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "10.3.2"
+PANEL_VERSION = "10.3.3"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -311,7 +311,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "10.3.2"
+PANEL_VERSION = "10.3.3"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -6599,10 +6599,11 @@ def favicon(url, allowed=None):
 '''
 _SRC['shunt.notify'] = '''"""Telegram 通知"""
 import json, os, signal, socket, threading, time, urllib.request, urllib.error
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout, as_completed
 from collections import deque
 from urllib.parse import quote
 
-from .base import CORE_UPD, G_MANUAL, HC, MIHOMO_LOG, NOTIFY_FILE, PANEL_DIR, TPROXY_SH, WD_HOLD, mass_testing
+from .base import CORE_UPD, G_MANUAL, HC, MIHOMO_LOG, NOTIFY_FILE, PANEL_DIR, TPROXY_SH, WD_HOLD, mass_begin, mass_end, mass_testing
 from .errlog import log_tail
 from .data import load, read_json, write_json
 from .corehttp import core, core_json
@@ -6897,6 +6898,51 @@ def load_notified():
     return read_json(NOTIFY_FILE, {})
 
 
+NODE_CONFIRM_WORKERS = 32   # 逐个节点复核的并发数
+NODE_CONFIRM_BUDGET = 90    # 逐个节点复核最多用多少秒（期间看门狗按「全节点测速中」暂停判定）
+
+
+def node_alive(name):
+    """单节点测速：True 可用 / False 超时或失败（两个内核都是 504 超时、503 测速出错）/ None 没有结论（核心没应答、节点已不在等）"""
+    code, raw = core("GET", f"/proxies/{quote(name, safe='')}/delay?url={quote(HC)}&timeout=5000", timeout=20)
+    if code in (503, 504):
+        return False
+    if code != 200:
+        return None
+    try:
+        v = json.loads(raw).get("delay")
+    except Exception:
+        return None
+    return isinstance(v, int) and v > 0
+
+
+def confirm_all_down(members, budget=NODE_CONFIRM_BUDGET):
+    """「全部超时」前逐个节点复核。sing-box 的 /group/…/delay 同时只测 10 个节点、整组共用一个 timeout：
+    排在前面的失效节点占满并发等到超时，后面的可用节点根本没轮到测，照样返回 200 {}（mihomo 全部超时才回 504）。
+    订阅里失效节点一多就会误报「所有节点均测速超时」。返回 True 全部失败 / False 有节点可用 / None 没有结论"""
+    names = [m for m in members if isinstance(m, str) and m]
+    if not names:
+        return True
+    tok = mass_begin()  # 复核期间核心负载高，看门狗暂停判定
+    ex = ThreadPoolExecutor(min(NODE_CONFIRM_WORKERS, len(names)))
+    try:
+        futs = [ex.submit(node_alive, n) for n in names]
+        verdict = True
+        try:
+            for f in as_completed(futs, timeout=budget):
+                r = f.result()
+                if r:
+                    return False
+                if r is None:
+                    verdict = None  # 核心重载 / 重启中：本轮不下结论，也不误报
+        except FuturesTimeout:
+            return None  # 节点太多，时间内没测完
+        return verdict
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
+        mass_end(tok)
+
+
 def check_nodes():
     """节点选择里所有节点都超时 → 通知（只在状态变化时发）"""
     d = load()
@@ -6919,6 +6965,11 @@ def check_nodes():
         return
     all_down = not any(v for v in res.values() if isinstance(v, int) and v > 0)
     st = load_notified()
+    if all_down and not st.get("allnodes") and code == 200:
+        # 200 却没有一个可用节点：sing-box 全部超时就是这样（也可能只是没轮到测），逐个节点复核后再告警
+        all_down = confirm_all_down((pg.get("all") or []) if isinstance(pg, dict) else [])
+        if all_down is None:
+            return
     if all_down != bool(st.get("allnodes")):
         st["allnodes"] = all_down
         write_json(NOTIFY_FILE, st)

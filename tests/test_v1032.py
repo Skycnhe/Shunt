@@ -37,16 +37,6 @@ D = sys.modules["shunt.data"]
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-class VersionTest(unittest.TestCase):
-    def test_version(self):
-        self.assertEqual(B.PANEL_VERSION, "10.3.2")
-
-    def test_changelog_top(self):
-        with open(os.path.join(ROOT, "CHANGELOG.md"), encoding="utf-8") as f:
-            heads = [ln for ln in f if ln.startswith("## v")]
-        self.assertTrue(heads[0].startswith("## v10.3.2"), heads[0])
-
-
 class StoreFakeIpTest(unittest.TestCase):
     """mihomo store-fake-ip:true 时热重载会丢掉旧的 fake-ip 映射（Hk002 保存设置、MAC 变化都热重载）：改为 false"""
 
