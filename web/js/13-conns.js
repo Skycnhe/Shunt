@@ -8,7 +8,7 @@ function renderConns(list){const f=$('#c-filter').value.toLowerCase();const now=
   const rates=new Map(),next=new Map(),dt=_prevConnT?Math.max(1,(now-_prevConnT)/1000):1;
   for(const c of list){const p=prevConn.get(c.id);rates.set(c.id,p?[Math.max(0,c.download-p.d)/dt,Math.max(0,c.upload-p.u)/dt]:[0,0]);next.set(c.id,{d:c.download,u:c.upload})}
   prevConn=next;_prevConnT=now;
-  if(now-_lastConnRender<2000)return;
+  if(now-_lastConnRender<1500)return;  // 每 2 秒拉一次，阈值留出计时抖动（2000 会因为早到几毫秒隔一次跳过，变成 4 秒一画）
   _lastConnRender=now;
   $('#conns').innerHTML=list.filter(c=>!f||(JSON.stringify(c)+dname(c.metadata?.sourceIP)).toLowerCase().includes(f)).slice(0,300).map(c=>{const m=c.metadata||{};
     const r=rates.get(c.id),ds=r[0],us=r[1];

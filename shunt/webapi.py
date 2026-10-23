@@ -7,14 +7,14 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 from .errlog import log_err
 from . import adblock, stats
 from .base import (
-    AB_DIR, AB_PRESETS, BUILTIN_POLICIES, CERT, DEFAULT_EXCLUDE, DNS_DEFAULT, DNS_LISTS, GROUP_TYPES, G_MANUAL, G_SEL, HC, KEY,
+    AB_DIR, AB_PRESETS, BUILTIN_POLICIES, CERT, DEFAULT_EXCLUDE, DNS_DEFAULT, DNS_LISTS, GROUP_TYPES, G_SEL, KEY,
     LB_STRATEGIES, LOCK, MAX_BODY, MIHOMO_BIN, MIHOMO_LOG, PANEL_VERSION, PRIMARY_REGIONS, PROXY_MODES, REGIONS, SMART_BIN, SVC, TPROXY_SH,
     TUN_STACKS, UPD_STATE, CONF_DIR, upd_begin, upd_busy_msg, wd_hold
 )
 from .data import HISTORY_FILE, HISTORY_SKIP, auto_name, config_version, lb_names, load, migrate_names, normalize, read_json, region_lb_set, safe, save, update
 from .links import add_links, q1, reserved_names
 from .groups import (
-    NODE_LIST_MAX, all_node_names, clean_custom_group, gcfg, node_name_ok, provider_nodes, provider_rev, region_plan, rx, sb_sub_outbounds,
+    NODE_LIST_MAX, all_node_names, clean_custom_group, gcfg, node_name_ok, provider_nodes, provider_rev, region_plan, rx, sb_provider_nodes, sb_sub_outbounds,
     sub_orig_nodes, sub_removed
 )
 from .ruleutil import complete_rule
@@ -32,13 +32,14 @@ from .core_update import (
 )
 from .sysopt import SVC_OP, core_procs, delay_test, favicon, kill_core_procs, nft_ok, opt_apply, opt_status, rc_run, sh, speed_test, svc_restart
 from .notify import WD, WD_EVENTS_MAX, core_alive, core_proc_alive, set_manual_stop, tg_send, wd_counts
-from .latency import BG_FILE, RETEST, bg_fetch, bg_meta, bg_meta_save, bg_save, bg_type, fix_global, proxies_merged, retest_soon
+from .latency import BG_FILE, RETEST, bg_fetch, bg_meta, bg_meta_save, bg_save, bg_type, fix_global, proxies_merged, px_slim, retest_soon
 from .stats import arp_table
 from .unlock import unlock_test
 from .ruletest import clean_target, is_ip, rule_test
 from .logstream import core_stream, ticket_new, ticket_use
 from .adblock import AB_CACHE, AB_STATE, ab_check, ab_compose, ab_meta, adblock_update, fmt_size, list_id, parse_filter
 from .live import LIVE, memory_once
+from .nodeprobe import UI_BUDGET, fill_group, probe_nodes
 from .logclean import LOG_STATE, log_clean, log_sizes
 from .schedule import SCHED, TASK_NAMES, run_task, sched_event
 from .devices import device_map, read_leases, tun_runtime_error
@@ -974,8 +975,23 @@ class H(BaseHTTPRequestHandler):
                     refresh_regions()
                 return self.send(204 if not bad else 502, b"" if not bad else {"message": "；".join(bad)})
             if sub.startswith("/providers/proxies/") and sub.endswith("/healthcheck"):
-                code, raw = core("GET", f"/group/{quote(G_MANUAL)}/delay?url={quote(HC)}&timeout=5000", timeout=60)
-                return self.send(204 if code < 300 else code, b"")
+                # 只测这个订阅的节点，逐个测（全局限并发）：以前测整个「手动选择」组，sing-box 整组测速同时只测 10 个、
+                # 共用超时，失效节点多时这个订阅里的可用节点常常没轮到测，延迟一直不刷新
+                sname = unquote(sub[len("/providers/proxies/"):-len("/healthcheck")])
+                nodes = sb_provider_nodes(load()).get(sname)
+                if nodes is None:
+                    return self.send(404, {"message": "订阅不存在"})
+                res = probe_nodes(nodes, UI_BUDGET)
+                if nodes and all(v is None for v in res.values()):
+                    return self.send(502, {"message": "核心无应答，测速没有结果"})
+                return self.send(204, b"")
+            m_gd = re.match(r"^/group/([^/?]+)/delay$", sub) if m == "GET" else None
+            if m_gd:
+                # sing-box 整组测速同时只测 10 个、共用超时，只列测通的节点：没轮到测的可用节点缺席、延迟也不刷新。
+                # 缺席的逐个补测后再按同样格式返回（「全部测速」、组测速、概览测速都走这里）；mihomo 不经过这里，行为不变
+                code, raw = core("GET", sub + ("?" + q if q else ""), timeout=60)
+                code, raw = fill_group(unquote(m_gd.group(1)), code, raw, UI_BUDGET)
+                return self.send(code, raw or b"{}")
             # 与 mihomo 一致只认 POST /configs/geo：以前任何方法都执行，GET 不要求 X-Shunt 头，
             # 局域网里打开的恶意网页用一个 <img src=…/api/core/configs/geo> 就能让面板强制重下全部规则集并重载核心
             if (sub.startswith("/providers/rules/") and m == "PUT") or (sub == "/configs/geo" and m == "POST"):
@@ -1199,7 +1215,7 @@ class H(BaseHTTPRequestHandler):
         px = proxies_merged()
         if px is None:
             return self.send(502, {"message": "核心未运行或无法连接"})
-        return self.send(200, {"proxies": px, "retesting": RETEST["pending"]})
+        return self.send(200, {"proxies": px_slim(px), "retesting": RETEST["pending"]})
 
     @api_route("/api/coreswitch", "GET")
     def api_coreswitch_get(self, m, p, b, q):

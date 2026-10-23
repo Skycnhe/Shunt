@@ -10,6 +10,7 @@ from .corehttp import core, core_json
 from .sb_common import active_core
 from .sb_config import sb_fake_providers
 from .sysopt import proxy_opener
+from .nodeprobe import fill_group
 from .notify import WD, check_nodes, core_alive, load_notified, notify, watchdog_tick
 # 核心只在内存里保存最近几次测速记录：重载配置、重启、切换内核后全部清空，订阅节点的记录又分散在
 # /proxies 与 /providers/proxies 两处，前端轮询时就会「一会有一会没有」。面板把每个节点最近一次的
@@ -19,6 +20,7 @@ BG_FILE = os.path.join(PANEL_DIR, "bg.img")  # 外观：自定义背景图（所
 BG_MAX = 8 * 2**20
 DELAYS = {"data": None, "saved": 0, "dirty": False}
 RETEST = {"pending": False, "last": 0}
+RETEST_BUDGET = 90  # 重载后补测（sing-box 逐个补测缺席节点）的时间上限
 
 
 def _hist_last(p):
@@ -93,7 +95,9 @@ def retest_soon(wait=6):
                     break
             fix_global()
             if core_json("/proxies/" + quote(G_MANUAL), timeout=5):
-                core("GET", f"/group/{quote(G_MANUAL)}/delay?url={quote(HC)}&timeout=5000", timeout=60)
+                code, raw = core("GET", f"/group/{quote(G_MANUAL)}/delay?url={quote(HC)}&timeout=5000", timeout=60)
+                if active_core() == "singbox":  # sing-box 整组测速只测到一部分节点：缺席的逐个补测（全局限并发）
+                    fill_group(G_MANUAL, code, raw, RETEST_BUDGET)
             RETEST["last"] = time.time()
             proxies_merged()
         except Exception as e:
@@ -212,7 +216,7 @@ def proxies_merged():
         return None
     px = dict(a.get("proxies") or {})
     try:
-        pj = prov_json()
+        pj = prov_json(px)
         prov, prov_ok = pj.get("providers") or {}, bool(pj)  # 核心没应答时 prov_json() 返回 {}
     except Exception:
         prov, prov_ok = {}, False
@@ -231,11 +235,30 @@ def proxies_merged():
     return px
 
 
-def prov_json():
-    """订阅节点（mihomo /providers/proxies 格式）；sing-box 由面板按缓存拼出同样的结构"""
+def prov_json(px=None):
+    """订阅节点（mihomo /providers/proxies 格式）；sing-box 由面板按缓存拼出同样的结构。
+    px：调用方刚取到的 /proxies（sing-box 拼结构时复用，不再为同一个请求向核心再要一次几百 KB 的 /proxies）"""
     if active_core() == "singbox":
-        return sb_fake_providers(load())
+        return sb_fake_providers(load(), px)
     return core_json("/providers/proxies") or {}
+
+
+def px_slim(px):
+    """/api/px 应答瘦身：每个节点 / 策略组的 history 与各测速地址的 extra.history 只留最后一条（前端只用最后一条）。
+    mihomo 每个地址保留最近 10 条记录，500 个节点、2 个测速地址时应答约 1.2 MB（压缩后 34 KB，压缩本身在路由器上也要几十毫秒）；
+    瘦身后约 1/5。原地修改：px 是本次请求新解析出来的"""
+    for p in px.values():
+        if not isinstance(p, dict):
+            continue
+        h = p.get("history")
+        if isinstance(h, list) and len(h) > 1:
+            p["history"] = h[-1:]
+        ex = p.get("extra")
+        if isinstance(ex, dict):
+            for k, v in list(ex.items()):
+                if isinstance(v, dict) and isinstance(v.get("history"), list) and len(v["history"]) > 1:
+                    ex[k] = dict(v, history=v["history"][-1:])
+    return px
 
 
 def check_subs():

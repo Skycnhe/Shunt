@@ -10,7 +10,7 @@ from .mihomo import BUILTIN_GEO, build_config, build_rule_providers, dns_cfg, po
 from .corehttp import core_json
 from .sb_common import CORE_PID, SB_BIN, SB_CONF, SB_DIR, SB_RULE_DIR, SB_STATE, active_core
 from .sb_yaml import yaml_lite
-from .groups import sb_provider_nodes, sb_sub_cache, sb_sub_outbounds
+from .groups import sb_provider_nodes, sb_sub_cache, sb_sub_meta, sb_sub_outbounds
 from .sb_nodes import sb_outbound
 from .sb_rules import SBRules, geo_srs_entry
 from .ruleutil import _mh_domain
@@ -680,13 +680,16 @@ def iso_utc(t):
     return "%04d-%02d-%02dT%02d:%02d:%02dZ" % g[:6]
 
 
-def sb_fake_providers(d):
-    """sing-box 没有 proxy-provider：按 mihomo /providers/proxies 的格式拼出订阅节点及其延迟，前端无需区分内核"""
-    px = (core_json("/proxies", timeout=5) or {}).get("proxies") or {}
+def sb_fake_providers(d, px=None):
+    """sing-box 没有 proxy-provider：按 mihomo /providers/proxies 的格式拼出订阅节点及其延迟，前端无需区分内核。
+    px：调用方已经取到的 /proxies 的 proxies 部分（/api/px 传进来，省掉一次向核心要整份 /proxies）"""
+    if px is None:
+        px = (core_json("/proxies", timeout=5) or {}).get("proxies") or {}
     out = {}
+    pn = sb_provider_nodes(d)  # 只算一次：以前每个订阅都重新算一遍全部订阅的节点名单（N 个订阅读 N² 次订阅缓存）
     for s in d["subs"]:
-        c = sb_sub_cache(s["name"])
-        names = sb_provider_nodes(d).get(s["name"], [])
+        c = sb_sub_meta(s["name"])
+        names = pn.get(s["name"], [])
         upd = c.get("updated")
         out[s["name"]] = {"name": s["name"], "type": "Proxy", "vehicleType": "HTTP",
                           "updatedAt": iso_utc(upd) if upd else "",

@@ -1,5 +1,5 @@
 // 每秒：/api/live（速率、累计、内存）；概览 / 连接页额外拉取连接列表
-// 页面不可见时全部暂停；连续失败按 2、4、8…最多 30 秒退避；连接页每秒拉完整连接列表（暂停时不拉），概览每 3 秒只拉连接数 / 设备数
+// 页面不可见时全部暂停；连续失败按 2、4、8…最多 30 秒退避；连接页每 2 秒拉完整连接列表（暂停时不拉），概览每 3 秒只拉连接数 / 设备数
 let _cn=0,_busy=false,_fail=0,_skip=0;
 async function tick(){
   if(document.hidden||_busy)return;if(_skip>0){_skip--;return}_busy=true;
@@ -8,7 +8,9 @@ async function tickOnce(){
   try{LIVE=await api('/api/live');renderHdr(LIVE);pushHist(LIVE.up||0,LIVE.down||0);_fail=0}
   catch(e){['#h-up','#h-down','#h-mem'].forEach(k=>$(k).textContent='-');_fail++;_skip=Math.min(30,2**_fail);return}
   _cn++;
-  if(TAB==='连接'&&!$('#c-pause').checked){
+  // 连接页每 2 秒拉一次：后端 /connections 快照本来就是 2 秒共享（1 秒拉一次有一半拿到同一份，速率一会 0 一会翻倍），
+  // 表格也是 2 秒重绘一次；减半后路由器上省掉一半的连接列表整理 + JSON 序列化 + gzip
+  if(TAB==='连接'&&!$('#c-pause').checked&&(_cn%2===0||!CONNS.length)){
     try{const c=await api('/api/conns');CONNS=c.connections||[];showConnStat(CONNS.length,new Set(CONNS.map(x=>x.metadata?.sourceIP).filter(Boolean)).size);
       renderConns(CONNS)}catch(e){$('#s-conn').textContent='-'}}
   else if(TAB==='概览'&&_cn%3===0){ // 概览只要两个数字：走轻量的 /api/conns/stats，不再拉完整连接列表

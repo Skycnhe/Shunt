@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "8.4.9"
+PANEL_VERSION = "8.4.10"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -335,7 +335,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "8.4.9"
+PANEL_VERSION = "8.4.10"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -1167,7 +1167,7 @@ def adblock_providers(d):
     return prov, rules
 '''
 _SRC['shunt.groups'] = '''"""策略组"""
-import os, re, time
+import json, os, re, time
 
 from .errlog import log_err
 from .base import GROUPS_DEFAULT, GROUP_TYPES, G_OTHER, PANEL_DIR, PRIMARY_REGIONS, REGIONS
@@ -1198,9 +1198,48 @@ def sb_sub_cache(name):
     return read_json(sub_cache_path(name), {}) or {}
 
 
+def _file_sig(path):
+    try:
+        st = os.stat(path)
+        return st.st_mtime_ns, st.st_size, st.st_ino
+    except OSError:
+        return None
+
+
+_SUB_META = {}   # {订阅名: (文件签名, {"updated", "info"})}
+_PN_CACHE = {}   # {"v": (键, {订阅名: [节点名]})}
+
+
+def sb_sub_meta(name):
+    """订阅缓存里的更新时间与流量信息（按文件修改时间缓存）：sing-box 下每次 /api/px 都要，不必每次解析整份节点缓存"""
+    path = sub_cache_path(name)
+    sig = _file_sig(path)
+    c = _SUB_META.get(name)
+    if c and sig is not None and c[0] == sig:
+        return c[1]
+    j = sb_sub_cache(name)
+    meta = {"updated": j.get("updated"), "info": j.get("info") or {}}
+    if sig is not None:
+        _SUB_META[name] = (sig, meta)
+    return meta
+
+
 def sb_provider_nodes(d):
-    """{订阅名: [节点名]}，名称已按全局去重（与生成的 sing-box 配置一致）"""
-    return {k: [n for n, _ in v] for k, v in sb_sub_outbounds(d).items()}
+    """{订阅名: [节点名]}，名称已按全局去重（与生成的 sing-box 配置一致）。
+    结果按「各订阅缓存文件签名 + 订阅名 / 已删节点 + 本地节点名 + 保留名」缓存：sing-box 下每次 /api/px、/api/subs/nodes
+    都要算一遍，以前每次都把全部订阅缓存（常有几百 KB～数 MB）重新读取解析"""
+    try:
+        key = json.dumps([[s["name"], sorted(sub_removed(s)), _file_sig(sub_cache_path(s["name"]))] for s in d["subs"]]
+                         + [sorted(n["proxy"]["name"] for n in d.get("nodes", [])), sorted(reserved_names(d))], ensure_ascii=False, default=str)
+    except Exception:
+        key = None
+    c = _PN_CACHE.get("v")
+    if key is not None and c and c[0] == key:
+        return {k: list(v) for k, v in c[1].items()}
+    out = {k: [n for n, _ in v] for k, v in sb_sub_outbounds(d).items()}
+    if key is not None:
+        _PN_CACHE["v"] = (key, out)
+    return {k: list(v) for k, v in out.items()}
 
 
 def sb_sub_outbounds(d):
@@ -2546,17 +2585,28 @@ sing-box（实测 1.14.3）的 /group/{组}/delay 同时只测 10 个节点、�
 所以 sing-box 下「组结果里缺席」不等于「测速失败」，要逐个节点再测一次才能下结论。mihomo 的整组测速会测完全部节点，
 缺席就是失败（全部失败回 504），不需要补测。
 
-notify.check_nodes（全部超时告警前复核）、health.run_check（节点健康检查）、schedule 的定时测速共用这里的逻辑。
+notify.check_nodes（全部超时告警前复核）、health.run_check（节点健康检查）、schedule 的定时测速、retest_soon（重载后补测）、
+前端经 /api/core/group/…/delay 发起的整组测速（「全部测速」、组测速、概览测速）、订阅 healthcheck 共用这里的逻辑。
+
+并发控制：所有调用方共用一个信号量（同时最多 PROBE_WORKERS 个单节点测速），同一节点同时只测一次（后到的等先到的结果）。
+以前每个调用方各开 32 个线程：前端「全部测速」同时测 GLOBAL 与手动选择两个组、再赶上重载后补测，路由器上会叠到上百个并发测速。
 """
 import json
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout, as_completed
 from urllib.parse import quote
 
-from .base import HC, mass_begin, mass_end
-from .corehttp import core
+from .base import BUILTIN_POLICIES, HC, mass_begin, mass_end
+from .corehttp import core, core_json
 
-PROBE_WORKERS = 32   # 逐个节点测速的并发数
+PROBE_WORKERS = 16   # 逐个节点测速的全局并发上限（所有调用方合计）
 PROBE_BUDGET = 90    # 默认最多用多少秒（期间按「全节点测速中」登记，看门狗暂停判定）；必须小于 base.MASS_MAX_AGE
+UI_BUDGET = 60       # 前端发起的整组测速 / 订阅 healthcheck 的补测上限（加上整组测速本身最多约 2 分钟）
+_SEM = threading.BoundedSemaphore(PROBE_WORKERS)
+_INFLIGHT = {}       # {节点: [Event, 结果]}：正在测的节点，后到的调用方等同一个结果
+_INFLIGHT_LOCK = threading.Lock()
+NON_NODE_TYPES = {"Direct", "Reject", "RejectDrop", "Pass", "Compatible", "Dns", "Block"}
 
 
 def node_delay(name):
@@ -2580,6 +2630,31 @@ def node_alive(name):
     return None if v is None else v > 0
 
 
+def _probe_shared(name, deadline):
+    """受全局信号量限制的单节点测速；同一节点正在被别的调用方测时直接等它的结果。到 deadline 还没轮到 / 没测完返回 None"""
+    with _INFLIGHT_LOCK:
+        slot = _INFLIGHT.get(name)
+        owner = slot is None
+        if owner:
+            slot = _INFLIGHT[name] = [threading.Event(), None]
+    if not owner:
+        slot[0].wait(max(0.0, deadline - time.monotonic()))
+        return slot[1]
+    try:
+        left = deadline - time.monotonic()
+        if left <= 0 or not _SEM.acquire(timeout=left):
+            return None
+        try:
+            slot[1] = node_delay(name)
+        finally:
+            _SEM.release()
+        return slot[1]
+    finally:
+        with _INFLIGHT_LOCK:
+            _INFLIGHT.pop(name, None)
+        slot[0].set()
+
+
 def probe_nodes(names, budget=PROBE_BUDGET, stop=None, progress=None):
     """并发逐个测速，返回 {节点: 延迟 | 0 | None}；预算内没测完的节点记 None（没有结论）。
     stop(节点, 结果) 返回真时提前结束（其余节点记 None）；progress(已完成数) 每测完一个调用一次"""
@@ -2589,8 +2664,9 @@ def probe_nodes(names, budget=PROBE_BUDGET, stop=None, progress=None):
         return out
     tok = mass_begin()  # 测速期间核心负载高，看门狗暂停判定
     ex = ThreadPoolExecutor(min(PROBE_WORKERS, len(names)))
+    deadline = time.monotonic() + budget
     try:
-        futs = {ex.submit(node_delay, n): n for n in names}
+        futs = {ex.submit(_probe_shared, n, deadline): n for n in names}
         done = 0
         try:
             for f in as_completed(futs, timeout=budget):
@@ -2637,6 +2713,42 @@ def fill_absent(results, budget=PROBE_BUDGET, progress=None):
         else:
             out[n] = v
     return out
+
+
+def group_nodes(group):
+    """组的直接成员里的节点（不含策略组、DIRECT / REJECT 等内置出站）；核心没应答或组不存在返回 None"""
+    px = (core_json("/proxies", timeout=8) or {}).get("proxies")
+    if not isinstance(px, dict) or not isinstance(px.get(group), dict):
+        return None
+    out = []
+    for m in px[group].get("all") or []:
+        p = px.get(m)
+        if not isinstance(m, str) or m in BUILTIN_POLICIES or not isinstance(p, dict):
+            continue
+        if p.get("all") is not None or p.get("type") in NON_NODE_TYPES:
+            continue
+        out.append(m)
+    return out
+
+
+def fill_group(group, code, raw, budget=UI_BUDGET):
+    """sing-box 整组测速（/group/{组}/delay）的应答 → 缺席的节点逐个补测后，按同样格式（只列测通的）返回 (状态码, 应答)。
+    整组测速本身失败（非 200）、组成员取不到时原样返回；补测后仍全部不通时与原来一样回 200 {}"""
+    if code != 200:
+        return code, raw
+    try:
+        data = json.loads(raw or b"{}")
+    except Exception:
+        return code, raw
+    if not isinstance(data, dict):
+        return code, raw
+    nodes = group_nodes(group)
+    if not nodes:
+        return code, raw
+    res = fill_absent({n: (data.get(n) if isinstance(data.get(n), int) and not isinstance(data.get(n), bool) else 0) for n in nodes}, budget)
+    out = {k: v for k, v in data.items() if k not in res}  # 组成员里的策略组等：保留核心原来的结果
+    out.update({k: v for k, v in res.items() if v and v > 0})
+    return 200, json.dumps(out, ensure_ascii=False).encode()
 '''
 _SRC['shunt.sb_common'] = '''"""sing-box 内核"""
 import os
@@ -3720,7 +3832,7 @@ from .mihomo import BUILTIN_GEO, build_config, build_rule_providers, dns_cfg, po
 from .corehttp import core_json
 from .sb_common import CORE_PID, SB_BIN, SB_CONF, SB_DIR, SB_RULE_DIR, SB_STATE, active_core
 from .sb_yaml import yaml_lite
-from .groups import sb_provider_nodes, sb_sub_cache, sb_sub_outbounds
+from .groups import sb_provider_nodes, sb_sub_cache, sb_sub_meta, sb_sub_outbounds
 from .sb_nodes import sb_outbound
 from .sb_rules import SBRules, geo_srs_entry
 from .ruleutil import _mh_domain
@@ -4390,13 +4502,16 @@ def iso_utc(t):
     return "%04d-%02d-%02dT%02d:%02d:%02dZ" % g[:6]
 
 
-def sb_fake_providers(d):
-    """sing-box 没有 proxy-provider：按 mihomo /providers/proxies 的格式拼出订阅节点及其延迟，前端无需区分内核"""
-    px = (core_json("/proxies", timeout=5) or {}).get("proxies") or {}
+def sb_fake_providers(d, px=None):
+    """sing-box 没有 proxy-provider：按 mihomo /providers/proxies 的格式拼出订阅节点及其延迟，前端无需区分内核。
+    px：调用方已经取到的 /proxies 的 proxies 部分（/api/px 传进来，省掉一次向核心要整份 /proxies）"""
+    if px is None:
+        px = (core_json("/proxies", timeout=5) or {}).get("proxies") or {}
     out = {}
+    pn = sb_provider_nodes(d)  # 只算一次：以前每个订阅都重新算一遍全部订阅的节点名单（N 个订阅读 N² 次订阅缓存）
     for s in d["subs"]:
-        c = sb_sub_cache(s["name"])
-        names = sb_provider_nodes(d).get(s["name"], [])
+        c = sb_sub_meta(s["name"])
+        names = pn.get(s["name"], [])
         upd = c.get("updated")
         out[s["name"]] = {"name": s["name"], "type": "Proxy", "vehicleType": "HTTP",
                           "updatedAt": iso_utc(upd) if upd else "",
@@ -6779,6 +6894,7 @@ from .corehttp import core, core_json
 from .sb_common import active_core
 from .sb_config import sb_fake_providers
 from .sysopt import proxy_opener
+from .nodeprobe import fill_group
 from .notify import WD, check_nodes, core_alive, load_notified, notify, watchdog_tick
 # 核心只在内存里保存最近几次测速记录：重载配置、重启、切换内核后全部清空，订阅节点的记录又分散在
 # /proxies 与 /providers/proxies 两处，前端轮询时就会「一会有一会没有」。面板把每个节点最近一次的
@@ -6788,6 +6904,7 @@ BG_FILE = os.path.join(PANEL_DIR, "bg.img")  # 外观：自定义背景图（所
 BG_MAX = 8 * 2**20
 DELAYS = {"data": None, "saved": 0, "dirty": False}
 RETEST = {"pending": False, "last": 0}
+RETEST_BUDGET = 90  # 重载后补测（sing-box 逐个补测缺席节点）的时间上限
 
 
 def _hist_last(p):
@@ -6862,7 +6979,9 @@ def retest_soon(wait=6):
                     break
             fix_global()
             if core_json("/proxies/" + quote(G_MANUAL), timeout=5):
-                core("GET", f"/group/{quote(G_MANUAL)}/delay?url={quote(HC)}&timeout=5000", timeout=60)
+                code, raw = core("GET", f"/group/{quote(G_MANUAL)}/delay?url={quote(HC)}&timeout=5000", timeout=60)
+                if active_core() == "singbox":  # sing-box 整组测速只测到一部分节点：缺席的逐个补测（全局限并发）
+                    fill_group(G_MANUAL, code, raw, RETEST_BUDGET)
             RETEST["last"] = time.time()
             proxies_merged()
         except Exception as e:
@@ -6981,7 +7100,7 @@ def proxies_merged():
         return None
     px = dict(a.get("proxies") or {})
     try:
-        pj = prov_json()
+        pj = prov_json(px)
         prov, prov_ok = pj.get("providers") or {}, bool(pj)  # 核心没应答时 prov_json() 返回 {}
     except Exception:
         prov, prov_ok = {}, False
@@ -7000,11 +7119,30 @@ def proxies_merged():
     return px
 
 
-def prov_json():
-    """订阅节点（mihomo /providers/proxies 格式）；sing-box 由面板按缓存拼出同样的结构"""
+def prov_json(px=None):
+    """订阅节点（mihomo /providers/proxies 格式）；sing-box 由面板按缓存拼出同样的结构。
+    px：调用方刚取到的 /proxies（sing-box 拼结构时复用，不再为同一个请求向核心再要一次几百 KB 的 /proxies）"""
     if active_core() == "singbox":
-        return sb_fake_providers(load())
+        return sb_fake_providers(load(), px)
     return core_json("/providers/proxies") or {}
+
+
+def px_slim(px):
+    """/api/px 应答瘦身：每个节点 / 策略组的 history 与各测速地址的 extra.history 只留最后一条（前端只用最后一条）。
+    mihomo 每个地址保留最近 10 条记录，500 个节点、2 个测速地址时应答约 1.2 MB（压缩后 34 KB，压缩本身在路由器上也要几十毫秒）；
+    瘦身后约 1/5。原地修改：px 是本次请求新解析出来的"""
+    for p in px.values():
+        if not isinstance(p, dict):
+            continue
+        h = p.get("history")
+        if isinstance(h, list) and len(h) > 1:
+            p["history"] = h[-1:]
+        ex = p.get("extra")
+        if isinstance(ex, dict):
+            for k, v in list(ex.items()):
+                if isinstance(v, dict) and isinstance(v.get("history"), list) and len(v["history"]) > 1:
+                    ex[k] = dict(v, history=v["history"][-1:])
+    return px
 
 
 def check_subs():
@@ -9555,14 +9693,14 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 from .errlog import log_err
 from . import adblock, stats
 from .base import (
-    AB_DIR, AB_PRESETS, BUILTIN_POLICIES, CERT, DEFAULT_EXCLUDE, DNS_DEFAULT, DNS_LISTS, GROUP_TYPES, G_MANUAL, G_SEL, HC, KEY,
+    AB_DIR, AB_PRESETS, BUILTIN_POLICIES, CERT, DEFAULT_EXCLUDE, DNS_DEFAULT, DNS_LISTS, GROUP_TYPES, G_SEL, KEY,
     LB_STRATEGIES, LOCK, MAX_BODY, MIHOMO_BIN, MIHOMO_LOG, PANEL_VERSION, PRIMARY_REGIONS, PROXY_MODES, REGIONS, SMART_BIN, SVC, TPROXY_SH,
     TUN_STACKS, UPD_STATE, CONF_DIR, upd_begin, upd_busy_msg, wd_hold
 )
 from .data import HISTORY_FILE, HISTORY_SKIP, auto_name, config_version, lb_names, load, migrate_names, normalize, read_json, region_lb_set, safe, save, update
 from .links import add_links, q1, reserved_names
 from .groups import (
-    NODE_LIST_MAX, all_node_names, clean_custom_group, gcfg, node_name_ok, provider_nodes, provider_rev, region_plan, rx, sb_sub_outbounds,
+    NODE_LIST_MAX, all_node_names, clean_custom_group, gcfg, node_name_ok, provider_nodes, provider_rev, region_plan, rx, sb_provider_nodes, sb_sub_outbounds,
     sub_orig_nodes, sub_removed
 )
 from .ruleutil import complete_rule
@@ -9580,13 +9718,14 @@ from .core_update import (
 )
 from .sysopt import SVC_OP, core_procs, delay_test, favicon, kill_core_procs, nft_ok, opt_apply, opt_status, rc_run, sh, speed_test, svc_restart
 from .notify import WD, WD_EVENTS_MAX, core_alive, core_proc_alive, set_manual_stop, tg_send, wd_counts
-from .latency import BG_FILE, RETEST, bg_fetch, bg_meta, bg_meta_save, bg_save, bg_type, fix_global, proxies_merged, retest_soon
+from .latency import BG_FILE, RETEST, bg_fetch, bg_meta, bg_meta_save, bg_save, bg_type, fix_global, proxies_merged, px_slim, retest_soon
 from .stats import arp_table
 from .unlock import unlock_test
 from .ruletest import clean_target, is_ip, rule_test
 from .logstream import core_stream, ticket_new, ticket_use
 from .adblock import AB_CACHE, AB_STATE, ab_check, ab_compose, ab_meta, adblock_update, fmt_size, list_id, parse_filter
 from .live import LIVE, memory_once
+from .nodeprobe import UI_BUDGET, fill_group, probe_nodes
 from .logclean import LOG_STATE, log_clean, log_sizes
 from .schedule import SCHED, TASK_NAMES, run_task, sched_event
 from .devices import device_map, read_leases, tun_runtime_error
@@ -10522,8 +10661,23 @@ class H(BaseHTTPRequestHandler):
                     refresh_regions()
                 return self.send(204 if not bad else 502, b"" if not bad else {"message": "；".join(bad)})
             if sub.startswith("/providers/proxies/") and sub.endswith("/healthcheck"):
-                code, raw = core("GET", f"/group/{quote(G_MANUAL)}/delay?url={quote(HC)}&timeout=5000", timeout=60)
-                return self.send(204 if code < 300 else code, b"")
+                # 只测这个订阅的节点，逐个测（全局限并发）：以前测整个「手动选择」组，sing-box 整组测速同时只测 10 个、
+                # 共用超时，失效节点多时这个订阅里的可用节点常常没轮到测，延迟一直不刷新
+                sname = unquote(sub[len("/providers/proxies/"):-len("/healthcheck")])
+                nodes = sb_provider_nodes(load()).get(sname)
+                if nodes is None:
+                    return self.send(404, {"message": "订阅不存在"})
+                res = probe_nodes(nodes, UI_BUDGET)
+                if nodes and all(v is None for v in res.values()):
+                    return self.send(502, {"message": "核心无应答，测速没有结果"})
+                return self.send(204, b"")
+            m_gd = re.match(r"^/group/([^/?]+)/delay$", sub) if m == "GET" else None
+            if m_gd:
+                # sing-box 整组测速同时只测 10 个、共用超时，只列测通的节点：没轮到测的可用节点缺席、延迟也不刷新。
+                # 缺席的逐个补测后再按同样格式返回（「全部测速」、组测速、概览测速都走这里）；mihomo 不经过这里，行为不变
+                code, raw = core("GET", sub + ("?" + q if q else ""), timeout=60)
+                code, raw = fill_group(unquote(m_gd.group(1)), code, raw, UI_BUDGET)
+                return self.send(code, raw or b"{}")
             # 与 mihomo 一致只认 POST /configs/geo：以前任何方法都执行，GET 不要求 X-Shunt 头，
             # 局域网里打开的恶意网页用一个 <img src=…/api/core/configs/geo> 就能让面板强制重下全部规则集并重载核心
             if (sub.startswith("/providers/rules/") and m == "PUT") or (sub == "/configs/geo" and m == "POST"):
@@ -10747,7 +10901,7 @@ class H(BaseHTTPRequestHandler):
         px = proxies_merged()
         if px is None:
             return self.send(502, {"message": "核心未运行或无法连接"})
-        return self.send(200, {"proxies": px, "retesting": RETEST["pending"]})
+        return self.send(200, {"proxies": px_slim(px), "retesting": RETEST["pending"]})
 
     @api_route("/api/coreswitch", "GET")
     def api_coreswitch_get(self, m, p, b, q):
