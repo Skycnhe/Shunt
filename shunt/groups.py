@@ -1,5 +1,5 @@
 """策略组"""
-import os, re, time
+import json, os, re, time
 
 from .errlog import log_err
 from .base import GROUPS_DEFAULT, GROUP_TYPES, G_OTHER, PANEL_DIR, PRIMARY_REGIONS, REGIONS
@@ -30,9 +30,48 @@ def sb_sub_cache(name):
     return read_json(sub_cache_path(name), {}) or {}
 
 
+def _file_sig(path):
+    try:
+        st = os.stat(path)
+        return st.st_mtime_ns, st.st_size, st.st_ino
+    except OSError:
+        return None
+
+
+_SUB_META = {}   # {订阅名: (文件签名, {"updated", "info"})}
+_PN_CACHE = {}   # {"v": (键, {订阅名: [节点名]})}
+
+
+def sb_sub_meta(name):
+    """订阅缓存里的更新时间与流量信息（按文件修改时间缓存）：sing-box 下每次 /api/px 都要，不必每次解析整份节点缓存"""
+    path = sub_cache_path(name)
+    sig = _file_sig(path)
+    c = _SUB_META.get(name)
+    if c and sig is not None and c[0] == sig:
+        return c[1]
+    j = sb_sub_cache(name)
+    meta = {"updated": j.get("updated"), "info": j.get("info") or {}}
+    if sig is not None:
+        _SUB_META[name] = (sig, meta)
+    return meta
+
+
 def sb_provider_nodes(d):
-    """{订阅名: [节点名]}，名称已按全局去重（与生成的 sing-box 配置一致）"""
-    return {k: [n for n, _ in v] for k, v in sb_sub_outbounds(d).items()}
+    """{订阅名: [节点名]}，名称已按全局去重（与生成的 sing-box 配置一致）。
+    结果按「各订阅缓存文件签名 + 订阅名 / 已删节点 + 本地节点名 + 保留名」缓存：sing-box 下每次 /api/px、/api/subs/nodes
+    都要算一遍，以前每次都把全部订阅缓存（常有几百 KB～数 MB）重新读取解析"""
+    try:
+        key = json.dumps([[s["name"], sorted(sub_removed(s)), _file_sig(sub_cache_path(s["name"]))] for s in d["subs"]]
+                         + [sorted(n["proxy"]["name"] for n in d.get("nodes", [])), sorted(reserved_names(d))], ensure_ascii=False, default=str)
+    except Exception:
+        key = None
+    c = _PN_CACHE.get("v")
+    if key is not None and c and c[0] == key:
+        return {k: list(v) for k, v in c[1].items()}
+    out = {k: [n for n, _ in v] for k, v in sb_sub_outbounds(d).items()}
+    if key is not None:
+        _PN_CACHE["v"] = (key, out)
+    return {k: list(v) for k, v in out.items()}
 
 
 def sb_sub_outbounds(d):

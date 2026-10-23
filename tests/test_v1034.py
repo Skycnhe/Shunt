@@ -156,8 +156,9 @@ class ProbeTest(unittest.TestCase):
                 with open(os.path.join(ROOT, "shunt", fn), encoding="utf-8") as f:
                     src[fn] = f.read()
         users = sorted(fn for fn, s in src.items() if re.search(r'f"/group/\{quote\(G_MANUAL\)\}/delay', s))
-        self.assertEqual(users, ["health.py", "latency.py", "notify.py", "schedule.py", "webapi.py"])
-        for fn in ("health.py", "notify.py", "schedule.py"):
+        # v10.3.6：webapi 的订阅 healthcheck 改为只测该订阅的节点（probe_nodes），不再测整个手动选择组
+        self.assertEqual(users, ["health.py", "latency.py", "notify.py", "schedule.py"])
+        for fn in ("health.py", "latency.py", "notify.py", "schedule.py", "webapi.py"):
             self.assertIn("from .nodeprobe import", src[fn])
 
 

@@ -1108,7 +1108,7 @@ async function loadIpInfo(){let j;try{j=await api('/api/ipinfo')}catch(e){IP_FAI
   $('#ipmask-btn').textContent=IPMASK?'显示 IP':'隐藏 IP'}
 function toggleIpMask(){IPMASK=!IPMASK;localStorage.setItem('ipmask',IPMASK?'1':'0');loadIpInfo()}
 // 每秒：/api/live（速率、累计、内存）；概览 / 连接页额外拉取连接列表
-// 页面不可见时全部暂停；连续失败按 2、4、8…最多 30 秒退避；连接页每秒拉完整连接列表（暂停时不拉），概览每 3 秒只拉连接数 / 设备数
+// 页面不可见时全部暂停；连续失败按 2、4、8…最多 30 秒退避；连接页每 2 秒拉完整连接列表（暂停时不拉），概览每 3 秒只拉连接数 / 设备数
 let _cn=0,_busy=false,_fail=0,_skip=0;
 async function tick(){
   if(document.hidden||_busy)return;if(_skip>0){_skip--;return}_busy=true;
@@ -1117,7 +1117,9 @@ async function tickOnce(){
   try{LIVE=await api('/api/live');renderHdr(LIVE);pushHist(LIVE.up||0,LIVE.down||0);_fail=0}
   catch(e){['#h-up','#h-down','#h-mem'].forEach(k=>$(k).textContent='-');_fail++;_skip=Math.min(30,2**_fail);return}
   _cn++;
-  if(TAB==='连接'&&!$('#c-pause').checked){
+  // 连接页每 2 秒拉一次：后端 /connections 快照本来就是 2 秒共享（1 秒拉一次有一半拿到同一份，速率一会 0 一会翻倍），
+  // 表格也是 2 秒重绘一次；减半后路由器上省掉一半的连接列表整理 + JSON 序列化 + gzip
+  if(TAB==='连接'&&!$('#c-pause').checked&&(_cn%2===0||!CONNS.length)){
     try{const c=await api('/api/conns');CONNS=c.connections||[];showConnStat(CONNS.length,new Set(CONNS.map(x=>x.metadata?.sourceIP).filter(Boolean)).size);
       renderConns(CONNS)}catch(e){$('#s-conn').textContent='-'}}
   else if(TAB==='概览'&&_cn%3===0){ // 概览只要两个数字：走轻量的 /api/conns/stats，不再拉完整连接列表
@@ -1501,7 +1503,7 @@ function renderConns(list){const f=$('#c-filter').value.toLowerCase();const now=
   const rates=new Map(),next=new Map(),dt=_prevConnT?Math.max(1,(now-_prevConnT)/1000):1;
   for(const c of list){const p=prevConn.get(c.id);rates.set(c.id,p?[Math.max(0,c.download-p.d)/dt,Math.max(0,c.upload-p.u)/dt]:[0,0]);next.set(c.id,{d:c.download,u:c.upload})}
   prevConn=next;_prevConnT=now;
-  if(now-_lastConnRender<2000)return;
+  if(now-_lastConnRender<1500)return;  // 每 2 秒拉一次，阈值留出计时抖动（2000 会因为早到几毫秒隔一次跳过，变成 4 秒一画）
   _lastConnRender=now;
   $('#conns').innerHTML=list.filter(c=>!f||(JSON.stringify(c)+dname(c.metadata?.sourceIP)).toLowerCase().includes(f)).slice(0,300).map(c=>{const m=c.metadata||{};
     const r=rates.get(c.id),ds=r[0],us=r[1];
