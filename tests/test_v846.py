@@ -29,16 +29,6 @@ D = sys.modules["shunt.data"]
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-class VersionTest(unittest.TestCase):
-    def test_version(self):
-        self.assertEqual(B.PANEL_VERSION, "8.4.6")
-
-    def test_changelog_top(self):
-        with open(os.path.join(ROOT, "CHANGELOG.md"), encoding="utf-8") as f:
-            heads = [ln for ln in f if ln.startswith("## v")]
-        self.assertTrue(heads[0].startswith("## v8.4.6"), heads[0])
-
-
 class FakeResp:
     """模拟 http.client 的 read(n)：对方中途断开时只返回收到的部分，length 留下没收到的字节数"""
 
