@@ -38,15 +38,6 @@ def read(*p):
         return f.read()
 
 
-class VersionTest(unittest.TestCase):
-    def test_version(self):
-        self.assertEqual(B.PANEL_VERSION, "10.3.6")
-
-    def test_changelog_top(self):
-        heads = [ln for ln in read("CHANGELOG.md").splitlines() if ln.startswith("## v")]
-        self.assertTrue(heads[0].startswith("## v10.3.6"), heads[0])
-
-
 GROUP = "🖐️ 手动选择"
 
 

@@ -3,7 +3,7 @@ import http.client, json, os, re, ssl, subprocess, threading, time, urllib.reque
 from collections import deque
 from urllib.parse import urlsplit
 
-from .base import CORE_SVC, MIHOMO_BIN, MIXED, PANEL_DIR, SMART_BIN, SVC, TESTS, UA, SafeRedirectHandler, dl_check, wd_hold
+from .base import CORE_PREP, CORE_SVC, MIHOMO_BIN, MIXED, PANEL_DIR, SMART_BIN, SVC, TESTS, UA, SafeRedirectHandler, dl_check, wd_hold
 from .data import load, update
 PROC_SYS = os.environ.get("PANEL_PROC_SYS", "/proc/sys")
 SYS_ROOT = os.environ.get("PANEL_SYS_ROOT", "/sys")
@@ -555,19 +555,44 @@ def rc_run(act, timeout=90):
     """rc-service <核心> start|stop|restart。OpenRC 卡在 starting / stopping 时先 zap 再重试一次；
     超时（124）时先 zap，避免 OpenRC 一直停在 starting / stopping，下次操作直接报 already stopping"""
     with SVC_OP:
+        prep = act in ("start", "restart") and _core_prep()
+        try:
+            return _rc_run(act, timeout)
+        finally:
+            if prep:  # init.d 的 start_post 用完已删；没走到那一步（stop 失败等）也不留给以后 SSH 里的 rc-service
+                try:
+                    os.remove(CORE_PREP)
+                except OSError:
+                    pass
+
+
+def _core_prep():
+    """见 cli.core_prep：失败只记日志，init.d 照旧 --gen"""
+    if not CORE_PREP:
+        return False
+    try:
+        from .cli import core_prep
+        return core_prep()
+    except Exception as e:
+        from .errlog import log_err
+        log_err("启动核心前生成配置", e)
+        return False
+
+
+def _rc_run(act, timeout):
+    code, out = _rc_once(f"{SVC} {act}", timeout)
+    if code != 0 and code != 124 and _RC_BUSY.search(out):
+        # zap 只清 OpenRC 的状态，不碰进程：先把核心进程结束掉，否则旧核心变成没人管的孤儿，
+        # 之后 stop 停不掉它、新核心又抢不到端口
+        kill_core_procs()
+        _rc_once(f"{SVC} zap", 15)
         code, out = _rc_once(f"{SVC} {act}", timeout)
-        if code != 0 and code != 124 and _RC_BUSY.search(out):
-            # zap 只清 OpenRC 的状态，不碰进程：先把核心进程结束掉，否则旧核心变成没人管的孤儿，
-            # 之后 stop 停不掉它、新核心又抢不到端口
+        out = "（服务状态卡住，已自动 zap 后重试）\n" + out
+    elif code == 124:
+        if act == "stop":
             kill_core_procs()
-            _rc_once(f"{SVC} zap", 15)
-            code, out = _rc_once(f"{SVC} {act}", timeout)
-            out = "（服务状态卡住，已自动 zap 后重试）\n" + out
-        elif code == 124:
-            if act == "stop":
-                kill_core_procs()
-            _rc_once(f"{SVC} zap", 15)
-        return code, out
+        _rc_once(f"{SVC} zap", 15)
+    return code, out
 
 
 def svc_restart(timeout=90, why="面板重启核心", cancel=None):

@@ -5,6 +5,7 @@ from .svcmigrate import svc_migrate
 from .errlog import log_err
 from . import adblock, stats
 from .base import CERT, KEY, PANEL_DIR, PORT, TPROXY_SH
+from . import base
 from .data import load, update
 from .mihomo import dns_cfg
 from .sb_common import active_core, write_core_file
@@ -47,6 +48,48 @@ def tp_env():
     return (f"B_IP='{','.join(ips)}'\nB_MAC='{','.join(macs)}'\nB_IP6='{','.join(ip6s)}'\n"
             f"LOCAL6='{','.join(local6)}'\nIPV6={1 if d.get('ipv6') else 0}\n"
             f"MODE={shlex.quote(str(d.get('proxy_mode') or ''))}\nDNS_ALL={1 if dns_cfg(d)['block_bypass'] else 0}")
+
+
+def write_prep(path=None):
+    """把 tp_env() 写到 CORE_PREP（0600、先写临时文件再改名），供 init.d / tproxy.sh 直接读。返回是否写成"""
+    path = path or base.CORE_PREP
+    if not path:
+        return False
+    tmp = f"{path}.tmp{os.getpid()}"
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(tp_env() + "\n")
+        os.replace(tmp, path)
+        return True
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False
+
+
+def core_prep():
+    """启动 / 重启核心前在面板进程里做 init.d start_pre 原来要起一个 Python 做的事：修正文件句柄设置、写内核选择、
+    按当前设置生成配置（与 --gen 同一个函数、同一份 data.json），再写 CORE_PREP。
+    以前 start_pre 跑 --gen、start_post 的 tproxy.sh 跑 --tpenv，每次都要重新编译导入整个面板（路由器上各约 0.3～1 秒）。
+    生成失败就不写 CORE_PREP：init.d 照旧跑 --gen（失败沿用上一次的配置），行为与以前一致。返回是否写成"""
+    path = base.CORE_PREP
+    if not path:
+        return False
+    try:
+        os.remove(path)  # 先删：本次生成失败时不能让 init.d 误用上一次的
+    except OSError:
+        pass
+    try:
+        opt_fix_ulimit()
+    except Exception as e:
+        log_err("文件句柄修正", e)
+    dd = load()
+    write_core_file(active_core(dd))
+    write_active_config(dd)
+    return write_prep(path)
 
 
 def default_tz():
@@ -100,6 +143,10 @@ def main():
         dd = load()
         write_core_file(active_core(dd))
         print(write_active_config(dd))
+        try:  # init.d 的 start_post 由 tproxy.sh 直接读，不必再起一个 Python 跑 --tpenv
+            write_prep()
+        except Exception as e:
+            print("写透明代理参数失败：", e, file=sys.stderr)
         sys.exit(0)
     if "--allow-public" in sys.argv:  # 允许 / 禁止从外网（非局域网地址）访问面板
         on = (sys.argv[sys.argv.index("--allow-public") + 1:] or ["on"])[0] in ("on", "1", "yes", "true")

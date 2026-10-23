@@ -80,10 +80,10 @@ def _svc_do(act):
             wd_hold(150, "手动停止")
             try:
                 code, out = rc_run("stop", timeout=90)
-                for _ in range(40):  # rc-service 的返回值不可靠，以 pid 为准，每 0.2 秒查一次，最多等 8 秒
+                for _ in range(80):  # rc-service 的返回值不可靠，以 pid 为准，每 0.1 秒查一次，最多等 8 秒
                     if not core_proc_alive():
                         break
-                    time.sleep(0.2)
+                    time.sleep(0.1)
                 # pid 文件之外还有核心进程（OpenRC 被 zap 过、旧服务名留下的、SSH 手动运行的）：rc-service 管不到，
                 # 以前这里直接报「已停止」，实际核心还占着端口在跑，顶栏一直显示运行中
                 stray = kill_core_procs() if not core_proc_alive() else 0
@@ -110,16 +110,16 @@ def _svc_do(act):
             wd_hold(60, "手动启动", reset=True)
     if code == 124:
         return False, f"核心{SVC_NAMES[act]}超时，请 SSH 检查 `{SVC} status` 和核心日志"
-    # 后台启动的服务 rc 总返回 0，要自己确认：控制接口一应答就算成功（通常 1 秒内）；
-    # 进程在但接口还没起来（加载大规则集）最多等 8 秒，期间进程退出立即判失败
-    for i in range(40):
+    # 后台启动的服务 rc 总返回 0，要自己确认：控制接口一应答就算成功（start_post 已等到端口就绪，通常第一次就成）；
+    # 进程在但接口还没起来（加载大规则集）最多等 8 秒，每 0.1 秒查一次，期间进程退出立即判失败
+    for i in range(80):
         if not core_proc_alive():
-            if i >= 3:  # 前 0.6 秒 pid 文件可能还没写好
+            if i >= 6:  # 前 0.6 秒 pid 文件可能还没写好
                 break
-        elif core_alive():
+        elif core_alive(timeout=2):
             retest_soon()
             return True, f"核心已{SVC_NAMES[act]}"
-        time.sleep(0.2)
+        time.sleep(0.1)
     else:
         if core_proc_alive():
             retest_soon()

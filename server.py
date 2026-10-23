@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "10.3.6"
+PANEL_VERSION = "10.3.7"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -198,6 +198,9 @@ SVC_NEW = os.path.isfile("/etc/init.d/shunt-core")
 CORE_SVC = "shunt-core" if SVC_NEW else "mihomo"
 PANEL_SVC = "shunt" if os.path.isfile("/etc/init.d/shunt") else "mihomo-panel"
 SVC = os.environ.get("PANEL_SVC", "rc-service " + CORE_SVC)  # 核心服务控制命令（测试环境可覆盖）
+# 启动 / 重启核心前面板（或 --gen）写下的透明代理参数（tp_env 输出）。init.d 的 start_pre 见到 2 分钟内的这个文件就跳过 --gen、
+# start_post 交给 tproxy.sh 直接读，一次启动少起两次 Python。只在正式部署目录启用（路径与 init.d 里写死的一致）
+CORE_PREP = os.environ.get("PANEL_CORE_PREP") or ("/run/shunt-core.prep" if BASE == "/opt/mihomo-panel" and os.path.isdir("/run") else "")
 LOG_FILES = [x for x in os.environ.get("PANEL_LOGS", "/var/log/mihomo.log,/var/log/mihomo-panel.log").split(",") if x]
 MIHOMO_LOG = LOG_FILES[0] if LOG_FILES else "/var/log/mihomo.log"
 AB_DIR = os.path.join(CONF_DIR, "adblock")
@@ -312,7 +315,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "10.3.6"
+PANEL_VERSION = "10.3.7"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -6029,7 +6032,7 @@ import http.client, json, os, re, ssl, subprocess, threading, time, urllib.reque
 from collections import deque
 from urllib.parse import urlsplit
 
-from .base import CORE_SVC, MIHOMO_BIN, MIXED, PANEL_DIR, SMART_BIN, SVC, TESTS, UA, SafeRedirectHandler, dl_check, wd_hold
+from .base import CORE_PREP, CORE_SVC, MIHOMO_BIN, MIXED, PANEL_DIR, SMART_BIN, SVC, TESTS, UA, SafeRedirectHandler, dl_check, wd_hold
 from .data import load, update
 PROC_SYS = os.environ.get("PANEL_PROC_SYS", "/proc/sys")
 SYS_ROOT = os.environ.get("PANEL_SYS_ROOT", "/sys")
@@ -6581,19 +6584,44 @@ def rc_run(act, timeout=90):
     """rc-service <核心> start|stop|restart。OpenRC 卡在 starting / stopping 时先 zap 再重试一次；
     超时（124）时先 zap，避免 OpenRC 一直停在 starting / stopping，下次操作直接报 already stopping"""
     with SVC_OP:
+        prep = act in ("start", "restart") and _core_prep()
+        try:
+            return _rc_run(act, timeout)
+        finally:
+            if prep:  # init.d 的 start_post 用完已删；没走到那一步（stop 失败等）也不留给以后 SSH 里的 rc-service
+                try:
+                    os.remove(CORE_PREP)
+                except OSError:
+                    pass
+
+
+def _core_prep():
+    """见 cli.core_prep：失败只记日志，init.d 照旧 --gen"""
+    if not CORE_PREP:
+        return False
+    try:
+        from .cli import core_prep
+        return core_prep()
+    except Exception as e:
+        from .errlog import log_err
+        log_err("启动核心前生成配置", e)
+        return False
+
+
+def _rc_run(act, timeout):
+    code, out = _rc_once(f"{SVC} {act}", timeout)
+    if code != 0 and code != 124 and _RC_BUSY.search(out):
+        # zap 只清 OpenRC 的状态，不碰进程：先把核心进程结束掉，否则旧核心变成没人管的孤儿，
+        # 之后 stop 停不掉它、新核心又抢不到端口
+        kill_core_procs()
+        _rc_once(f"{SVC} zap", 15)
         code, out = _rc_once(f"{SVC} {act}", timeout)
-        if code != 0 and code != 124 and _RC_BUSY.search(out):
-            # zap 只清 OpenRC 的状态，不碰进程：先把核心进程结束掉，否则旧核心变成没人管的孤儿，
-            # 之后 stop 停不掉它、新核心又抢不到端口
+        out = "（服务状态卡住，已自动 zap 后重试）\\n" + out
+    elif code == 124:
+        if act == "stop":
             kill_core_procs()
-            _rc_once(f"{SVC} zap", 15)
-            code, out = _rc_once(f"{SVC} {act}", timeout)
-            out = "（服务状态卡住，已自动 zap 后重试）\\n" + out
-        elif code == 124:
-            if act == "stop":
-                kill_core_procs()
-            _rc_once(f"{SVC} zap", 15)
-        return code, out
+        _rc_once(f"{SVC} zap", 15)
+    return code, out
 
 
 def svc_restart(timeout=90, why="面板重启核心", cancel=None):
@@ -6929,8 +6957,8 @@ def wd_event(msg, push=True, kind=""):
         notify(msg)
 
 
-def core_alive():
-    code, _ = core("GET", "/version", timeout=5)
+def core_alive(timeout=5):
+    code, _ = core("GET", "/version", timeout=timeout)
     return code == 200
 
 
@@ -10074,10 +10102,10 @@ def _svc_do(act):
             wd_hold(150, "手动停止")
             try:
                 code, out = rc_run("stop", timeout=90)
-                for _ in range(40):  # rc-service 的返回值不可靠，以 pid 为准，每 0.2 秒查一次，最多等 8 秒
+                for _ in range(80):  # rc-service 的返回值不可靠，以 pid 为准，每 0.1 秒查一次，最多等 8 秒
                     if not core_proc_alive():
                         break
-                    time.sleep(0.2)
+                    time.sleep(0.1)
                 # pid 文件之外还有核心进程（OpenRC 被 zap 过、旧服务名留下的、SSH 手动运行的）：rc-service 管不到，
                 # 以前这里直接报「已停止」，实际核心还占着端口在跑，顶栏一直显示运行中
                 stray = kill_core_procs() if not core_proc_alive() else 0
@@ -10104,16 +10132,16 @@ def _svc_do(act):
             wd_hold(60, "手动启动", reset=True)
     if code == 124:
         return False, f"核心{SVC_NAMES[act]}超时，请 SSH 检查 `{SVC} status` 和核心日志"
-    # 后台启动的服务 rc 总返回 0，要自己确认：控制接口一应答就算成功（通常 1 秒内）；
-    # 进程在但接口还没起来（加载大规则集）最多等 8 秒，期间进程退出立即判失败
-    for i in range(40):
+    # 后台启动的服务 rc 总返回 0，要自己确认：控制接口一应答就算成功（start_post 已等到端口就绪，通常第一次就成）；
+    # 进程在但接口还没起来（加载大规则集）最多等 8 秒，每 0.1 秒查一次，期间进程退出立即判失败
+    for i in range(80):
         if not core_proc_alive():
-            if i >= 3:  # 前 0.6 秒 pid 文件可能还没写好
+            if i >= 6:  # 前 0.6 秒 pid 文件可能还没写好
                 break
-        elif core_alive():
+        elif core_alive(timeout=2):
             retest_soon()
             return True, f"核心已{SVC_NAMES[act]}"
-        time.sleep(0.2)
+        time.sleep(0.1)
     else:
         if core_proc_alive():
             retest_soon()
@@ -11942,6 +11970,7 @@ from .svcmigrate import svc_migrate
 from .errlog import log_err
 from . import adblock, stats
 from .base import CERT, KEY, PANEL_DIR, PORT, TPROXY_SH
+from . import base
 from .data import load, update
 from .mihomo import dns_cfg
 from .sb_common import active_core, write_core_file
@@ -11984,6 +12013,48 @@ def tp_env():
     return (f"B_IP='{','.join(ips)}'\\nB_MAC='{','.join(macs)}'\\nB_IP6='{','.join(ip6s)}'\\n"
             f"LOCAL6='{','.join(local6)}'\\nIPV6={1 if d.get('ipv6') else 0}\\n"
             f"MODE={shlex.quote(str(d.get('proxy_mode') or ''))}\\nDNS_ALL={1 if dns_cfg(d)['block_bypass'] else 0}")
+
+
+def write_prep(path=None):
+    """把 tp_env() 写到 CORE_PREP（0600、先写临时文件再改名），供 init.d / tproxy.sh 直接读。返回是否写成"""
+    path = path or base.CORE_PREP
+    if not path:
+        return False
+    tmp = f"{path}.tmp{os.getpid()}"
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(tp_env() + "\\n")
+        os.replace(tmp, path)
+        return True
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False
+
+
+def core_prep():
+    """启动 / 重启核心前在面板进程里做 init.d start_pre 原来要起一个 Python 做的事：修正文件句柄设置、写内核选择、
+    按当前设置生成配置（与 --gen 同一个函数、同一份 data.json），再写 CORE_PREP。
+    以前 start_pre 跑 --gen、start_post 的 tproxy.sh 跑 --tpenv，每次都要重新编译导入整个面板（路由器上各约 0.3～1 秒）。
+    生成失败就不写 CORE_PREP：init.d 照旧跑 --gen（失败沿用上一次的配置），行为与以前一致。返回是否写成"""
+    path = base.CORE_PREP
+    if not path:
+        return False
+    try:
+        os.remove(path)  # 先删：本次生成失败时不能让 init.d 误用上一次的
+    except OSError:
+        pass
+    try:
+        opt_fix_ulimit()
+    except Exception as e:
+        log_err("文件句柄修正", e)
+    dd = load()
+    write_core_file(active_core(dd))
+    write_active_config(dd)
+    return write_prep(path)
 
 
 def default_tz():
@@ -12037,6 +12108,10 @@ def main():
         dd = load()
         write_core_file(active_core(dd))
         print(write_active_config(dd))
+        try:  # init.d 的 start_post 由 tproxy.sh 直接读，不必再起一个 Python 跑 --tpenv
+            write_prep()
+        except Exception as e:
+            print("写透明代理参数失败：", e, file=sys.stderr)
         sys.exit(0)
     if "--allow-public" in sys.argv:  # 允许 / 禁止从外网（非局域网地址）访问面板
         on = (sys.argv[sys.argv.index("--allow-public") + 1:] or ["on"])[0] in ("on", "1", "yes", "true")

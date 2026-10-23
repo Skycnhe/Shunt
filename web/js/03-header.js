@@ -12,10 +12,10 @@ async function loadState(){
   if(v!==null&&v===STATE_VER&&STATE.running!==undefined)return; // 配置无变化：顶栏运行状态由 1 秒实时流保持
   STATE=await api('/api/state');STATE_VER=v;
   renderCore(STATE.running);renderAdChip();renderMode();renderWD();renderPMStat();renderVer()}
-function renderCore(run){$('#h-dot').className='dot '+(run?'on':'off');$('#h-run').textContent=run?'运行中':'已停止';
+function renderCore(run){$('#h-dot').className='dot '+(run?'on':'off');$('#h-run').textContent=SVC_ING?SVC_TXT[SVC_ING]+'中…':run?'运行中':'已停止';
   $('#h-mode').innerHTML=run?'<span class="ok">● 代理</span>':'<span class="mut">● 直连</span>';
   $('#h-ver').textContent=run&&STATE.version&&STATE.version!=='-'?STATE.version:'';$('#h-run').parentNode.title=run&&STATE.version&&STATE.version!=='-'?(CORE_LABEL[STATE.core]||STATE.core||'')+' '+STATE.version:'';
-  $('#h-restart').classList.toggle('hide',!run);$('#h-stop').classList.toggle('hide',!run);$('#h-start').classList.toggle('hide',run)}
+  if(!SVC_ING){$('#h-restart').classList.toggle('hide',!run);$('#h-stop').classList.toggle('hide',!run);$('#h-start').classList.toggle('hide',run)}}  // 启停进行中按钮保持原样（禁用中），完成后再切换
 function renderHdr(l){$('#h-up').textContent=fmt(l.up)+'/s';$('#h-down').textContent=fmt(l.down)+'/s';
   $('#h-ut').textContent=fmt(l.upTotal);$('#h-dt').textContent=fmt(l.downTotal);$('#h-mem').textContent=l.inuse?fmt(l.inuse):'-';
   $('#ov-up').textContent=fmt(l.up)+'/s';$('#ov-down').textContent=fmt(l.down)+'/s';

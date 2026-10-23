@@ -102,6 +102,9 @@ SVC_NEW = os.path.isfile("/etc/init.d/shunt-core")
 CORE_SVC = "shunt-core" if SVC_NEW else "mihomo"
 PANEL_SVC = "shunt" if os.path.isfile("/etc/init.d/shunt") else "mihomo-panel"
 SVC = os.environ.get("PANEL_SVC", "rc-service " + CORE_SVC)  # 核心服务控制命令（测试环境可覆盖）
+# 启动 / 重启核心前面板（或 --gen）写下的透明代理参数（tp_env 输出）。init.d 的 start_pre 见到 2 分钟内的这个文件就跳过 --gen、
+# start_post 交给 tproxy.sh 直接读，一次启动少起两次 Python。只在正式部署目录启用（路径与 init.d 里写死的一致）
+CORE_PREP = os.environ.get("PANEL_CORE_PREP") or ("/run/shunt-core.prep" if BASE == "/opt/mihomo-panel" and os.path.isdir("/run") else "")
 LOG_FILES = [x for x in os.environ.get("PANEL_LOGS", "/var/log/mihomo.log,/var/log/mihomo-panel.log").split(",") if x]
 MIHOMO_LOG = LOG_FILES[0] if LOG_FILES else "/var/log/mihomo.log"
 AB_DIR = os.path.join(CONF_DIR, "adblock")
@@ -216,7 +219,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "10.3.6"
+PANEL_VERSION = "10.3.7"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),

@@ -24,7 +24,28 @@ output_log="/var/log/mihomo.log"
 error_log="/var/log/mihomo.log"
 
 depend() { need net; after firewall; }
+PREP=/run/shunt-core.prep  # 面板（或 --gen）刚生成好配置时写下的透明代理参数，见 start_pre / start_post
 # 生成配置失败（如 data.json 有坏数据）时不阻止启动：配置是原子写入的，沿用上一次的配置照常启动
-start_pre() { : > /var/log/mihomo.log; modprobe tun 2>/dev/null; mkdir -p /etc/sing-box; python3 /opt/mihomo-panel/server.py --gen >/dev/null || ewarn "生成配置失败，沿用上一次的配置启动"; return 0; }
-start_post() { sleep 1; /opt/mihomo-panel/tproxy.sh apply || ewarn "透明代理规则加载失败（内核缺少 nftables / TProxy 模块？），核心照常运行，可改用 TUN 模式"; return 0; }  # 按代理方式：TProxy 全量规则 / TUN 仅 DNS 重定向 / 关闭
-stop_post() { /opt/mihomo-panel/tproxy.sh stop; }
+# 面板按钮 / 看门狗 / 定时任务重启时，面板已在自己的进程里生成好配置并写了 $PREP（2 分钟内有效）：跳过 --gen，
+# 省掉一次 Python 启动（每次要编译、导入整个面板，路由器上约 0.3～1 秒）。开机、SSH 里 rc-service 时照旧 --gen
+start_pre() {
+  : > /var/log/mihomo.log; modprobe tun 2>/dev/null; mkdir -p /etc/sing-box
+  if [ -f "$PREP" ] && [ $(( $(date +%s) - $(stat -c %Y "$PREP" 2>/dev/null || echo 0) )) -lt 120 ]; then return 0; fi
+  rm -f "$PREP"
+  python3 /opt/mihomo-panel/server.py --gen >/dev/null || ewarn "生成配置失败，沿用上一次的配置启动"
+  return 0
+}
+# 按代理方式：TProxy 全量规则 / TUN 仅 DNS 重定向 / 关闭。以前固定 sleep 1 再挂规则：核心 0.2 秒就监听好也要白等，
+# 加载大规则集超过 1 秒时规则又先挂上、流量被导向还没监听的端口。现在 tproxy.sh 每 0.1 秒查一次端口（最多 10 秒），
+# 核心进程退出则不挂规则（局域网保持直连，不被导向不存在的端口）；参数直接读 $PREP，不再起一次 Python
+start_post() {
+  _tpe=""; [ -f "$PREP" ] && _tpe="$PREP"
+  TPENV_FILE="$_tpe" WAIT_PID="$pidfile" /opt/mihomo-panel/tproxy.sh apply || ewarn "透明代理规则未加载（核心已退出，或内核缺少 nftables / TProxy 模块？），可改用 TUN 模式"
+  rm -f "$PREP"
+  return 0
+}
+# 先撤规则再停核心：sing-box 正常退出最多要等 15 秒（写 Fake-IP 缓存），以前这段时间局域网流量仍被导向正在退出的核心
+# 只删 nftables 表（表名同 tproxy.sh 的 TABLE）：流量不再被打标记 / 重定向即恢复直连，策略路由等由 stop_post 收尾
+stop_pre() { nft delete table inet mihomo_panel 2>/dev/null; return 0; }
+# 再撤一次（幂等，防停止期间别处又挂上）；核心被 KILL 时来不及撤的 TUN 策略路由 / auto-redirect 表顺带清掉（有核心进程在跑时不动）
+stop_post() { /opt/mihomo-panel/tproxy.sh stop leftovers; return 0; }  # 旧版 tproxy.sh 忽略第二个参数，只做 stop
