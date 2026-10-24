@@ -33,15 +33,6 @@ def read(*p):
         return f.read()
 
 
-class VersionTest(unittest.TestCase):
-    def test_version(self):
-        self.assertEqual(B.PANEL_VERSION, "10.3.7")
-
-    def test_changelog_top(self):
-        heads = [ln for ln in read("CHANGELOG.md").splitlines() if ln.startswith("## v")]
-        self.assertTrue(heads[0].startswith("## v10.3.7"), heads[0])
-
-
 # 假命令：调用记到 $FAKE/log；nft list tables / ip -N rule show 的输出、pidof 的返回值从 $FAKE 下的文件读
 FAKE_CMD = r'''#!/bin/sh
 n=$(basename "$0"); echo "$n $*" >> "$FAKE/log"

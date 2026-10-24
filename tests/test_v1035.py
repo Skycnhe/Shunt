@@ -40,12 +40,13 @@ class DrawerMarkupTest(unittest.TestCase):
         self.assertNotRegex(m.group(1), r"width=\d")
 
     def test_no_horizontal_tab_bar(self):
+        # v10.3.8 起横向标签栏（#tabbar）/ 手机底部导航 /「更多」弹层作为「经典」布局回来了，按布局判断：
+        # 抽屉布局（默认）下它们一律隐藏，nav() 也不生成标签（见 tests/test_v8412.py 的 node 测试）
         hdr = self.src[self.src.index("<header"):self.src.index("</header>")]
-        self.assertNotIn("<nav", hdr)                      # 顶栏里不再有标签栏
-        self.assertNotIn("more-sheet", self.src)           # 手机底部导航的「更多」面板也去掉了
-        self.assertNotIn("nav#nav.bottom", self.css)
-        self.assertNotIn("placeNav", self.html)
-        self.assertNotIn("openMore", self.html)
+        self.assertEqual(re.findall(r"<nav\b[^>]*>", hdr), ['<nav id="tabbar" aria-label="页面">'])
+        self.assertIn("html:not([data-layout=classic]) #tabbar,html:not([data-layout=classic]) #more-sheet{display:none!important}", self.css)
+        self.assertRegex(self.html, r"d\.dataset\.layout=localStorage\.getItem\('mp_layout'\)==='classic'\?'classic':'drawer'")
+        self.assertNotIn("nav#nav.bottom", self.css)      # 底部栏样式只作用于 #tabbar，不碰抽屉里的 #nav
         self.assertEqual(self.src.count('id="nav"'), 1)
         self.assertIn('<nav class="dnav" id="nav"', self.src)
 
@@ -53,7 +54,7 @@ class DrawerMarkupTest(unittest.TestCase):
         m = re.search(r'<button type="button" class="brand" id="menu-btn"([^>]*)>', self.src)
         self.assertIsNotNone(m, "左上角 Shunt 图标 + 文字是一个按钮")
         a = m.group(1)
-        for k in ('aria-controls="drawer"', 'aria-expanded="false"', 'onclick="toggleDrawer()"'):
+        for k in ('aria-controls="drawer"', 'aria-expanded="false"', 'onclick="brandClick()"'):   # v10.3.8：经典布局下回概览
             self.assertIn(k, a)
         btn = self.src[m.start():self.src.index("</button>", m.start())]
         self.assertIn('class="logo"', btn)
@@ -149,6 +150,7 @@ class FrontendTest(unittest.TestCase):
         self.assertEqual(o["dupPush"], ["#nodes"])
         self.assertEqual(o["unknown"]["tab"], "概览")
         self.assertFalse(o["DSK"])
+        self.assertEqual(o["tabbar"], "")                   # 默认抽屉布局：不生成横向标签栏
 
 
 if __name__ == "__main__":
