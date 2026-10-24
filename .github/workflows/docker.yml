@@ -104,6 +104,7 @@ jobs:
           for i in $(seq 1 60); do curl -fsS -o /dev/null http://127.0.0.1:8080/manifest.webmanifest && { ok=1; break; }; sleep 2; done
           docker logs shunt
           [ -n "$ok" ] || { echo "面板 120 秒内没有起来"; docker exec shunt tail -n 50 /var/log/mihomo-panel.log || true; exit 1; }
+          if docker logs shunt 2>&1 | grep -E 'TProxy 不可用|/sys/fs/cgroup|non existent service'; then echo "启动日志有不该出现的报错"; exit 1; fi
           up=""
           for i in $(seq 1 30); do
             curl -fsS http://127.0.0.1:8080/api/state > state.json
@@ -121,6 +122,11 @@ jobs:
           [ -n "$up" ] || { echo "核心没有运行"; exit 1; }
           docker exec shunt sh -c 'cat /opt/shunt-seed/VERSION; ls -l /usr/local/bin/mihomo /usr/local/bin/mihomo-smart /usr/local/bin/sing-box /data/mihomo /data/sing-box/rules | head -n 40'
           sudo nft list table inet mihomo_panel >/dev/null || { echo "TProxy 规则没有挂上"; exit 1; }
+          echo ">> 诊断：install.sh 的 TProxy 探测语句（不带 meta nfproto ipv4）在这台宿主机上："
+          sudo nft -f - <<'NFT' && echo "   通过" || echo "   失败"
+          table inet shunt_probe { chain p { type filter hook prerouting priority mangle; meta l4proto tcp tproxy ip to 127.0.0.1:1 } }
+          NFT
+          sudo nft delete table inet shunt_probe 2>/dev/null || true
           echo ">> 面板重启核心"
           curl -fsS -X POST -H 'X-Shunt: 1' -H 'Content-Type: application/json' -d '{"action":"restart"}' http://127.0.0.1:8080/api/service
           for i in $(seq 1 60); do

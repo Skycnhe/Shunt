@@ -25,6 +25,10 @@ RUN apk add --no-cache curl wget ca-certificates python3 nftables iptables ip6ta
       coreutils openssl py3-yaml openrc tini \
  && printf '%s\n' '# Shunt Docker：容器内只用 rc-service 管面板 / 核心（不经 OpenRC 开机），不挂 cgroup、不检查 need net 依赖' \
       'rc_sys="docker"' 'rc_provide="loopback net"' 'rc_controller_cgroups="NO"' 'rc_depend_strict="NO"' >> /etc/rc.conf \
+ # 容器的 /sys/fs/cgroup 只读：去掉 OpenRC 给每个服务建 cgroup 的步骤（否则每次启停都报 mkdir 失败）；
+ # hwdrivers / machine-id 依赖容器里没有的 dev 服务，删掉免得每次生成依赖缓存都报警告
+ && for f in /usr/libexec/rc/sh/rc-cgroup.sh /lib/rc/sh/rc-cgroup.sh; do if [ -f "$f" ]; then : > "$f"; fi; done \
+ && rm -f /etc/init.d/hwdrivers /etc/init.d/machine-id \
  && mkdir -p /data /var/log /run/openrc && touch /run/openrc/softlevel \
  && rm -rf /etc/mihomo /etc/mihomo-panel /etc/sing-box \
  && ln -s /data/mihomo /etc/mihomo && ln -s /data/mihomo-panel /etc/mihomo-panel && ln -s /data/sing-box /etc/sing-box

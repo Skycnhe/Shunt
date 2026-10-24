@@ -32,12 +32,15 @@ rm -rf /run/openrc && mkdir -p /run/openrc/exclusive && touch /run/openrc/softle
 rm -f /run/shunt.pid /run/shunt-core.pid /run/shunt-core.prep
 
 # ---- 运行环境检查（network_mode: host 时规则写在宿主机的网络命名空间里）
-TP_OK=""; nft -f - 2>/dev/null <<'NFT' && TP_OK=1
-table inet shunt_probe { chain p { type filter hook prerouting priority mangle; meta l4proto tcp tproxy ip to 127.0.0.1:1 } }
+# 探测语句与 tproxy.sh 实际下发的写法一致（inet 表里 tproxy ip 前要有 meta nfproto ipv4）
+TP_OK=""; TP_ERR=$(nft -f - 2>&1 <<'NFT') && TP_OK=1
+table inet shunt_probe { chain p { type filter hook prerouting priority mangle; meta nfproto ipv4 meta l4proto tcp tproxy ip to 127.0.0.1:1 } }
 NFT
 nft delete table inet shunt_probe 2>/dev/null
 if [ -n "$TP_OK" ]; then log "TProxy 可用"
-elif nft list tables >/dev/null 2>&1; then log "!! TProxy 不可用：宿主机内核没有加载 nft_tproxy（宿主机执行 modprobe nft_tproxy）"
+elif nft list tables >/dev/null 2>&1; then
+  log "!! TProxy 不可用：宿主机内核没有加载 nft_tproxy（宿主机执行 modprobe nft_tproxy）"
+  [ -n "$TP_ERR" ] && log "   nft: $(echo "$TP_ERR" | head -n 3 | tr '\n' ' ')"
 else log "!! nftables 不可用：容器缺少 NET_ADMIN 权限（--cap-add NET_ADMIN）或宿主机内核不支持 nf_tables"; fi
 if [ -c /dev/net/tun ]; then log "TUN 设备 /dev/net/tun 已映射"; else log "!! 没有 /dev/net/tun：TUN 模式不可用（--device /dev/net/tun）"; fi
 [ "$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)" = 1 ] || log "!! 宿主机未开启 IPv4 转发：请在宿主机执行 sysctl -w net.ipv4.ip_forward=1 并写入 /etc/sysctl.conf"

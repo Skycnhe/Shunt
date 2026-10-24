@@ -64,6 +64,13 @@ class DockerfileTest(unittest.TestCase):
         for k in ('rc_sys="docker"', 'rc_provide="loopback net"', 'rc_controller_cgroups="NO"'):
             self.assertIn(k, self.df)
         self.assertIn("HEALTHCHECK", self.df)
+        self.assertIn(': > "$f"', self.df)  # 只读 /sys/fs/cgroup：清空 rc-cgroup.sh，OpenRC 不再给服务建 cgroup
+
+    def test_tproxy_probe_matches_tproxy_sh(self):
+        """入口脚本的 TProxy 探测与 tproxy.sh 实际写法一致（v8.4.16 第一次构建时不带 nfproto 的探测误报不可用）"""
+        e = read("docker", "entrypoint.sh")
+        self.assertIn("meta nfproto ipv4 meta l4proto tcp tproxy ip to 127.0.0.1:1", e)
+        self.assertIn("meta nfproto ipv4 meta l4proto { tcp, udp } meta mark set $MARK tproxy ip to", read("tproxy.sh"))
 
     def test_runtime_deps_match_install(self):
         inst = re.search(r'^PKGS="([^"]+)"', read("install.sh"), re.M).group(1).split()
