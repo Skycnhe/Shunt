@@ -1,6 +1,6 @@
 """v8.4.12：设置 → 外观 →「界面布局」可选 经典（横向标签栏）/ 抽屉菜单（新，默认）。
 
-经典布局还原 v8.4.8 的导航：顶栏下横向标签栏（含「概览」），手机（≤720px）上移到页面底部（概览 / 节点 / 连接 / 日志 +「更多」弹层）；
+经典布局：顶栏下横向标签栏（含「概览」）。v8.4.12 时手机上移到页面底部 +「更多」，v8.4.13 起手机上也在顶部（见 tests/test_v8413.py），这里的用例已按新行为更新；
 抽屉布局保持 v8.4.9 起的样子。两种布局共用 go() / #hash / 返回键 / 统计卡网格 / 顶栏按钮；布局按设备保存在 localStorage mp_layout，
 <head> 内联脚本在首屏前设好 html[data-layout]，切换立即生效（关闭打开着的抽屉 / 弹层，焦点不留在隐藏的元素上）。
 """
@@ -19,21 +19,11 @@ assert server
 B = sys.modules["shunt.base"]
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TABS = ["概览", "节点", "策略组", "订阅", "规则", "DNS", "广告拦截", "连接", "统计", "日志", "设置"]
-NP = ["策略组", "订阅", "规则", "DNS", "广告拦截", "统计", "设置"]
 
 
 def read(*p):
     with open(os.path.join(ROOT, *p), encoding="utf-8") as f:
         return f.read()
-
-
-class VersionTest(unittest.TestCase):
-    def test_version(self):
-        self.assertEqual(B.PANEL_VERSION, "8.4.12")
-
-    def test_changelog_top(self):
-        heads = [ln for ln in read("CHANGELOG.md").splitlines() if ln.startswith("## v")]
-        self.assertTrue(heads[0].startswith("## v8.4.12"), heads[0])
 
 
 class MarkupTest(unittest.TestCase):
@@ -60,17 +50,14 @@ class MarkupTest(unittest.TestCase):
     def test_classic_markup(self):
         hdr = self.src[self.src.index("<header"):self.src.index("</header>")]
         self.assertIn('<nav id="tabbar" aria-label="页面"></nav>', hdr)
-        self.assertIn('<div id="more-sheet" class="hide" onclick="if(event.target===this)closeMore()">', self.src)
-        self.assertIn('id="more-list" role="dialog" aria-modal="true"', self.src)
+        self.assertNotIn('more-sheet', self.src)                  # v8.4.13 起没有「更多」弹层
         self.assertIn('id="menu-btn" onclick="brandClick()"', self.src)
 
     def test_css_by_layout(self):
-        self.assertIn("html:not([data-layout=classic]) #tabbar,html:not([data-layout=classic]) #more-sheet{display:none!important}", self.blk)
+        self.assertIn("html:not([data-layout=classic]) #tabbar{display:none!important}", self.blk)
         self.assertIn("html[data-layout=classic] .brand .bmenu,html[data-layout=classic] .brand .bpage{display:none}", self.blk)
-        self.assertRegex(self.blk, r"#tabbar\.bottom\{position:fixed;[^}]*grid-template-columns:repeat\(5,minmax\(0,1fr\)\)")
-        self.assertIn("#tabbar.bottom button.np{display:none}#tabbar.bottom .more{display:flex}", self.blk)
-        self.assertIn("body.hasbn main{padding-bottom:calc(84px + env(safe-area-inset-bottom))}", self.blk)
-        self.assertRegex(self.blk, r"#tabbar\.bottom button\{[^}]*min-height:52px")
+        self.assertNotIn("#tabbar.bottom", self.css)               # v8.4.13 起没有底部栏
+        self.assertNotIn("hasbn", self.css)
         # 旧版的通用 nav{} / nav button{} 规则不能回来：抽屉里的 <nav class="dnav"> 也会被套上
         self.assertIsNone(re.search(r"(^|[}\s,])nav( button)?\{", self.css, re.M))
 
@@ -87,7 +74,7 @@ class FrontendTest(unittest.TestCase):
     def setUpClass(cls):
         if not shutil.which("node"):
             raise unittest.SkipTest("需要 node")
-        r = subprocess.run(["node", os.path.join(ROOT, "tests", "v8412_frontend.js"), ROOT], capture_output=True, text=True, timeout=30)
+        r = subprocess.run(["node", os.path.join(ROOT, "tests", "v8413_frontend.js"), ROOT], capture_output=True, text=True, timeout=30)
         assert r.returncode == 0, r.stderr
         cls.o = json.loads(r.stdout)
 
@@ -106,9 +93,9 @@ class FrontendTest(unittest.TestCase):
     def test_classic_tabbar_has_overview(self):
         c = self.o["classic"]
         self.assertEqual((c["layout"], c["attr"]), ("classic", "classic"))
-        self.assertEqual(c["tabs"], TABS + ["更多"])
+        self.assertEqual(c["tabs"], TABS)
         self.assertEqual(c["tabCur"], ["概览"])
-        self.assertEqual(c["np"], NP)
+        self.assertEqual(c["np"], [])
         self.assertTrue(c["pageHidden"])
         self.assertEqual(c["btn"], {"exp": None, "ctl": None, "pop": None, "label": "Shunt，回到概览", "title": "回到概览"})
         n = self.o["classicNodes"]
@@ -117,7 +104,7 @@ class FrontendTest(unittest.TestCase):
         self.assertEqual((b["tab"], b["drawerOpen"], b["hash"]), ("概览", False, ""))   # 经典布局下 Shunt 图标回概览、不开抽屉
         p = self.o["pickTab"]
         self.assertEqual((p["tab"], p["tabCur"], p["focus"], p["hash"]), ("策略组", ["策略组"], "策略组", "#groups"))
-        self.assertEqual(p["tabs"][-1], "策略组")           # 「更多」按钮显示当前的非主要页
+        self.assertEqual(p["tabs"], TABS)
         h = self.o["classicHash"]
         self.assertEqual((h["tab"], h["tabCur"], h["loaded"]), ("日志", ["日志"], "openLogs"))
 
@@ -139,21 +126,9 @@ class FrontendTest(unittest.TestCase):
         self.assertEqual((s["layout"], s["tabs"]), ("drawer", []))
         self.assertEqual(self.o["storageEvtWrites"], 0)
 
-    def test_mobile_bottom_bar_and_more(self):
+    def test_mobile_same_top_tabbar(self):
         m = self.o["mobile"]
-        self.assertEqual((m["bottom"], m["inBody"], m["hasbn"]), (True, True, True))
-        self.assertEqual(m["np"], NP)                      # 底部栏只显示 概览 / 节点 / 连接 / 日志 + 更多（np 由 CSS 隐藏）
-        mo = self.o["moreOpen"]
-        self.assertEqual((mo["open"], mo["items"], mo["focus"], mo["exp"]), (True, NP, "策略组", "true"))
-        self.assertEqual(self.o["moreEsc"], {"open": False, "focus": "more-btn"})
-        p = self.o["morePick"]
-        self.assertEqual((p["tab"], p["moreOpen"], p["hash"], p["loaded"], p["tabs"][-1]), ("设置", False, "#settings", "renderSettings", "设置"))
-        d = self.o["mobileToDrawer"]
-        self.assertEqual((d["moreOpen"], d["bottom"], d["inBody"], d["hasbn"], d["tabs"], d["focus"]), (False, False, False, False, [], "menu-btn"))
-        b = self.o["mobileBack"]
-        self.assertEqual((b["bottom"], b["inBody"], b["hasbn"], b["tabCur"]), (True, True, True, ["设置"]))
-        self.assertEqual((self.o["mqDesktop"]["bottom"], self.o["mqDesktop"]["inBody"], self.o["mqDesktop"]["hasbn"]), (False, False, False))
-        self.assertEqual((self.o["mqMobile"]["bottom"], self.o["mqMobile"]["inBody"]), (True, True))
+        self.assertEqual((m["bottom"], m["inBody"], m["hasbn"], m["tabs"]), (False, False, False, TABS))
 
     def test_persist(self):
         self.assertEqual((self.o["persistClassic"]["layout"], self.o["persistClassic"]["tabs"][0]), ("classic", "概览"))

@@ -44,7 +44,7 @@ class DrawerMarkupTest(unittest.TestCase):
         # 抽屉布局（默认）下它们一律隐藏，nav() 也不生成标签（见 tests/test_v8412.py 的 node 测试）
         hdr = self.src[self.src.index("<header"):self.src.index("</header>")]
         self.assertEqual(re.findall(r"<nav\b[^>]*>", hdr), ['<nav id="tabbar" aria-label="页面">'])
-        self.assertIn("html:not([data-layout=classic]) #tabbar,html:not([data-layout=classic]) #more-sheet{display:none!important}", self.css)
+        self.assertIn("html:not([data-layout=classic]) #tabbar{display:none!important}", self.css)
         self.assertRegex(self.html, r"d\.dataset\.layout=localStorage\.getItem\('mp_layout'\)==='classic'\?'classic':'drawer'")
         self.assertNotIn("nav#nav.bottom", self.css)      # 底部栏样式只作用于 #tabbar，不碰抽屉里的 #nav
         self.assertEqual(self.src.count('id="nav"'), 1)

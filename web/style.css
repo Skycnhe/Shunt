@@ -399,34 +399,27 @@ html.dsk .dnav button{font-size:28px;min-height:76px}html.dsk .dnav button .ico{
    内容比屏幕宽时手机浏览器会把整页缩小来装下它，所有东西都变小 */
 .dti .row>.sp{overflow-wrap:anywhere}
 /* v8.4.12 界面布局可选（设置 → 外观 → 界面布局，按设备保存）。html[data-layout] 由 <head> 内联脚本在首屏前设好，切换时由 setLayout 改。
-   经典布局：还原 v8.4.8 的横向标签栏（含概览）；手机（≤720px）上标签栏移到页面底部（概览 / 节点 / 连接 / 日志 +「更多」弹层）。
-   统计卡网格、顶栏大按钮、#hash 直达等 v8.4.9 之后的改进两种布局共用 */
-#tabbar{display:flex;gap:2px;margin-top:8px;padding:3px;border-radius:13px;background:var(--segbg);overflow-x:auto;scrollbar-width:none;width:max-content;max-width:100%}
-#tabbar::-webkit-scrollbar{display:none}
-#tabbar button{flex:0 0 auto;background:none;border:0;color:var(--txt);opacity:.85;padding:8px 18px;border-radius:10px;cursor:pointer;font:inherit;font-size:16px;font-weight:600;transition:all .2s}
+   抽屉布局：v8.4.9 起的统计卡网格 + 左侧抽屉，不变。
+   v8.4.13 经典布局：按 v7.6.x 的样子还原——顶部一行紧凑统计小块（小标签 + 粗数值，按内容宽度排开）、下面一条圆角半透明横向标签栏（当前页浅色胶囊高亮）；
+   手机上标签栏也在顶部（不再有底部栏 /「更多」）。统计块和标签都是放不下就换行，不横向滚动、不截断 */
+#tabbar{display:flex;flex-wrap:wrap;gap:2px;margin-top:8px;padding:3px;border-radius:13px;background:var(--segbg);width:max-content;max-width:100%;overflow:visible}
+#tabbar button{flex:0 0 auto;background:none;border:0;color:var(--txt);opacity:.85;padding:8px 18px;border-radius:10px;cursor:pointer;font:inherit;font-size:16px;font-weight:600;line-height:1.25;white-space:nowrap;transition:all .2s}
 #tabbar button:hover{opacity:1}
 #tabbar button.on{background:var(--segon);color:var(--segtxt);opacity:1;font-weight:800;box-shadow:0 2px 8px rgba(0,0,0,.12)}
-#tabbar button:focus-visible,#more-sheet button:focus-visible,.lyopts button:focus-visible{outline:2.5px solid var(--pri);outline-offset:2px}
-#tabbar .ico{display:none}#tabbar .more{display:none}
-html:not([data-layout=classic]) #tabbar,html:not([data-layout=classic]) #more-sheet{display:none!important}
+#tabbar button:focus-visible,.lyopts button:focus-visible{outline:2.5px solid var(--pri);outline-offset:2px}
+html:not([data-layout=classic]) #tabbar{display:none!important}
 html[data-layout=classic] .brand .bmenu,html[data-layout=classic] .brand .bpage{display:none}
-#more-sheet{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.35);display:flex;align-items:flex-end}
-#more-sheet.hide{display:none}
-#more-sheet .sheet{width:100%;padding:14px 14px calc(14px + env(safe-area-inset-bottom));border-radius:20px 20px 0 0;display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
-#more-sheet button{border:1px solid var(--line);background:var(--b2);color:var(--txt);border-radius:14px;padding:14px 6px;min-height:52px;font:inherit;font-size:15px;font-weight:600;cursor:pointer}
-#more-sheet button.on{background:var(--pri);color:#fff;border-color:var(--pri)}
+html[data-layout=classic] .hrow>.hstats{display:flex;flex-wrap:wrap;gap:6px;grid-template-columns:none;overflow:visible}
+html[data-layout=classic] .hstats .vchips{display:contents}
+html[data-layout=classic] .hstats .chip{flex:0 0 auto;min-width:100px;padding:5px 13px;border-radius:12px;justify-content:center;letter-spacing:normal}
+html[data-layout=classic] .hstats .chip .k{font-size:12.5px;white-space:nowrap;overflow:visible;text-overflow:clip}
+html[data-layout=classic] .hstats .chip b{font-size:16px;white-space:nowrap;overflow:visible;text-overflow:clip}
 @media (max-width:720px){
-  #tabbar{width:100%}#tabbar button{font-size:14.5px;padding:6px 12px}
-  #tabbar.bottom{position:fixed;left:8px;right:8px;bottom:calc(8px + env(safe-area-inset-bottom));z-index:50;margin:0;width:auto;max-width:none;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));
-    border-radius:20px;padding:5px;background:var(--card);border:1px solid var(--card-b);box-shadow:0 10px 30px rgba(0,0,0,.25);-webkit-backdrop-filter:blur(28px) saturate(180%);backdrop-filter:blur(28px) saturate(180%)}
-  #tabbar.bottom button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-width:0;min-height:52px;padding:6px 0 4px;font-size:12px;border-radius:14px}
-  #tabbar.bottom button span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 2px}
-  #tabbar.bottom button.np{display:none}#tabbar.bottom .more{display:flex}
-  #tabbar.bottom .ico{display:block;width:22px;height:22px}
-  body.hasbn main{padding-bottom:calc(84px + env(safe-area-inset-bottom))}
+  #tabbar{width:100%}#tabbar button{flex:1 0 auto;font-size:14.5px;padding:8px 11px}
+  html[data-layout=classic] .hrow>.hstats{gap:5px}
+  html[data-layout=classic] .hstats .chip{flex:1 0 auto;min-width:0;padding:4px 8px;border-radius:10px}
+  html[data-layout=classic] .hstats .chip .k{font-size:11px}html[data-layout=classic] .hstats .chip b{font-size:13px}
 }
-@media (min-width:721px) and (max-width:1100px) and (hover:none) and (pointer:coarse){#tabbar{padding:4px;border-radius:15px}#tabbar button{font-size:18px;padding:11px 20px;border-radius:12px}}
-html.dsk #tabbar{flex-wrap:wrap;overflow:visible}html.dsk #tabbar button{font-size:24px;padding:16px 26px}  /* 「桌面版网站」下标签放大后一行放不下：换行显示，不用左右滑 */
 /* 设置页「界面布局」单选 */
 .lyopts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:10px}
 .lyopts button{position:relative;display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-height:64px;padding:12px 14px 12px 42px;border:1.5px solid var(--line);border-radius:14px;

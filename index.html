@@ -419,34 +419,27 @@ html.dsk .dnav button{font-size:28px;min-height:76px}html.dsk .dnav button .ico{
    内容比屏幕宽时手机浏览器会把整页缩小来装下它，所有东西都变小 */
 .dti .row>.sp{overflow-wrap:anywhere}
 /* v8.4.12 界面布局可选（设置 → 外观 → 界面布局，按设备保存）。html[data-layout] 由 <head> 内联脚本在首屏前设好，切换时由 setLayout 改。
-   经典布局：还原 v8.4.8 的横向标签栏（含概览）；手机（≤720px）上标签栏移到页面底部（概览 / 节点 / 连接 / 日志 +「更多」弹层）。
-   统计卡网格、顶栏大按钮、#hash 直达等 v8.4.9 之后的改进两种布局共用 */
-#tabbar{display:flex;gap:2px;margin-top:8px;padding:3px;border-radius:13px;background:var(--segbg);overflow-x:auto;scrollbar-width:none;width:max-content;max-width:100%}
-#tabbar::-webkit-scrollbar{display:none}
-#tabbar button{flex:0 0 auto;background:none;border:0;color:var(--txt);opacity:.85;padding:8px 18px;border-radius:10px;cursor:pointer;font:inherit;font-size:16px;font-weight:600;transition:all .2s}
+   抽屉布局：v8.4.9 起的统计卡网格 + 左侧抽屉，不变。
+   v8.4.13 经典布局：按 v7.6.x 的样子还原——顶部一行紧凑统计小块（小标签 + 粗数值，按内容宽度排开）、下面一条圆角半透明横向标签栏（当前页浅色胶囊高亮）；
+   手机上标签栏也在顶部（不再有底部栏 /「更多」）。统计块和标签都是放不下就换行，不横向滚动、不截断 */
+#tabbar{display:flex;flex-wrap:wrap;gap:2px;margin-top:8px;padding:3px;border-radius:13px;background:var(--segbg);width:max-content;max-width:100%;overflow:visible}
+#tabbar button{flex:0 0 auto;background:none;border:0;color:var(--txt);opacity:.85;padding:8px 18px;border-radius:10px;cursor:pointer;font:inherit;font-size:16px;font-weight:600;line-height:1.25;white-space:nowrap;transition:all .2s}
 #tabbar button:hover{opacity:1}
 #tabbar button.on{background:var(--segon);color:var(--segtxt);opacity:1;font-weight:800;box-shadow:0 2px 8px rgba(0,0,0,.12)}
-#tabbar button:focus-visible,#more-sheet button:focus-visible,.lyopts button:focus-visible{outline:2.5px solid var(--pri);outline-offset:2px}
-#tabbar .ico{display:none}#tabbar .more{display:none}
-html:not([data-layout=classic]) #tabbar,html:not([data-layout=classic]) #more-sheet{display:none!important}
+#tabbar button:focus-visible,.lyopts button:focus-visible{outline:2.5px solid var(--pri);outline-offset:2px}
+html:not([data-layout=classic]) #tabbar{display:none!important}
 html[data-layout=classic] .brand .bmenu,html[data-layout=classic] .brand .bpage{display:none}
-#more-sheet{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.35);display:flex;align-items:flex-end}
-#more-sheet.hide{display:none}
-#more-sheet .sheet{width:100%;padding:14px 14px calc(14px + env(safe-area-inset-bottom));border-radius:20px 20px 0 0;display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
-#more-sheet button{border:1px solid var(--line);background:var(--b2);color:var(--txt);border-radius:14px;padding:14px 6px;min-height:52px;font:inherit;font-size:15px;font-weight:600;cursor:pointer}
-#more-sheet button.on{background:var(--pri);color:#fff;border-color:var(--pri)}
+html[data-layout=classic] .hrow>.hstats{display:flex;flex-wrap:wrap;gap:6px;grid-template-columns:none;overflow:visible}
+html[data-layout=classic] .hstats .vchips{display:contents}
+html[data-layout=classic] .hstats .chip{flex:0 0 auto;min-width:100px;padding:5px 13px;border-radius:12px;justify-content:center;letter-spacing:normal}
+html[data-layout=classic] .hstats .chip .k{font-size:12.5px;white-space:nowrap;overflow:visible;text-overflow:clip}
+html[data-layout=classic] .hstats .chip b{font-size:16px;white-space:nowrap;overflow:visible;text-overflow:clip}
 @media (max-width:720px){
-  #tabbar{width:100%}#tabbar button{font-size:14.5px;padding:6px 12px}
-  #tabbar.bottom{position:fixed;left:8px;right:8px;bottom:calc(8px + env(safe-area-inset-bottom));z-index:50;margin:0;width:auto;max-width:none;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));
-    border-radius:20px;padding:5px;background:var(--card);border:1px solid var(--card-b);box-shadow:0 10px 30px rgba(0,0,0,.25);-webkit-backdrop-filter:blur(28px) saturate(180%);backdrop-filter:blur(28px) saturate(180%)}
-  #tabbar.bottom button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-width:0;min-height:52px;padding:6px 0 4px;font-size:12px;border-radius:14px}
-  #tabbar.bottom button span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 2px}
-  #tabbar.bottom button.np{display:none}#tabbar.bottom .more{display:flex}
-  #tabbar.bottom .ico{display:block;width:22px;height:22px}
-  body.hasbn main{padding-bottom:calc(84px + env(safe-area-inset-bottom))}
+  #tabbar{width:100%}#tabbar button{flex:1 0 auto;font-size:14.5px;padding:8px 11px}
+  html[data-layout=classic] .hrow>.hstats{gap:5px}
+  html[data-layout=classic] .hstats .chip{flex:1 0 auto;min-width:0;padding:4px 8px;border-radius:10px}
+  html[data-layout=classic] .hstats .chip .k{font-size:11px}html[data-layout=classic] .hstats .chip b{font-size:13px}
 }
-@media (min-width:721px) and (max-width:1100px) and (hover:none) and (pointer:coarse){#tabbar{padding:4px;border-radius:15px}#tabbar button{font-size:18px;padding:11px 20px;border-radius:12px}}
-html.dsk #tabbar{flex-wrap:wrap;overflow:visible}html.dsk #tabbar button{font-size:24px;padding:16px 26px}  /* 「桌面版网站」下标签放大后一行放不下：换行显示，不用左右滑 */
 /* 设置页「界面布局」单选 */
 .lyopts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:10px}
 .lyopts button{position:relative;display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-height:64px;padding:12px 14px 12px 42px;border:1.5px solid var(--line);border-radius:14px;
@@ -465,7 +458,6 @@ html.dsk #tabbar{flex-wrap:wrap;overflow:visible}html.dsk #tabbar button{font-si
   <nav class="dnav" id="nav" aria-label="页面"></nav>
   <div class="dfoot" id="d-foot"></div>
 </aside>
-<div id="more-sheet" class="hide" onclick="if(event.target===this)closeMore()"><div class="sheet glass" id="more-list" role="dialog" aria-modal="true" aria-label="更多页面"></div></div>
 <div id="app" class="hide">
 <header class="glass">
   <div class="hrow">
@@ -849,7 +841,7 @@ html.dsk #tabbar{flex-wrap:wrap;overflow:visible}html.dsk #tabbar button{font-si
       <div class="row mt"><span class="sp"></span><button class="btn g" onclick="tgTest()">发送测试</button><button class="btn" onclick="saveTg()">保存</button></div></div>
     <div data-sg="look" class="card" id="ly-card"><h3>界面布局</h3><div class="mut small" style="margin:-4px 0 12px">只保存在当前浏览器，手机和电脑可以分别选择；选择后立即生效</div>
       <div class="lyopts" id="ly-opts" role="radiogroup" aria-label="界面布局">
-        <button type="button" role="radio" aria-checked="false" data-ly="classic" onclick="setLayout('classic')"><b>经典（横向标签栏）</b><span>顶部横排页面标签，含「概览」；手机上为底部导航栏 +「更多」</span></button>
+        <button type="button" role="radio" aria-checked="false" data-ly="classic" onclick="setLayout('classic')"><b>经典（横向标签栏）</b><span>顶部紧凑统计条 + 横排页面标签（含「概览」），手机上也在顶部，放不下自动换行</span></button>
         <button type="button" role="radio" aria-checked="false" data-ly="drawer" onclick="setLayout('drawer')"><b>抽屉菜单（新）</b><span>点左上角 Shunt 图标从左侧滑出菜单，概览为主页</span></button>
       </div></div>
     <div data-sg="look" class="card"><h3>主题</h3><div class="mut small" style="margin:-4px 0 12px">只保存在当前浏览器，每台设备可以用不同主题</div><div class="skins" id="skins"></div></div>
@@ -975,10 +967,9 @@ const core=(p,m,b)=>api('/api/core'+p,m,b);
 
 // 导航有两种布局（设置 → 外观 → 界面布局，按设备保存在 localStorage mp_layout）：
 // 抽屉（默认）：概览是主页（抽屉顶部的 Shunt 图标回主页），其余页面列在左侧抽屉里；
-// 经典：顶栏下方横向标签栏（含概览），手机上是底部导航栏（PRIMARY 四项 +「更多」弹层）
-const PRIMARY=['概览','节点','连接','日志'];
+// 经典：顶栏下方横向标签栏（含概览，所有宽度都在顶部；放不下时换行，不用底部栏 /「更多」）
 const NAV_ICO={"概览": "<path d=\"M3 13h8V3H3zM13 21h8V11h-8zM3 21h8v-6H3zM13 3v6h8V3z\"/>",
-  "更多": "<circle cx=\"5\" cy=\"12\" r=\"1.6\"/><circle cx=\"12\" cy=\"12\" r=\"1.6\"/><circle cx=\"19\" cy=\"12\" r=\"1.6\"/>","节点": "<circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M3 12h18M12 3c2.8 3.2 2.8 14.8 0 18M12 3c-2.8 3.2-2.8 14.8 0 18\"/>",
+  "节点": "<circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M3 12h18M12 3c2.8 3.2 2.8 14.8 0 18M12 3c-2.8 3.2-2.8 14.8 0 18\"/>",
   "策略组": "<rect x=\"3\" y=\"4\" width=\"7\" height=\"7\" rx=\"1.5\"/><rect x=\"14\" y=\"4\" width=\"7\" height=\"7\" rx=\"1.5\"/><rect x=\"3\" y=\"14\" width=\"7\" height=\"7\" rx=\"1.5\"/><path d=\"M17.5 14v7M14 17.5h7\"/>",
   "订阅": "<path d=\"M5 5a14 14 0 0 1 14 14M5 11a8 8 0 0 1 8 8\"/><circle cx=\"6\" cy=\"18\" r=\"1.6\"/>",
   "规则": "<path d=\"M9 6h11M9 12h11M9 18h11\"/><path d=\"M4 6h.01M4 12h.01M4 18h.01\"/>",
@@ -991,21 +982,19 @@ const NAV_ICO={"概览": "<path d=\"M3 13h8V3H3zM13 21h8V11h-8zM3 21h8v-6H3zM13 
 const svgI=t=>`<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${NAV_ICO[t]||''}</svg>`;
 // 切页 / 换布局后重画：抽屉里的页面列表或经典标签栏（当前页高亮）、顶栏 Shunt 旁的当前页名、只显示当前页的 section
 function nav(){const home=TAB===HOME,cl=LAYOUT==='classic',tb=$('#tabbar');
-  if(cl){const np=!PRIMARY.includes(TAB);
-    tb.innerHTML=TABS.map(t=>`<button type="button" class="${t===TAB?'on':''}${PRIMARY.includes(t)?'':' np'}"${t===TAB?' aria-current="page"':''} onclick="pickTab(${jsq(t)})">${svgI(t)}<span>${esc(t)}</span></button>`).join('')
-      +`<button type="button" class="more${np?' on':''}" id="more-btn" onclick="openMore()" aria-haspopup="dialog" aria-expanded="${moreOpen()}">${svgI('更多')}<span>${esc(np?TAB:'更多')}</span></button>`}
+  if(cl)tb.innerHTML=TABS.map(t=>`<button type="button"${t===TAB?' class="on" aria-current="page"':''} onclick="pickTab(${jsq(t)})">${esc(t)}</button>`).join('');
   else if(tb.innerHTML)tb.innerHTML='';
   $('#nav').innerHTML=TABS.filter(t=>t!==HOME).map(t=>`<button type="button" class="${t===TAB?'on':''}"${t===TAB?' aria-current="page"':''} onclick="pickNav(${jsq(t)})">${svgI(t)}<span>${esc(t)}</span></button>`).join('');
   $('#d-home').classList.toggle('on',home);if(home)$('#d-home').setAttribute('aria-current','page');else $('#d-home').removeAttribute('aria-current');
   const pg=$('#h-page');pg.textContent=home||cl?'':TAB;pg.classList.toggle('hide',home||cl);
   $('#menu-btn').setAttribute('aria-label',cl?'Shunt，回到概览':(home?'Shunt 主页':'Shunt · '+TAB)+'，打开菜单');
   document.querySelectorAll('section').forEach(s=>s.classList.toggle('hide',s.dataset.tab!==TAB))}
-// 导航两种布局（设置 → 外观 → 界面布局）：抽屉（默认，点左上角 Shunt 图标从左侧滑出菜单）/ 经典（横向标签栏，手机上底部导航 +「更多」）。
+// 导航两种布局（设置 → 外观 → 界面布局）：抽屉（默认，点左上角 Shunt 图标从左侧滑出菜单）/ 经典（顶栏下横向标签栏，所有宽度都在顶部，放不下换行）。
 // 两种布局共用 go() 切页、#hash 同步与返回键；布局按设备保存（localStorage mp_layout），切换立即生效
-const MQ=matchMedia('(max-width:720px)');  // 手机布局（经典布局的底部导航、设置页分栏等用）
+const MQ=matchMedia('(max-width:720px)');  // 手机布局（设置页分栏等用）
 const LAYOUTS=['drawer','classic'];
 let LAYOUT=(()=>{try{return localStorage.getItem('mp_layout')==='classic'?'classic':'drawer'}catch(e){return 'drawer'}})();
-let DRAWER_RET=null,MORE_RET=null;
+let DRAWER_RET=null;
 const drawerOpen=()=>$('#drawer').classList.contains('open');
 function openDrawer(){const d=$('#drawer'),m=$('#drawer-mask');if(drawerOpen())return;nav();
   DRAWER_RET=document.activeElement;d.removeAttribute('inert');d.setAttribute('aria-hidden','false');m.classList.remove('hide');
@@ -1021,37 +1010,22 @@ function toggleDrawer(){drawerOpen()?closeDrawer():openDrawer()}
 // 抽屉里选中一页：关抽屉、切页，焦点回到左上角菜单按钮（键盘用户能接着再开菜单）
 function pickNav(t){closeDrawer(false);go(t);$('#menu-btn').focus({preventScroll:true})}
 // 左上角 Shunt 图标：抽屉布局开 / 关抽屉，经典布局回概览（标签栏里本来就有各页）
-function brandClick(){if(LAYOUT==='classic'){closeMore(false);go(HOME)}else toggleDrawer()}
+function brandClick(){if(LAYOUT==='classic')go(HOME);else toggleDrawer()}
 // 经典布局：标签栏点选后 nav() 会重画标签，焦点落回新的当前页标签（不然键盘焦点掉到 body）
 function pickTab(t){const a=document.activeElement,inBar=!!(a&&$('#tabbar').contains?.(a));go(t);
-  if(inBar){const b=$('#tabbar').querySelector('[aria-current="page"]');(b&&b.offsetParent!==null?b:$('#more-btn')||$('#menu-btn'))?.focus({preventScroll:true})}}
-// 经典布局手机端「更多」弹层：列出底部栏放不下的页面
-const moreOpen=()=>!!$('#more-sheet')&&!$('#more-sheet').classList.contains('hide');
-function openMore(){const s=$('#more-sheet');if(moreOpen())return;
-  $('#more-list').innerHTML=TABS.filter(t=>!PRIMARY.includes(t)).map(t=>`<button type="button" class="${t===TAB?'on':''}"${t===TAB?' aria-current="page"':''} onclick="pickMore(${jsq(t)})">${esc(t)}</button>`).join('');
-  MORE_RET=document.activeElement;s.classList.remove('hide');$('#more-btn')?.setAttribute('aria-expanded','true');
-  ($('#more-list').querySelector('[aria-current="page"]')||$('#more-list').querySelector('button'))?.focus({preventScroll:true})}
-function closeMore(back){if(!moreOpen())return;$('#more-sheet').classList.add('hide');$('#more-btn')?.setAttribute('aria-expanded','false');
-  if(back!==false){const r=MORE_RET&&MORE_RET.isConnected&&MORE_RET!==document.body&&MORE_RET.offsetParent!==null?MORE_RET:($('#more-btn')||$('#menu-btn'));r?.focus({preventScroll:true})}MORE_RET=null}
-function pickMore(t){closeMore(false);go(t);const b=$('#more-btn');(b&&b.offsetParent!==null?b:$('#menu-btn')).focus({preventScroll:true})}
-// 经典布局在手机上把标签栏移到页面底部（header 带 backdrop-filter，fixed 子元素无法相对视口定位，所以要移出 header）
-function placeNav(){const n=$('#tabbar'),bot=LAYOUT==='classic'&&MQ.matches;
-  if(bot){if(n.parentNode!==document.body)document.body.appendChild(n);n.classList.add('bottom')}
-  else{if(n.parentNode===document.body)$('header').appendChild(n);n.classList.remove('bottom')}
-  document.body.classList.toggle('hasbn',bot)}
-MQ.addEventListener?MQ.addEventListener('change',()=>{closeMore(false);placeNav()}):MQ.addListener(()=>{closeMore(false);placeNav()});
+  if(inBar){const b=$('#tabbar').querySelector('[aria-current="page"]');(b||$('#menu-btn'))?.focus({preventScroll:true})}}
 // 左上角按钮的无障碍属性跟随布局：抽屉布局是「打开菜单」的弹窗按钮，经典布局是普通的回主页按钮
 function layoutAttrs(){const b=$('#menu-btn'),cl=LAYOUT==='classic';document.documentElement.dataset.layout=LAYOUT;
   if(cl){['aria-controls','aria-expanded','aria-haspopup'].forEach(k=>b.removeAttribute(k));b.setAttribute('title','回到概览')}
   else{b.setAttribute('aria-controls','drawer');b.setAttribute('aria-expanded',String(drawerOpen()));b.setAttribute('aria-haspopup','dialog');b.setAttribute('title','打开菜单')}}
 function renderLayoutOpt(){document.querySelectorAll('#ly-opts [data-ly]').forEach(b=>{const on=b.dataset.ly===LAYOUT;
   b.classList.toggle('on',on);b.setAttribute('aria-checked',String(on));b.tabIndex=on?0:-1})}
-// 切换布局：先关掉打开着的抽屉 / 「更多」弹层；焦点原来在导航里的（即将隐藏）落到左上角按钮，在设置页选项上的留在选中项
+// 切换布局：先关掉打开着的抽屉；焦点原来在导航里的（即将隐藏）落到左上角按钮，在设置页选项上的留在选中项
 function setLayout(l,save){l=LAYOUTS.includes(l)?l:'drawer';
   if(save!==false)try{localStorage.setItem('mp_layout',l)}catch(e){}
-  const a=document.activeElement,inNav=!!a&&['#drawer','#more-sheet','#tabbar'].some(s=>$(s)?.contains?.(a));
-  closeDrawer(false);closeMore(false);
-  LAYOUT=l;layoutAttrs();placeNav();nav();renderLayoutOpt();
+  const a=document.activeElement,inNav=!!a&&['#drawer','#tabbar'].some(s=>$(s)?.contains?.(a));
+  closeDrawer(false);
+  LAYOUT=l;layoutAttrs();nav();renderLayoutOpt();
   if(inNav)$('#menu-btn').focus({preventScroll:true});
   else if(a&&a.dataset&&a.dataset.ly){const b=document.querySelector(`#ly-opts [data-ly="${l}"]`);b?.focus({preventScroll:true})}}
 // 别的标签页改了布局（同一浏览器同一设备）：跟着切换
@@ -1059,11 +1033,10 @@ addEventListener('storage',e=>{if(e.key==='mp_layout'){const l=e.newValue==='cla
 // 设置页单选组：左右 / 上下方向键切换
 document.addEventListener('keydown',e=>{const b=e.target&&e.target.closest?.('#ly-opts [data-ly]');if(!b)return;
   if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)){e.preventDefault();setLayout(b.dataset.ly==='classic'?'drawer':'classic')}});
-// 打开的抽屉 / 弹层里：Esc 关闭，Tab 在里面循环
+// 打开的抽屉里：Esc 关闭，Tab 在里面循环
 function trapTab(e,box){const f=[...box.querySelectorAll('button,a[href]')].filter(x=>!x.disabled&&x.offsetParent!==null);if(!f.length)return;
   const a=f[0],z=f[f.length-1];if(e.shiftKey&&document.activeElement===a){e.preventDefault();z.focus()}else if(!e.shiftKey&&document.activeElement===z){e.preventDefault();a.focus()}}
 document.addEventListener('keydown',e=>{
-  if(moreOpen()){if(e.key==='Escape'){e.preventDefault();closeMore()}else if(e.key==='Tab')trapTab(e,$('#more-list'));return}
   if(!drawerOpen())return;
   if(e.key==='Escape'){e.preventDefault();closeDrawer();return}
   if(e.key==='Tab')trapTab(e,$('#drawer'));
@@ -1073,8 +1046,8 @@ document.addEventListener('keydown',e=>{
 function setHash(t,replace){const h=t===HOME?'':'#'+(TAB_SLUG[t]||encodeURIComponent(t));
   if(location.hash===h||(!h&&!location.hash))return;
   try{history[replace?'replaceState':'pushState'](null,'',h||location.pathname+location.search)}catch(e){if(!replace)location.hash=h}}
-addEventListener('hashchange',()=>{closeDrawer(false);closeMore(false);const t=tabFromHash(location.hash);if(t!==TAB)go(t,1)});
-addEventListener('popstate',()=>{closeMore(false);const t=tabFromHash(location.hash);if(t!==TAB)go(t,1)});
+addEventListener('hashchange',()=>{closeDrawer(false);const t=tabFromHash(location.hash);if(t!==TAB)go(t,1)});
+addEventListener('popstate',()=>{const t=tabFromHash(location.hash);if(t!==TAB)go(t,1)});
 function go(t,fromHash){if(!TABS.includes(t))t=HOME;if(TAB==='日志'&&t!=='日志')stopLive();TAB=t;nav();scrollTo({top:0});setHash(t,fromHash);
   ({节点:loadProxies,策略组:loadGroupsPage,订阅:loadSubs,规则:loadRules,DNS:loadDNSPage,广告拦截:loadAB,统计:loadStats,日志:openLogs,设置:renderSettings,概览:renderOverview,连接:loadDevs})[t]?.()}
 // Chrome「桌面版网站」：手机按约 980px 宽的电脑布局显示、整体缩得很小（这个模式下浏览器不认 viewport 设置，网页改不了）。
@@ -1082,7 +1055,7 @@ function go(t,fromHash){if(!TABS.includes(t))t=HOME;if(TAB==='日志'&&t!=='日�
 const DSK=(()=>{try{const sw=Math.min(screen.width,screen.height);return matchMedia('(hover:none) and (pointer:coarse)').matches&&innerWidth>720&&sw<=540&&innerWidth>=sw*1.5}catch(e){return false}})();
 if(DSK){document.documentElement.classList.add('dsk');
   $('#d-foot').innerHTML='手机上显示得很小？可能开了 Chrome「桌面版网站」：点浏览器右上角 ⋮ 取消勾选，即可使用手机布局'}
-layoutAttrs();placeNav();
+layoutAttrs();
 // 顶栏：核心状态 + 启停 + 实时数据
 const PM_TXT={tproxy:'TProxy',tun:'TUN',off:'已关闭'};
 let AD_TODAY=null; // 今日拦截数（/api/ping 每 15 秒带回）
