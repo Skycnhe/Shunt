@@ -1299,9 +1299,8 @@ class H(BaseHTTPRequestHandler):
     def api_subs_update_post(self, m, p, b, q):
         name = b.get("name") or ""
         d = load()
-        sb = active_core(d) == "singbox"
         okl, bad, msg2 = subs_update([name] if name else None, d)
-        msg = ("更新失败：" + "；".join(bad) if bad else "已更新：" + "；".join(okl) if sb else "已更新") \
+        msg = ("更新失败：" + "；".join(bad) if bad else "已更新：" + "；".join(okl) if okl else "已更新") \
             + ("；" + msg2 if msg2 and "无变化" not in msg2 else "")
         return self.reply(not bad, msg)
 

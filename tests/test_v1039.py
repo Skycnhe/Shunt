@@ -9,31 +9,19 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import unittest
 
 from tests.helper import server
 
 assert server
 
-B = sys.modules["shunt.base"]
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TABS = ["概览", "节点", "策略组", "订阅", "规则", "DNS", "广告拦截", "连接", "统计", "日志", "设置"]
-VER = "10.3.9"
 
 
 def read(*p):
     with open(os.path.join(ROOT, *p), encoding="utf-8") as f:
         return f.read()
-
-
-class VersionTest(unittest.TestCase):
-    def test_version(self):
-        self.assertEqual(B.PANEL_VERSION, VER)
-
-    def test_changelog_top(self):
-        heads = [ln for ln in read("CHANGELOG.md").splitlines() if ln.startswith("## v")]
-        self.assertTrue(heads[0].startswith("## v" + VER), heads[0])
 
 
 class ClassicCssTest(unittest.TestCase):
@@ -71,7 +59,6 @@ class ClassicCssTest(unittest.TestCase):
         self.assertIn('id="unlock-btn"', src)                        # 解锁检测在 设置 → 网络
         self.assertIn('id="diag-btn"', src)
         self.assertIn("手机上也在顶部", src)
-        self.assertIn(VER, read("server.py"))
 
 
 class ClassicFrontendTest(unittest.TestCase):

@@ -172,8 +172,48 @@ def _sub_get(url, ua):
     raise IOError(str(last)[:120])
 
 
+def _sub_nodes_save(s, nodes, errs, info, ua, note=""):
+    """按订阅的筛选 / 排除过滤后写入面板缓存；返回 (节点数, 消息)"""
+    flt, exc = s.get("filter") or "", s.get("exclude", DEFAULT_EXCLUDE) or ""
+    rf, re_ = rx(flt) if flt else None, rx(exc) if exc else None
+    nodes = [p for p in nodes if (not rf or rf.search(p["name"])) and not (re_ and re_.search(p["name"]))]
+    ui = {}
+    for part in info.split(";"):
+        k, _, v = part.strip().partition("=")
+        if k in ("upload", "download", "total", "expire") and v.strip().isdigit():
+            ui[k.capitalize()] = int(v)
+    write_json(sub_cache_path(s["name"]), {"name": s["name"], "updated": int(time.time()), "nodes": nodes,
+                                           "info": ui, "skipped": len(errs), "ua": ua})
+    return len(nodes), note + f"{len(nodes)} 个节点" + (f"（{len(errs)} 条无法识别已跳过）" if errs else "")
+
+
+def _mihomo_cache_fallback(s, ua):
+    """所有 UA 都没解析出节点时，用 mihomo 以前下载的 ./providers/<名>.yaml 兜底（刚从 mihomo 切到 sing-box 时用得上）。
+    只在面板还没有这个订阅的缓存、或 mihomo 的缓存比面板缓存新时才用：以前只要第一个 UA 没解析出节点就直接读它，
+    不再试下一个 UA，并照常报「N 个节点」——mihomo 缓存往往是切换内核前的旧文件，订阅明明换了节点，
+    「更新」一直显示成功、节点却一直是旧的。返回 (节点, 错误) 或 None"""
+    cache = os.path.join(CONF_DIR, "providers", safe(s["name"]) + ".yaml")
+    try:
+        mt = os.path.getmtime(cache)
+    except OSError:
+        return None
+    try:
+        if os.path.getmtime(sub_cache_path(s["name"])) >= mt:
+            return None
+    except OSError:
+        pass
+    try:
+        with open(cache, encoding="utf-8", errors="ignore") as f:
+            nodes, errs = parse_sub_text(f.read(), lambda u, _ua=ua: _sub_get(u, _ua))
+    except (OSError, ValueError):
+        return None
+    return (nodes, errs) if nodes else None
+
+
 def sb_fetch_sub(s, gh=""):
-    """下载并解析一个订阅，写入缓存；返回 (节点数, 消息)"""
+    """下载并解析一个订阅，写入缓存；返回 (节点数, 消息)。
+    依次试 SB_UA 里的每个 UA（每个 UA 先代理后直连），第一个解析出节点的结果写入缓存；
+    全部失败时抛 IOError，面板缓存里上次的节点保持不变（不会把旧节点当成这次更新的结果报成功）"""
     last = ""
     for ua in SB_UA:
         try:
@@ -206,27 +246,23 @@ def sb_fetch_sub(s, gh=""):
                         os.chmod(dbg, 0o600)
                 except OSError:
                     pass
-                # mihomo 已下载过这个订阅时，用它的缓存兜底
-                cache = os.path.join(CONF_DIR, "providers", safe(s["name"]) + ".yaml")
-                if os.path.isfile(cache):
-                    with open(cache, encoding="utf-8", errors="ignore") as f:
-                        nodes, errs = parse_sub_text(f.read(), lambda u, _ua=ua: _sub_get(u, _ua))
-                if not nodes:
-                    continue
-            flt, exc = s.get("filter") or "", s.get("exclude", DEFAULT_EXCLUDE) or ""
-            rf, re_ = rx(flt) if flt else None, rx(exc) if exc else None
-            nodes = [p for p in nodes if (not rf or rf.search(p["name"])) and not (re_ and re_.search(p["name"]))]
-            ui = {}
-            for part in info.split(";"):
-                k, _, v = part.strip().partition("=")
-                if k in ("upload", "download", "total", "expire") and v.strip().isdigit():
-                    ui[k.capitalize()] = int(v)
-            write_json(sub_cache_path(s["name"]), {"name": s["name"], "updated": int(time.time()), "nodes": nodes,
-                                                   "info": ui, "skipped": len(errs), "ua": ua})
-            return len(nodes), f"{len(nodes)} 个节点" + (f"（{len(errs)} 条无法识别已跳过）" if errs else "")
+                continue  # 换下一个 UA 再试（机场常按 UA 返回不同格式）
+            return _sub_nodes_save(s, nodes, errs, info, ua)
         except Exception as e:
             last = str(e)[:150]
-    raise IOError(last or "下载失败")
+    fb = _mihomo_cache_fallback(s, SB_UA[0])
+    if fb is not None:
+        return _sub_nodes_save(s, fb[0], fb[1], "", "", f"订阅这次没有解析出节点（{(last or '下载失败')[:80]}），暂用 mihomo 之前下载的缓存：")
+    raise IOError((last or "下载失败") + ("（已保留上次的节点）" if os.path.isfile(sub_cache_path(s["name"])) else ""))
+
+
+def _cached_names(name):
+    """面板缓存里某订阅的节点名列表（没有缓存时 None）：更新前后对比，节点没变时在结果里注明"""
+    try:
+        with open(sub_cache_path(name)) as f:
+            return [str(p.get("name") or "") for p in json.load(f).get("nodes") or [] if isinstance(p, dict)]
+    except (OSError, ValueError, AttributeError):
+        return None
 
 
 def sb_update_subs(names=None, d=None):
@@ -239,7 +275,10 @@ def sb_update_subs(names=None, d=None):
 
     def one(s):
         try:
+            before = _cached_names(s["name"])
             n, msg = sb_fetch_sub(s, gh)
+            if before and before == _cached_names(s["name"]):
+                msg += "（节点与上次相同）"
             with res_lock:
                 ok.append(f"{s['name']}：{msg}")
         except Exception as e:

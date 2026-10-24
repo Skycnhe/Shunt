@@ -76,6 +76,26 @@ def sched_event(msg):
     print(time.strftime("%F %T"), "[schedule]", msg, flush=True)
 
 
+MH_SAME_NOTE = "（节点与更新前完全相同：mihomo 拿到的订阅内容没有变化，或机场回复了 304 未修改）"
+
+
+def mh_provider_names(name):
+    """mihomo 里某个订阅（proxy-provider）当前的节点名列表；核心没应答 / 没有这个订阅时返回 None"""
+    j = core_json("/providers/proxies/" + quote(name, safe=""), timeout=5)
+    if not isinstance(j, dict) or not isinstance(j.get("proxies"), list):
+        return None
+    return [x.get("name") for x in j["proxies"] if isinstance(x, dict)]
+
+
+def mh_unchanged_note(before, after):
+    """mihomo 更新订阅前后节点名单完全一样时给出提示。mihomo 默认开启 ETag：机场 / CDN 回复 304，
+    或返回的内容与本地缓存逐字节相同，mihomo 只刷新「更新时间」、继续用本地 ./providers/<名>.yaml，
+    更新接口照样回 204。以前面板只报「已更新」，看不出节点其实没换"""
+    if before and after is not None and before == after:
+        return f"：{len(after)} 个节点" + MH_SAME_NOTE
+    return f"：{len(after)} 个节点" if after is not None else ""
+
+
 def subs_update(names=None, d=None, where=None):
     """更新订阅（names 为空 = 全部）并刷新地区组：sing-box 由面板下载，mihomo 让核心重新拉取。
     返回 (成功列表, 失败列表「名称：原因」, 刷新地区组的提示)；给了 where 时刷新地区组出错只记日志不抛出"""
@@ -85,11 +105,12 @@ def subs_update(names=None, d=None, where=None):
     else:
         okl, bad = [], []
         for nm in names or [s["name"] for s in d["subs"]]:
+            before = mh_provider_names(nm)
             code, raw = core("PUT", "/providers/proxies/" + quote(nm, safe=""), timeout=120)
             if code >= 300:
                 bad.append(nm + "：" + raw.decode(errors="ignore")[:100])
             else:
-                okl.append(nm)
+                okl.append(nm + mh_unchanged_note(before, mh_provider_names(nm)))
     try:
         _, msg = refresh_regions()
     except Exception as e:

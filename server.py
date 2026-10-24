@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "10.3.9"
+PANEL_VERSION = "10.3.10"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -315,7 +315,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "10.3.9"
+PANEL_VERSION = "10.3.10"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -3564,8 +3564,48 @@ def _sub_get(url, ua):
     raise IOError(str(last)[:120])
 
 
+def _sub_nodes_save(s, nodes, errs, info, ua, note=""):
+    """按订阅的筛选 / 排除过滤后写入面板缓存；返回 (节点数, 消息)"""
+    flt, exc = s.get("filter") or "", s.get("exclude", DEFAULT_EXCLUDE) or ""
+    rf, re_ = rx(flt) if flt else None, rx(exc) if exc else None
+    nodes = [p for p in nodes if (not rf or rf.search(p["name"])) and not (re_ and re_.search(p["name"]))]
+    ui = {}
+    for part in info.split(";"):
+        k, _, v = part.strip().partition("=")
+        if k in ("upload", "download", "total", "expire") and v.strip().isdigit():
+            ui[k.capitalize()] = int(v)
+    write_json(sub_cache_path(s["name"]), {"name": s["name"], "updated": int(time.time()), "nodes": nodes,
+                                           "info": ui, "skipped": len(errs), "ua": ua})
+    return len(nodes), note + f"{len(nodes)} 个节点" + (f"（{len(errs)} 条无法识别已跳过）" if errs else "")
+
+
+def _mihomo_cache_fallback(s, ua):
+    """所有 UA 都没解析出节点时，用 mihomo 以前下载的 ./providers/<名>.yaml 兜底（刚从 mihomo 切到 sing-box 时用得上）。
+    只在面板还没有这个订阅的缓存、或 mihomo 的缓存比面板缓存新时才用：以前只要第一个 UA 没解析出节点就直接读它，
+    不再试下一个 UA，并照常报「N 个节点」——mihomo 缓存往往是切换内核前的旧文件，订阅明明换了节点，
+    「更新」一直显示成功、节点却一直是旧的。返回 (节点, 错误) 或 None"""
+    cache = os.path.join(CONF_DIR, "providers", safe(s["name"]) + ".yaml")
+    try:
+        mt = os.path.getmtime(cache)
+    except OSError:
+        return None
+    try:
+        if os.path.getmtime(sub_cache_path(s["name"])) >= mt:
+            return None
+    except OSError:
+        pass
+    try:
+        with open(cache, encoding="utf-8", errors="ignore") as f:
+            nodes, errs = parse_sub_text(f.read(), lambda u, _ua=ua: _sub_get(u, _ua))
+    except (OSError, ValueError):
+        return None
+    return (nodes, errs) if nodes else None
+
+
 def sb_fetch_sub(s, gh=""):
-    """下载并解析一个订阅，写入缓存；返回 (节点数, 消息)"""
+    """下载并解析一个订阅，写入缓存；返回 (节点数, 消息)。
+    依次试 SB_UA 里的每个 UA（每个 UA 先代理后直连），第一个解析出节点的结果写入缓存；
+    全部失败时抛 IOError，面板缓存里上次的节点保持不变（不会把旧节点当成这次更新的结果报成功）"""
     last = ""
     for ua in SB_UA:
         try:
@@ -3598,27 +3638,23 @@ def sb_fetch_sub(s, gh=""):
                         os.chmod(dbg, 0o600)
                 except OSError:
                     pass
-                # mihomo 已下载过这个订阅时，用它的缓存兜底
-                cache = os.path.join(CONF_DIR, "providers", safe(s["name"]) + ".yaml")
-                if os.path.isfile(cache):
-                    with open(cache, encoding="utf-8", errors="ignore") as f:
-                        nodes, errs = parse_sub_text(f.read(), lambda u, _ua=ua: _sub_get(u, _ua))
-                if not nodes:
-                    continue
-            flt, exc = s.get("filter") or "", s.get("exclude", DEFAULT_EXCLUDE) or ""
-            rf, re_ = rx(flt) if flt else None, rx(exc) if exc else None
-            nodes = [p for p in nodes if (not rf or rf.search(p["name"])) and not (re_ and re_.search(p["name"]))]
-            ui = {}
-            for part in info.split(";"):
-                k, _, v = part.strip().partition("=")
-                if k in ("upload", "download", "total", "expire") and v.strip().isdigit():
-                    ui[k.capitalize()] = int(v)
-            write_json(sub_cache_path(s["name"]), {"name": s["name"], "updated": int(time.time()), "nodes": nodes,
-                                                   "info": ui, "skipped": len(errs), "ua": ua})
-            return len(nodes), f"{len(nodes)} 个节点" + (f"（{len(errs)} 条无法识别已跳过）" if errs else "")
+                continue  # 换下一个 UA 再试（机场常按 UA 返回不同格式）
+            return _sub_nodes_save(s, nodes, errs, info, ua)
         except Exception as e:
             last = str(e)[:150]
-    raise IOError(last or "下载失败")
+    fb = _mihomo_cache_fallback(s, SB_UA[0])
+    if fb is not None:
+        return _sub_nodes_save(s, fb[0], fb[1], "", "", f"订阅这次没有解析出节点（{(last or '下载失败')[:80]}），暂用 mihomo 之前下载的缓存：")
+    raise IOError((last or "下载失败") + ("（已保留上次的节点）" if os.path.isfile(sub_cache_path(s["name"])) else ""))
+
+
+def _cached_names(name):
+    """面板缓存里某订阅的节点名列表（没有缓存时 None）：更新前后对比，节点没变时在结果里注明"""
+    try:
+        with open(sub_cache_path(name)) as f:
+            return [str(p.get("name") or "") for p in json.load(f).get("nodes") or [] if isinstance(p, dict)]
+    except (OSError, ValueError, AttributeError):
+        return None
 
 
 def sb_update_subs(names=None, d=None):
@@ -3631,7 +3667,10 @@ def sb_update_subs(names=None, d=None):
 
     def one(s):
         try:
+            before = _cached_names(s["name"])
             n, msg = sb_fetch_sub(s, gh)
+            if before and before == _cached_names(s["name"]):
+                msg += "（节点与上次相同）"
             with res_lock:
                 ok.append(f"{s['name']}：{msg}")
         except Exception as e:
@@ -8768,6 +8807,26 @@ def sched_event(msg):
     print(time.strftime("%F %T"), "[schedule]", msg, flush=True)
 
 
+MH_SAME_NOTE = "（节点与更新前完全相同：mihomo 拿到的订阅内容没有变化，或机场回复了 304 未修改）"
+
+
+def mh_provider_names(name):
+    """mihomo 里某个订阅（proxy-provider）当前的节点名列表；核心没应答 / 没有这个订阅时返回 None"""
+    j = core_json("/providers/proxies/" + quote(name, safe=""), timeout=5)
+    if not isinstance(j, dict) or not isinstance(j.get("proxies"), list):
+        return None
+    return [x.get("name") for x in j["proxies"] if isinstance(x, dict)]
+
+
+def mh_unchanged_note(before, after):
+    """mihomo 更新订阅前后节点名单完全一样时给出提示。mihomo 默认开启 ETag：机场 / CDN 回复 304，
+    或返回的内容与本地缓存逐字节相同，mihomo 只刷新「更新时间」、继续用本地 ./providers/<名>.yaml，
+    更新接口照样回 204。以前面板只报「已更新」，看不出节点其实没换"""
+    if before and after is not None and before == after:
+        return f"：{len(after)} 个节点" + MH_SAME_NOTE
+    return f"：{len(after)} 个节点" if after is not None else ""
+
+
 def subs_update(names=None, d=None, where=None):
     """更新订阅（names 为空 = 全部）并刷新地区组：sing-box 由面板下载，mihomo 让核心重新拉取。
     返回 (成功列表, 失败列表「名称：原因」, 刷新地区组的提示)；给了 where 时刷新地区组出错只记日志不抛出"""
@@ -8777,11 +8836,12 @@ def subs_update(names=None, d=None, where=None):
     else:
         okl, bad = [], []
         for nm in names or [s["name"] for s in d["subs"]]:
+            before = mh_provider_names(nm)
             code, raw = core("PUT", "/providers/proxies/" + quote(nm, safe=""), timeout=120)
             if code >= 300:
                 bad.append(nm + "：" + raw.decode(errors="ignore")[:100])
             else:
-                okl.append(nm)
+                okl.append(nm + mh_unchanged_note(before, mh_provider_names(nm)))
     try:
         _, msg = refresh_regions()
     except Exception as e:
@@ -11321,9 +11381,8 @@ class H(BaseHTTPRequestHandler):
     def api_subs_update_post(self, m, p, b, q):
         name = b.get("name") or ""
         d = load()
-        sb = active_core(d) == "singbox"
         okl, bad, msg2 = subs_update([name] if name else None, d)
-        msg = ("更新失败：" + "；".join(bad) if bad else "已更新：" + "；".join(okl) if sb else "已更新") \\
+        msg = ("更新失败：" + "；".join(bad) if bad else "已更新：" + "；".join(okl) if okl else "已更新") \\
             + ("；" + msg2 if msg2 and "无变化" not in msg2 else "")
         return self.reply(not bad, msg)
 
