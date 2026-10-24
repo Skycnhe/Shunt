@@ -166,7 +166,8 @@ class SlashNameQuoteTest(unittest.TestCase):
         d["subs"] = [{"name": "a/b", "url": "https://a.example/s", "filter": "", "exclude": ""}]
         h = mock.MagicMock()
         with mock.patch.object(WA, "load", return_value=d), mock.patch.object(WA, "active_core", return_value="mihomo"), \
-                mock.patch.object(WA, "core", return_value=(204, b"")) as core, mock.patch.object(WA, "refresh_regions", return_value=(True, "")):
+                mock.patch.object(SC, "core", return_value=(204, b"")) as core, mock.patch.object(WA, "refresh_regions", return_value=(True, "")):
+            # v8.4.14：mihomo 的订阅更新统一走 schedule.mh_update_subs（与定时任务共用，更新前后对比节点名单）
             WA.ROUTES[("POST", "/api/subs/update")](h, "POST", "/api/subs/update", {"name": "a/b"}, "")
         self.assertEqual(core.call_args[0][1], "/providers/proxies/a%2Fb")
 

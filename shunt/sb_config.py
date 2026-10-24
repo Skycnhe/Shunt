@@ -5,7 +5,7 @@ from .base import (
     AB_DIR, BUILTIN_POLICIES, CN_ECS, CTRL_HOST, CTRL_PORT, G_OTHER, G_SEL, MIHOMO_LOG, MIXED, REGIONS, UA, dl_check, read_full, wd_hold)
 from .errlog import log_err
 from .data import auto_name, lb_dropped_names, lb_names, lb_old_name, load, safe, write_json
-from .groups import PROV, clean_custom_group, gcfg, pick_plan, rx, sub_orig_nodes
+from .groups import clean_custom_group, gcfg, pick_plan, prov_set, rx, sub_orig_nodes
 from .mihomo import BUILTIN_GEO, build_config, build_rule_providers, dns_cfg, policy_parts, tun_params, write_atomic, write_config
 from .corehttp import core_json
 from .sb_common import CORE_PID, SB_BIN, SB_CONF, SB_DIR, SB_RULE_DIR, SB_STATE, active_core
@@ -20,7 +20,8 @@ from .notify import core_alive
 def build_singbox(d):
     """把 build_config 生成的 mihomo 结构翻译成 sing-box 配置；返回 (配置, 警告列表, 需要的规则集文件)"""
     sub_out = sb_sub_outbounds(d)
-    PROV.update(t=time.time(), data={k: [n for n, _ in v] for k, v in sub_out.items()})
+    # 经 prov_set 写入：名单变了要推进 provider_rev()，/api/state 的策略组缓存和 /api/ping 版本号才会更新
+    prov_set(time.time(), {k: [n for n, _ in v] for k, v in sub_out.items()})
     cfg = build_config(d)
     v6 = bool(d.get("ipv6"))
     gc = gcfg(d)

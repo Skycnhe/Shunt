@@ -41,7 +41,7 @@ from .adblock import AB_CACHE, AB_STATE, ab_check, ab_compose, ab_meta, adblock_
 from .live import LIVE, memory_once
 from .nodeprobe import UI_BUDGET, fill_group, probe_nodes
 from .logclean import LOG_STATE, log_clean, log_sizes
-from .schedule import SCHED, TASK_NAMES, run_task, sched_event
+from .schedule import SCHED, TASK_NAMES, mh_update_subs, run_task, sched_event
 from .devices import device_map, read_leases, tun_runtime_error
 from .diag import diagnose
 from .dnsleak import antileak_dns, dns_route, leak_check
@@ -1291,13 +1291,10 @@ class H(BaseHTTPRequestHandler):
             ok2, msg2 = refresh_regions()
             msg = ("已更新：" + "；".join(okl) if not bad else "更新失败：" + "；".join(bad)) + ("；" + msg2 if msg2 and "无变化" not in msg2 else "")
             return self.reply(not bad, msg)
-        bad = []
-        for nm in names:
-            code, raw = core("PUT", "/providers/proxies/" + quote(nm, safe=""), timeout=120)
-            if code >= 300:
-                bad.append(nm + "：" + raw.decode(errors="ignore")[:100])
+        okl, bad = mh_update_subs(names)
         ok2, msg2 = refresh_regions()
-        msg = ("已更新" if not bad else "更新失败：" + "；".join(bad)) + ("；" + msg2 if msg2 and "无变化" not in msg2 else "")
+        msg = (("已更新：" + "；".join(okl) if okl else "已更新") if not bad else "更新失败：" + "；".join(bad)) \
+            + ("；" + msg2 if msg2 and "无变化" not in msg2 else "")
         return self.reply(not bad, msg)
 
     @api_route("/api/stats", "GET")
