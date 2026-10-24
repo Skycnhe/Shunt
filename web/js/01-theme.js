@@ -55,7 +55,7 @@ async function bgClear(){if(BG.src.startsWith('/bg'))try{await api('/api/bg','DE
 // 路由器上的图可能已被每日更新替换：用新的修改时间刷新地址，避免浏览器一直显示缓存的旧图
 async function bgSync(){if(BG.src&&!BG.src.startsWith('/bg'))return;
   try{const r=await api('/api/bg');bgMeta(r);const s=r.exists?'/bg?v='+r.v:'';if(s!==BG.src){BG.src=s;bgSave()}}catch(e){}}
-async function renderLook(){renderSkins();bgApply();bgSync()}
+async function renderLook(){renderSkins();renderLayoutOpt();bgApply();bgSync()}
 bgApply();
 
 async function api(path,method='GET',body){
@@ -64,8 +64,12 @@ async function api(path,method='GET',body){
   if(!r.ok)throw new Error(j.message||('HTTP '+r.status));return j}
 const core=(p,m,b)=>api('/api/core'+p,m,b);
 
-// 左侧抽屉导航：概览是主页（抽屉顶部的 Shunt 图标回主页），其余页面列在抽屉里
-const NAV_ICO={"节点": "<circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M3 12h18M12 3c2.8 3.2 2.8 14.8 0 18M12 3c-2.8 3.2-2.8 14.8 0 18\"/>",
+// 导航有两种布局（设置 → 外观 → 界面布局，按设备保存在 localStorage mp_layout）：
+// 抽屉（默认）：概览是主页（抽屉顶部的 Shunt 图标回主页），其余页面列在左侧抽屉里；
+// 经典：顶栏下方横向标签栏（含概览），手机上是底部导航栏（PRIMARY 四项 +「更多」弹层）
+const PRIMARY=['概览','节点','连接','日志'];
+const NAV_ICO={"概览": "<path d=\"M3 13h8V3H3zM13 21h8V11h-8zM3 21h8v-6H3zM13 3v6h8V3z\"/>",
+  "更多": "<circle cx=\"5\" cy=\"12\" r=\"1.6\"/><circle cx=\"12\" cy=\"12\" r=\"1.6\"/><circle cx=\"19\" cy=\"12\" r=\"1.6\"/>","节点": "<circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M3 12h18M12 3c2.8 3.2 2.8 14.8 0 18M12 3c-2.8 3.2-2.8 14.8 0 18\"/>",
   "策略组": "<rect x=\"3\" y=\"4\" width=\"7\" height=\"7\" rx=\"1.5\"/><rect x=\"14\" y=\"4\" width=\"7\" height=\"7\" rx=\"1.5\"/><rect x=\"3\" y=\"14\" width=\"7\" height=\"7\" rx=\"1.5\"/><path d=\"M17.5 14v7M14 17.5h7\"/>",
   "订阅": "<path d=\"M5 5a14 14 0 0 1 14 14M5 11a8 8 0 0 1 8 8\"/><circle cx=\"6\" cy=\"18\" r=\"1.6\"/>",
   "规则": "<path d=\"M9 6h11M9 12h11M9 18h11\"/><path d=\"M4 6h.01M4 12h.01M4 18h.01\"/>",
@@ -76,10 +80,14 @@ const NAV_ICO={"节点": "<circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M3 12h1
   "日志": "<path d=\"M6 3h9l4 4v14H6z\"/><path d=\"M9 11h7M9 15h7\"/>",
   "设置": "<circle cx=\"12\" cy=\"12\" r=\"3\"/><path d=\"M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z\"/>"};
 const svgI=t=>`<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${NAV_ICO[t]||''}</svg>`;
-// 切页后重画：抽屉里的页面列表（当前页高亮）、顶栏 Shunt 旁的当前页名、只显示当前页的 section
-function nav(){const home=TAB===HOME;
+// 切页 / 换布局后重画：抽屉里的页面列表或经典标签栏（当前页高亮）、顶栏 Shunt 旁的当前页名、只显示当前页的 section
+function nav(){const home=TAB===HOME,cl=LAYOUT==='classic',tb=$('#tabbar');
+  if(cl){const np=!PRIMARY.includes(TAB);
+    tb.innerHTML=TABS.map(t=>`<button type="button" class="${t===TAB?'on':''}${PRIMARY.includes(t)?'':' np'}"${t===TAB?' aria-current="page"':''} onclick="pickTab(${jsq(t)})">${svgI(t)}<span>${esc(t)}</span></button>`).join('')
+      +`<button type="button" class="more${np?' on':''}" id="more-btn" onclick="openMore()" aria-haspopup="dialog" aria-expanded="${moreOpen()}">${svgI('更多')}<span>${esc(np?TAB:'更多')}</span></button>`}
+  else if(tb.innerHTML)tb.innerHTML='';
   $('#nav').innerHTML=TABS.filter(t=>t!==HOME).map(t=>`<button type="button" class="${t===TAB?'on':''}"${t===TAB?' aria-current="page"':''} onclick="pickNav(${jsq(t)})">${svgI(t)}<span>${esc(t)}</span></button>`).join('');
   $('#d-home').classList.toggle('on',home);if(home)$('#d-home').setAttribute('aria-current','page');else $('#d-home').removeAttribute('aria-current');
-  const pg=$('#h-page');pg.textContent=home?'':TAB;pg.classList.toggle('hide',home);
-  $('#menu-btn').setAttribute('aria-label',(home?'Shunt 主页':'Shunt · '+TAB)+'，打开菜单');
+  const pg=$('#h-page');pg.textContent=home||cl?'':TAB;pg.classList.toggle('hide',home||cl);
+  $('#menu-btn').setAttribute('aria-label',cl?'Shunt，回到概览':(home?'Shunt 主页':'Shunt · '+TAB)+'，打开菜单');
   document.querySelectorAll('section').forEach(s=>s.classList.toggle('hide',s.dataset.tab!==TAB))}
