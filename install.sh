@@ -200,8 +200,9 @@ if [ -z "$CT" ]; then
 fi
 [ -c /dev/net/tun ] || { mkdir -p /dev/net && mknod /dev/net/tun c 10 200 2>/dev/null && chmod 666 /dev/net/tun; }
 TUN_OK=""; [ -c /dev/net/tun ] && python3 -c "import fcntl,os,struct;f=os.open('/dev/net/tun',os.O_RDWR);fcntl.ioctl(f,0x400454ca,struct.pack('16sH',b'shuntprobe',0x1001))" 2>/dev/null && TUN_OK=1
+# 探测语句与 tproxy.sh 实际下发的写法一致：inet 表里 tproxy ip 前不加 meta nfproto ipv4 时 nft 会拒绝，以前因此误报 TProxy 不可用
 TP_OK=""; nft -f - 2>/dev/null <<'NFT' && TP_OK=1
-table inet shunt_probe { chain p { type filter hook prerouting priority mangle; meta l4proto tcp tproxy ip to 127.0.0.1:1 } }
+table inet shunt_probe { chain p { type filter hook prerouting priority mangle; meta nfproto ipv4 meta l4proto tcp tproxy ip to 127.0.0.1:1 } }
 NFT
 nft delete table inet shunt_probe 2>/dev/null || true
 [ -n "$TP_OK" ] && echo ">> TProxy 可用（nftables tproxy）" || echo "!! TProxy 不可用：内核缺少 nft_tproxy / nf_tables"

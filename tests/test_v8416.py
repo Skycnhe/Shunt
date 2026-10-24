@@ -71,6 +71,9 @@ class DockerfileTest(unittest.TestCase):
         e = read("docker", "entrypoint.sh")
         self.assertIn("meta nfproto ipv4 meta l4proto tcp tproxy ip to 127.0.0.1:1", e)
         self.assertIn("meta nfproto ipv4 meta l4proto { tcp, udp } meta mark set $MARK tproxy ip to", read("tproxy.sh"))
+        # install.sh 的探测同样修正：GitHub runner（Ubuntu 24.04 nft）实测不带 nfproto 的写法被拒绝、带上的通过
+        self.assertIn("meta nfproto ipv4 meta l4proto tcp tproxy ip to 127.0.0.1:1", read("install.sh"))
+        self.assertNotIn("mangle; meta l4proto tcp tproxy", read("install.sh"))
 
     def test_runtime_deps_match_install(self):
         inst = re.search(r'^PKGS="([^"]+)"', read("install.sh"), re.M).group(1).split()
