@@ -1,6 +1,6 @@
-// v10.3.8 回归测试用（tests/test_v1038.py 调用）：在 node 里用最小 DOM 桩跑 00-core.js、01-theme.js 的 nav() 和 02-layout.js，
-// 验证界面布局：默认抽屉、localStorage mp_layout 持久化、经典布局有横向标签栏且含「概览」、抽屉布局无标签栏、
-// 两种布局即时切换（关闭抽屉 / 「更多」弹层、焦点、左上角按钮属性）、手机端底部栏 +「更多」、共用 go() 与 #hash
+// 界面布局回归测试用（tests/test_v1038.py、tests/test_v1039.py 调用）：在 node 里用最小 DOM 桩跑 00-core.js、01-theme.js 的 nav() 和 02-layout.js，
+// 验证：默认抽屉、localStorage mp_layout 持久化、经典布局有横向标签栏且含全部页面（含「概览」）、抽屉布局无标签栏、
+// 两种布局即时切换（关闭抽屉、焦点、左上角按钮属性）、v10.3.9 起手机上经典布局也是顶部标签栏（无底部栏 /「更多」）、共用 go() 与 #hash
 const fs=require('fs'),vm=require('vm');
 const root=process.argv[2];
 const src=f=>fs.readFileSync(root+'/web/js/'+f,'utf8');
@@ -45,12 +45,12 @@ function make(store,mobile){
   const core=src('00-core.js').replace(/^const \$=.*$/m,'');
   vm.runInContext(core+'\n'+navFn+'\n'+src('02-layout.js')+`
 var stopLive=()=>{};${['loadProxies','loadGroupsPage','loadSubs','loadRules','loadDNSPage','loadAB','loadStats','openLogs','renderSettings','renderOverview','loadDevs'].map(f=>`var ${f}=()=>LOADED.push('${f}');`).join('')}
-this.R={go,openDrawer,closeDrawer,drawerOpen,setLayout,brandClick,openMore,closeMore,pickMore,pickTab,moreOpen,placeNav,getTab:()=>TAB,getLayout:()=>LAYOUT};`,ctx);
+this.R={go,openDrawer,closeDrawer,drawerOpen,setLayout,brandClick,pickTab,getTab:()=>TAB,getLayout:()=>LAYOUT,has:n=>{try{return typeof eval(n)==='function'}catch(e){return false}}};`,ctx);
   const key=k=>docListeners.keydown.forEach(f=>f({key:k,preventDefault(){},target:ctx.document.activeElement}));
   const snap=()=>({layout:ctx.R.getLayout(),attr:html.dataset.layout,tab:ctx.R.getTab(),
     tabs:E.tabbar.children.map(b=>b.textContent),tabCur:E.tabbar.children.filter(b=>b.attrs['aria-current']==='page').map(b=>b.textContent),
     tabOn:E.tabbar.children.filter(b=>b.cls.has('on')).map(b=>b.textContent),np:E.tabbar.children.filter(b=>b.cls.has('np')).map(b=>b.textContent),
-    drawerItems:E.nav.children.map(b=>b.textContent),drawerOpen:ctx.R.drawerOpen(),moreOpen:ctx.R.moreOpen(),
+    drawerItems:E.nav.children.map(b=>b.textContent),drawerOpen:ctx.R.drawerOpen(),moreBtn:E.tabbar.children.some(b=>b.id==='more-btn'||b.cls.has('more')),icons:/<svg/.test(E.tabbar.innerHTML),
     btn:{exp:E['menu-btn'].getAttribute('aria-expanded'),ctl:E['menu-btn'].getAttribute('aria-controls'),pop:E['menu-btn'].getAttribute('aria-haspopup'),label:E['menu-btn'].getAttribute('aria-label'),title:E['menu-btn'].getAttribute('title')},
     page:E['h-page'].textContent,pageHidden:E['h-page'].cls.has('hide'),bottom:E.tabbar.cls.has('bottom'),inBody:E.tabbar.parentNode===body,hasbn:body.cls.has('hasbn'),
     focus:ctx.document.activeElement===E['menu-btn']?'menu-btn':ctx.document.activeElement.dataset&&ctx.document.activeElement.dataset.ly?'ly:'+ctx.document.activeElement.dataset.ly:(ctx.document.activeElement.textContent||ctx.document.activeElement.id),
@@ -74,15 +74,13 @@ const out={};
   m.R.openDrawer();out.drawerOpened=m.R.drawerOpen();m.R.setLayout('classic');out.toClassicFromOpenDrawer=m.snap();
   // 6. 另一个标签页改了布局（storage 事件）：跟着切换，不重复写 localStorage
   const n=m.sets.length;m.store.mp_layout='drawer';m.listeners.storage({key:'mp_layout',newValue:'drawer'});out.storageEvt=m.snap();out.storageEvtWrites=m.sets.length-n}
-// 7. 经典布局 + 手机宽度：底部栏（概览 / 节点 / 连接 / 日志 + 更多），「更多」弹层，Esc，弹层开着时切换布局
+// 7. 经典布局 + 手机宽度（v10.3.9）：标签栏仍在顶栏里（不移到 body 底部），含全部页面，没有「更多」；切页 / 切换布局 / 窗口宽度变化都不会生成底部栏
 {const mob={on:true};const m=make({mp_layout:'classic'},mob);m.R.go('概览',1);out.mobile=m.snap();
-  m.ctx.document.activeElement=m.E.tabbar.children.find(b=>b.id==='more-btn');m.R.openMore();
-  out.moreOpen={open:m.R.moreOpen(),items:m.E['more-list'].children.map(b=>b.textContent),focus:m.ctx.document.activeElement.textContent,exp:m.E.tabbar.children.find(b=>b.id==='more-btn').attrs['aria-expanded']};
-  m.key('Escape');out.moreEsc={open:m.R.moreOpen(),focus:m.ctx.document.activeElement.id};
-  m.R.openMore();m.R.pickMore('设置');out.morePick=m.snap();
-  m.R.openMore();m.ctx.document.activeElement=m.E['more-list'].children[0];m.R.setLayout('drawer');out.mobileToDrawer=m.snap();
-  m.R.setLayout('classic');out.mobileBack=m.snap();
-  mob.on=false;m.mq();out.mqDesktop=m.snap();mob.on=true;m.mq();out.mqMobile=m.snap()}
+  m.ctx.document.activeElement=m.E.tabbar.children[9];m.R.pickTab('日志');out.mobilePick=m.snap();
+  m.R.setLayout('drawer');out.mobileToDrawer=m.snap();m.R.setLayout('classic');out.mobileBack=m.snap();
+  mob.on=false;m.mq();out.mqDesktop=m.snap();mob.on=true;m.mq();out.mqMobile=m.snap();
+  m.key('Escape');out.mobileEsc=m.snap();
+  out.gone=['openMore','closeMore','pickMore','moreOpen','placeNav'].filter(n=>m.R.has(n));out.probe=m.R.has('go')&&m.R.has('pickTab')}
 // 8. 刷新（新上下文读 localStorage）后保持上次的选择
 {const store={};const a=make(store,{on:false});a.R.setLayout('classic');const b=make(store,{on:false});b.R.go('概览',1);out.persistClassic=b.snap();
   b.R.setLayout('drawer');const c=make(store,{on:false});c.R.go('概览',1);out.persistDrawer=c.snap()}

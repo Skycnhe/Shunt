@@ -28,7 +28,6 @@
   <nav class="dnav" id="nav" aria-label="页面"></nav>
   <div class="dfoot" id="d-foot"></div>
 </aside>
-<div id="more-sheet" class="hide" onclick="if(event.target===this)closeMore()"><div class="sheet glass" id="more-list" role="dialog" aria-modal="true" aria-label="更多页面"></div></div>
 <div id="app" class="hide">
 <header class="glass">
   <div class="hrow">
@@ -416,7 +415,7 @@
       <div class="row mt"><span class="sp"></span><button class="btn g" onclick="tgTest()">发送测试</button><button class="btn" onclick="saveTg()">保存</button></div></div>
     <div data-sg="look" class="card" id="ly-card"><h3>界面布局</h3><div class="mut small" style="margin:-4px 0 12px">只保存在当前浏览器，手机和电脑可以分别选择；选择后立即生效</div>
       <div class="lyopts" id="ly-opts" role="radiogroup" aria-label="界面布局">
-        <button type="button" role="radio" aria-checked="false" data-ly="classic" onclick="setLayout('classic')"><b>经典（横向标签栏）</b><span>顶部横排页面标签，含「概览」；手机上为底部导航栏 +「更多」</span></button>
+        <button type="button" role="radio" aria-checked="false" data-ly="classic" onclick="setLayout('classic')"><b>经典（横向标签栏）</b><span>顶部紧凑统计条 + 横排页面标签（含「概览」），手机上也在顶部，放不下自动换行</span></button>
         <button type="button" role="radio" aria-checked="false" data-ly="drawer" onclick="setLayout('drawer')"><b>抽屉菜单（新）</b><span>点左上角 Shunt 图标从左侧滑出菜单，概览为主页</span></button>
       </div></div>
     <div data-sg="look" class="card"><h3>主题</h3><div class="mut small" style="margin:-4px 0 12px">只保存在当前浏览器，每台设备可以用不同主题</div><div class="skins" id="skins"></div></div>
