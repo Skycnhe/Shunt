@@ -29,7 +29,7 @@ jobs:
           PY
           node --check /tmp/panel.js
       - name: shell 语法
-        run: for f in install.sh offline.sh tproxy.sh selftest.sh init.d/* .github/offline/build.sh; do sh -n "$f" || exit 1; done
+        run: for f in install.sh offline.sh tproxy.sh selftest.sh init.d/* .github/offline/build.sh docker/entrypoint.sh; do sh -n "$f" || exit 1; done
       - name: 部署清单里的文件都存在
         run: grep -v '^\s*#' update-files.txt | sed '/^\s*$/d' | while read -r f; do [ -f "$f" ] || { echo "缺少 $f"; exit 1; }; done
       - name: 能导入并生成配置

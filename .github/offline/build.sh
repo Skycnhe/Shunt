@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # 在 Alpine 容器里运行（容器架构 = 目标架构）：把面板、全部内核、geo 数据、sing-box 规则集和 apk 依赖打成离线安装包
 # 用法: sh .github/offline/build.sh <仓库目录> <输出目录>
+# Dockerfile 也用它准备镜像内容：NO_APK=1 不下载 apk 离线源，NO_TAR=1 只留下 /tmp/shunt-offline 不打 tar 包
 set -eu
 SRC=$(cd "$1" && pwd); OUT=$(mkdir -p "$2" && cd "$2" && pwd)
 REL=$(cut -d. -f1,2 /etc/alpine-release); M=$(uname -m)
@@ -21,13 +22,17 @@ cp server.py index.html tproxy.sh selftest.sh install.sh "$W/"
 for f in README.md CHANGELOG.md LICENSE icon.svg icon-180.png icon-512.png offline.sh; do [ -f "$f" ] && cp "$f" "$W/"; done
 cp -r init.d "$W/"
 
-echo ">> apk 依赖 (Alpine $REL $M)"
 PKGS="curl wget ca-certificates python3 nftables iptables ip6tables iproute2 gzip tar tzdata kmod coreutils openssl py3-yaml chrony"
+if [ -n "${NO_APK:-}" ]; then  # Docker 镜像构建（Dockerfile）复用本脚本：依赖由镜像自己 apk add，不需要离线源
+  echo ">> 跳过 apk 依赖（NO_APK）"
+else
+echo ">> apk 依赖 (Alpine $REL $M)"
 apk update >/dev/null
 apk fetch -R -o "$W/offline/apk/$M" $PKGS >/dev/null
 apk index --allow-untrusted -o "$W/offline/apk/$M/APKINDEX.tar.gz" "$W/offline/apk/$M"/*.apk  # apk 按 <源>/<架构>/APKINDEX.tar.gz 读取
 ln -s "$M" "$W/offline/apk/noarch"  # apk v3 按包自身的架构找文件，noarch 包也指到同一目录
 echo "$PKGS" > "$W/offline/apk/PKGS"
+fi
 
 echo ">> mihomo"
 MV=$($C https://github.com/MetaCubeX/mihomo/releases/latest/download/version.txt | tr -d ' \r\n')
@@ -79,6 +84,7 @@ MIHOMO_BIN="$W/offline/bin/mihomo" GEO_DIR="$W/offline/geo" SB_BIN="$W/offline/b
 echo ">> 自测 mihomo Smart"
 MIHOMO_BIN="$W/offline/bin/mihomo-smart" GEO_DIR="$W/offline/geo" SB_BIN=/nonexistent \
   sh "$W/selftest.sh" || { echo "!! mihomo Smart 自测失败，停止打包"; exit 1; }
+[ -n "${NO_TAR:-}" ] && { echo ">> 已准备好 $W（NO_TAR，不打包）"; exit 0; }
 NAME="shunt-offline-$M-alpine$REL.tar.gz"
 tar -C /tmp -czf "$OUT/$NAME" shunt-offline
 ls -lh "$OUT/$NAME"

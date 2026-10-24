@@ -49,6 +49,78 @@ tar xzf shunt-offline-aarch64-alpine3.24.tar.gz && sh shunt-offline/install.sh
 
 架构看 `uname -m`，Alpine 版本看 `cat /etc/alpine-release`。已安装的设备加 `--update-core` 可以用包里的内核和 geo 数据覆盖升级（旧内核留作 .bak，面板里可回滚）。
 
+### Docker
+
+镜像 `skycn2022/shunt`（Docker Hub）/ `ghcr.io/skycnhe/shunt`（GHCR），支持 `linux/amd64`、`linux/arm64`，标签 `latest`、`hk001`、`v<面板版本>`（如 `v8.4.16`）。基于 Alpine 3.24，已内置面板、mihomo / mihomo Smart / sing-box 三个内核、geo 数据、LightGBM 模型和 sing-box 默认规则集（与离线安装包同一套打包和自测），面板版本更新时自动发布。
+
+镜像只适合 **Linux 宿主机 + host 网络** 当旁路由用：透明代理规则（nftables、策略路由、TUN 网卡）是写在宿主机网络里的，所以要 `network_mode: host` 和 `NET_ADMIN` 权限。Docker Desktop（Windows / macOS）、bridge 网络下透明代理不可用，只能用 7890 端口的 HTTP / SOCKS 代理。
+
+```sh
+docker run -d --name shunt --restart unless-stopped \
+  --network host \
+  --cap-add NET_ADMIN --cap-add NET_RAW \
+  --device /dev/net/tun \
+  -v shunt-data:/data \
+  --stop-timeout 30 \
+  skycn2022/shunt:latest
+```
+
+docker-compose：
+
+```yaml
+services:
+  shunt:
+    image: skycn2022/shunt:latest      # 或 ghcr.io/skycnhe/shunt:latest
+    container_name: shunt
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN                      # 必需：nftables 规则、策略路由、TUN 网卡
+      - NET_RAW                        # 建议：核心的 ICMP / 原始套接字（延迟测试等）
+      # - SYS_MODULE                   # 一般不需要，见下方说明
+    devices:
+      - /dev/net/tun:/dev/net/tun      # TUN 模式需要；只用 TProxy 可去掉
+    volumes:
+      - ./shunt-data:/data             # 全部设置和数据
+    environment:
+      - TZ=Asia/Shanghai
+    stop_grace_period: 30s             # sing-box 正常退出最多要 15 秒（写 Fake-IP 缓存）
+```
+
+面板地址 `http://宿主机IP:8080`，其余用法和 Alpine 实机相同（局域网设备的网关和 DNS 指向宿主机 IP）。
+
+**宿主机准备**（容器和宿主机共用内核，模块和转发开关只能在宿主机上设置）：
+
+```sh
+# 内核模块：TProxy 需要 nft_tproxy（会带上 nf_tproxy_ipv4 / nf_tproxy_ipv6），TUN 需要 tun
+modprobe nft_tproxy; modprobe tun
+printf 'nft_tproxy\ntun\n' > /etc/modules-load.d/shunt.conf      # systemd 发行版开机自动加载（Alpine 写 /etc/modules）
+# 开启转发（容器里的 /proc/sys 只读，面板改不了）；开启了面板里的 IPv6 透明代理时再加 IPv6 那行
+sysctl -w net.ipv4.ip_forward=1
+echo 'net.ipv4.ip_forward=1' > /etc/sysctl.d/99-shunt.conf
+# sysctl -w net.ipv6.conf.all.forwarding=1 && echo 'net.ipv6.conf.all.forwarding=1' >> /etc/sysctl.d/99-shunt.conf
+```
+
+**Docker 的 FORWARD 拦截**：Docker 会把宿主机 iptables 的 FORWARD 默认策略改成 DROP，局域网经旁路由转发的流量（TUN 模式的全部流量、TProxy 下绕过的设备和直连网段）会被丢掉。在宿主机上放行局域网网卡转发（`eth0` 换成宿主机连局域网的网卡）：
+
+```sh
+iptables -I DOCKER-USER -i eth0 -j ACCEPT
+ip6tables -I DOCKER-USER -i eth0 -j ACCEPT 2>/dev/null   # 开了 IPv6 透明代理时
+```
+
+这条规则重启后会丢，需要用发行版的方式持久化（如 `iptables-persistent`）；Docker Engine 28 及以上也可以在 `/etc/docker/daemon.json` 里加 `"ip-forward-no-drop": true` 后重启 Docker，不再改 FORWARD 策略（按 Docker 文档，Docker 只在自己去开启转发时才改策略，所以先按上面把 `ip_forward=1` 写进 sysctl.d、开机时比 Docker 先生效，一般也不会被改）。TProxy 模式下走代理的流量由核心本机接收，不受这条影响。
+
+说明与限制：
+
+- 数据都在 `/data`（`mihomo-panel/` 面板设置、`mihomo/` mihomo 配置与 geo 数据、`sing-box/` sing-box 配置与规则集）。首次启动时把镜像里的 geo 数据和规则集复制进去，已有的不覆盖（之后由面板定时更新）
+- 宿主机缺少 `nft_tproxy` 时 TProxy 不可用，可在面板里改用 TUN；`/dev/net/tun` 也没有时只能用 7890 代理。启动日志（`docker logs shunt`）会提示缺什么
+- `SYS_MODULE`：只有想让容器自己加载内核模块时才需要，还得把宿主机的 `/lib/modules` 只读挂进容器；直接在宿主机上 `modprobe` 更简单安全，不建议给
+- 不要用 `privileged`，`NET_ADMIN` + `/dev/net/tun` 已经够用
+- `docker stop` 时先撤掉透明代理规则（局域网立即恢复直连），再停面板和核心；被强杀（超时、断电）留下的规则在下次启动时清理。超时请设 30 秒（`--stop-timeout 30` / `stop_grace_period: 30s`），默认 10 秒可能来不及让 sing-box 写完 Fake-IP 缓存
+- 换新版本：`docker compose pull && docker compose up -d`（或删掉容器用新镜像重建），数据卷保留。面板里的在线更新、内核更新也能用，但只保存在当前容器里，重建容器后以镜像自带的版本为准
+- 宿主机上不要再跑别的透明代理或占用 8080 / 7890 / 7893 / 1053 / 9090 端口的程序；系统优化里的 sysctl、BBR 等全局参数在容器里不生效，需要时在宿主机上设置
+- 自己构建：`docker buildx build --platform linux/amd64,linux/arm64 -t shunt .`（构建时联网下载内核和数据）
+
 ## 使用
 
 1. 打开面板 →「订阅」粘贴你的订阅链接

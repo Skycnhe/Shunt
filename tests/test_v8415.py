@@ -28,24 +28,11 @@ C = sys.modules["shunt.core"]
 WA = sys.modules["shunt.webapi"]
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SEL = B.G_SEL
-VER = "8.4.15"
 
 
 def read(*p):
     with open(os.path.join(ROOT, *p), encoding="utf-8") as f:
         return f.read()
-
-
-class VersionTest(unittest.TestCase):
-    def test_version(self):
-        self.assertEqual(B.PANEL_VERSION, VER)
-
-    def test_changelog_top(self):
-        heads = [ln for ln in read("CHANGELOG.md").splitlines() if ln.startswith("## v")]
-        self.assertTrue(heads[0].startswith("## v" + VER), heads[0])
-
-    def test_built(self):
-        self.assertIn(f'PANEL_VERSION = "{VER}"', read("server.py"))
 
 
 class NormRuleTest(unittest.TestCase):

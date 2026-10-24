@@ -1,0 +1,200 @@
+# Docker 镜像：面板版本变化（PANEL_VERSION）、Docker 相关文件变化或手动触发时，
+# 在 amd64 / arm64 原生 runner 上分别构建（内容由离线包脚本 .github/offline/build.sh 准备，含三内核自测），
+# 各自在 runner 上用 host 网络实际跑一遍（面板可访问、核心运行、nftables 规则挂上、docker stop 后撤干净），
+# 通过后合并成多架构清单推送到 GHCR（ghcr.io/<仓库>，GITHUB_TOKEN），
+# 仓库 Secrets 里有 DOCKERHUB_TOKEN 时再复制到 Docker Hub（<DOCKERHUB_USERNAME，默认 skycn2022>/shunt）
+# 标签：latest、hk001、v<面板版本>
+name: Docker image
+
+on:
+  push:
+    branches: [Hk001]
+    paths:
+      - shunt/base.py
+      - server.py
+      - Dockerfile
+      - .dockerignore
+      - docker/**
+      - .github/offline/build.sh
+      - .github/workflows/docker.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-image
+  cancel-in-progress: true
+
+jobs:
+  prep:
+    runs-on: ubuntu-24.04
+    outputs:
+      build: ${{ steps.p.outputs.build }}
+      version: ${{ steps.p.outputs.version }}
+      image: ${{ steps.p.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - id: p
+        name: 版本与是否需要构建
+        run: |
+          V=$(sed -n 's/^PANEL_VERSION = "\(.*\)"/\1/p' shunt/base.py)
+          [ -n "$V" ] || { echo "读不到 PANEL_VERSION"; exit 1; }
+          B=1
+          if [ "${{ github.event_name }}" = push ] && git rev-parse -q --verify HEAD^ >/dev/null; then
+            # 只是改了 server.py 里别的内容（没升版本）、也没改 Docker 相关文件：不重新发布镜像
+            if ! git diff HEAD^ HEAD -- shunt/base.py | grep -q '^[-+]PANEL_VERSION' \
+               && [ -z "$(git diff --name-only HEAD^ HEAD -- Dockerfile .dockerignore docker .github/offline/build.sh .github/workflows/docker.yml)" ]; then
+              B=0
+            fi
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "build=$B" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/$(echo '${{ github.repository }}' | tr 'A-Z' 'a-z')" >> "$GITHUB_OUTPUT"
+          echo "面板 v$V，构建=$B"
+
+  build:
+    needs: prep
+    if: needs.prep.outputs.build == '1'
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      IMAGE: ${{ needs.prep.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: build
+        name: 构建并按摘要推送（${{ matrix.platform }}）
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          provenance: false
+          labels: |
+            org.opencontainers.image.version=${{ needs.prep.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+      - name: 实际运行测试（host 网络 + NET_ADMIN + /dev/net/tun）
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VER: ${{ needs.prep.outputs.version }}
+        run: |
+          set -eu
+          IMG="$IMAGE@$DIGEST"
+          sudo modprobe nft_tproxy || true; sudo modprobe tun || true
+          sudo sysctl -qw net.ipv4.ip_forward=1
+          docker run -d --name shunt --network host --cap-add NET_ADMIN --cap-add NET_RAW --device /dev/net/tun \
+            -v shunt-data:/data --stop-timeout 30 "$IMG"
+          ok=""
+          for i in $(seq 1 60); do curl -fsS -o /dev/null http://127.0.0.1:8080/manifest.webmanifest && { ok=1; break; }; sleep 2; done
+          docker logs shunt
+          [ -n "$ok" ] || { echo "面板 120 秒内没有起来"; docker exec shunt tail -n 50 /var/log/mihomo-panel.log || true; exit 1; }
+          up=""
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8080/api/state > state.json
+            python3 - "$VER" <<'PY' && { up=1; break; }
+          import json, sys
+          s = json.load(open("state.json"))
+          print("panel", s["panel_version"], "core", s["core"], "running", s["running"], "version", s["version"])
+          assert s["panel_version"] == sys.argv[1], "面板版本不对"
+          sys.exit(0 if s["running"] and s["version"] not in ("", "-") else 1)
+          PY
+            sleep 2
+          done
+          docker exec shunt rc-service shunt-core status || true
+          docker exec shunt tail -n 30 /var/log/mihomo.log || true
+          [ -n "$up" ] || { echo "核心没有运行"; exit 1; }
+          docker exec shunt sh -c 'cat /opt/shunt-seed/VERSION; ls -l /usr/local/bin/mihomo /usr/local/bin/mihomo-smart /usr/local/bin/sing-box /data/mihomo /data/sing-box/rules | head -n 40'
+          sudo nft list table inet mihomo_panel >/dev/null || { echo "TProxy 规则没有挂上"; exit 1; }
+          echo ">> 面板重启核心"
+          curl -fsS -X POST -H 'X-Shunt: 1' -H 'Content-Type: application/json' -d '{"action":"restart"}' http://127.0.0.1:8080/api/service
+          for i in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:8080/api/service > svc.json
+            python3 -c 'import json,sys; s=json.load(open("svc.json")); print(s); sys.exit(0 if not s["busy"] else 1)' && break; sleep 1
+          done
+          python3 -c 'import json,sys; s=json.load(open("svc.json")); sys.exit(0 if s["ok"] and s["alive"] else 1)'
+          echo ">> 面板自己重启（rc-service shunt restart）后由入口守护照常运行"
+          docker exec shunt rc-service shunt restart
+          sleep 3
+          for i in $(seq 1 30); do curl -fsS -o /dev/null http://127.0.0.1:8080/manifest.webmanifest && break; sleep 1; done
+          curl -fsS -o /dev/null http://127.0.0.1:8080/manifest.webmanifest
+          echo ">> docker stop 后透明代理规则撤干净"
+          docker stop shunt
+          docker logs --tail 20 shunt
+          if sudo nft list table inet mihomo_panel >/dev/null 2>&1; then echo "停止后规则没撤"; exit 1; fi
+          [ "$(sudo ip rule show | grep -c 'lookup 162')" = 0 ] || { echo "停止后策略路由没撤"; exit 1; }
+          echo ">> 再次启动（数据卷保留，OpenRC 状态重建）"
+          docker start shunt
+          for i in $(seq 1 60); do curl -fsS -o /dev/null http://127.0.0.1:8080/manifest.webmanifest && break; sleep 2; done
+          curl -fsS -o /dev/null http://127.0.0.1:8080/manifest.webmanifest
+          docker rm -f shunt
+          sudo nft delete table inet mihomo_panel 2>/dev/null || true
+      - name: 记录摘要
+        run: |
+          mkdir -p /tmp/digests
+          d="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${d#sha256:}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.runner }}
+          path: /tmp/digests/*
+          retention-days: 1
+
+  publish:
+    needs: [prep, build]
+    runs-on: ubuntu-24.04
+    env:
+      IMAGE: ${{ needs.prep.outputs.image }}
+      VER: ${{ needs.prep.outputs.version }}
+      DH_USER: ${{ secrets.DOCKERHUB_USERNAME || 'skycn2022' }}
+      DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: 合并多架构清单并推送到 GHCR
+        working-directory: /tmp/digests
+        run: |
+          set -eu
+          docker buildx imagetools create -t "$IMAGE:latest" -t "$IMAGE:hk001" -t "$IMAGE:v$VER" \
+            $(printf "$IMAGE@sha256:%s " *)
+          docker buildx imagetools inspect "$IMAGE:v$VER"
+      - name: 登录 Docker Hub
+        if: env.DH_TOKEN != ''
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DH_USER }}
+          password: ${{ env.DH_TOKEN }}
+      - name: 复制到 Docker Hub
+        if: env.DH_TOKEN != ''
+        run: |
+          set -eu
+          docker buildx imagetools create -t "docker.io/$DH_USER/shunt:latest" -t "docker.io/$DH_USER/shunt:hk001" \
+            -t "docker.io/$DH_USER/shunt:v$VER" "$IMAGE:v$VER"
+          docker buildx imagetools inspect "docker.io/$DH_USER/shunt:v$VER"
+      - name: 没有配置 Docker Hub
+        if: env.DH_TOKEN == ''
+        run: echo "::notice::仓库 Secrets 里没有 DOCKERHUB_TOKEN，只推送了 GHCR（$IMAGE），跳过 Docker Hub"

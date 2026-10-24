@@ -1,5 +1,14 @@
 # 更新记录与详细说明
 
+## v8.4.16 Docker 镜像（amd64 / arm64），推送到 Docker Hub 和 GHCR
+- 新增 Docker 镜像：`skycn2022/shunt`（Docker Hub）、`ghcr.io/skycnhe/shunt`（GHCR），`linux/amd64` + `linux/arm64`，标签 `latest`、`hk001`、`v<面板版本>`。基于 Alpine 3.24，内置面板、mihomo / mihomo Smart / sing-box 三个内核、geo 数据、LightGBM 模型和 sing-box 默认规则集，内容由离线安装包脚本 `.github/offline/build.sh` 准备（同一套下载和三内核自测，自测不过不出镜像）
+- 运行方式：`network_mode: host` + `NET_ADMIN`（建议加 `NET_RAW`）+ `/dev/net/tun`，数据卷 `/data`（面板设置、mihomo / sing-box 配置与数据都在里面，`/etc/mihomo-panel`、`/etc/mihomo`、`/etc/sing-box` 是指向它的软链接）。宿主机要加载 `nft_tproxy` / `tun` 模块并开启 `ip_forward`；Docker 把 FORWARD 默认策略改成 DROP 时要放行局域网网卡转发。README 新增「Docker」一节，含 docker run / docker-compose 示例和宿主机准备
+- 容器里用 OpenRC 的 `rc-service` 管面板（shunt）和核心（shunt-core），和实机共用同一份 init.d 脚本：面板的启动 / 停止 / 重启、看门狗、在线更新和切 HTTPS 后重启面板都照常工作。入口脚本（tini 下运行）负责准备数据卷（geo 数据、规则集没有才复制）、每次启动重建 OpenRC 状态、清理上次被强杀留下的 nftables 表和策略路由、核心在面板里被手动停止过就不自动启动、面板意外退出时拉起；`docker stop` 时先删透明代理规则（局域网立即直连）再停面板和核心。镜像升级时和 install.sh 一样先记下各策略组的选择
+- GitHub Actions 新工作流 `Docker image`：面板版本变化、Docker 相关文件变化或手动触发时，在 amd64 / arm64 原生 runner 上分别构建，并用 host 网络实际起容器测试（面板可访问、核心运行、TProxy 规则挂上、面板重启核心、面板自重启、`docker stop` 后规则撤干净、再次启动），通过后合并多架构清单推送到 GHCR；仓库 Secrets 里有 `DOCKERHUB_TOKEN`（用户名 `DOCKERHUB_USERNAME`，默认 skycn2022）时再复制到 Docker Hub，没有就跳过
+- `.github/offline/build.sh` 新增 `NO_APK=1`（不下载 apk 离线源）、`NO_TAR=1`（自测后不打 tar 包）供镜像构建用，离线安装包打包不受影响
+- 面板代码没有改动；Dockerfile、入口脚本不在在线更新清单里，不会下载到设备
+- 新增测试 `tests/test_v8416.py`（Dockerfile / 入口脚本 / 工作流 / README 之间的约定）；`tests/test_v8415.py` 的版本断言移到新文件
+
 ## v8.4.15 直连规则检查：几种写法静默不生效、sing-box 新加的 GEO 规则 / 规则集保存后不生效
 - 自定义规则（两种内核）：以下写法以前保存成功、却从不命中，现在保存时和生成配置时自动改正（已保存的旧规则生成配置时也会改正）
   - `DOMAIN-SUFFIX` 的值带前导 `.`、`+.`、`*.`（如 `DOMAIN-SUFFIX,.example.com,DIRECT`）：mihomo 按字面匹配，域名自身和子域都匹配不到（用真实 mihomo v1.19.33 验证）；sing-box 以前只去掉了 `.`，`+.` / `*.` 同样失效 → 去掉前缀（后缀规则本来就包含域名自身及所有子域）
