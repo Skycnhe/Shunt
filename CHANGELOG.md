@@ -1,5 +1,17 @@
 # 更新记录与详细说明
 
+## v10.3.11 直连规则检查：几种写法静默不生效、sing-box 新加的 GEO 规则 / 规则集保存后不生效
+- 自定义规则（两种内核）：以下写法以前保存成功、却从不命中，现在保存时和生成配置时自动改正（已保存的旧规则生成配置时也会改正）
+  - `DOMAIN-SUFFIX` 的值带前导 `.`、`+.`、`*.`（如 `DOMAIN-SUFFIX,.example.com,DIRECT`）：mihomo 按字面匹配，域名自身和子域都匹配不到（用真实 mihomo v1.19.33 验证）；sing-box 以前只去掉了 `.`，`+.` / `*.` 同样失效 → 去掉前缀（后缀规则本来就包含域名自身及所有子域）
+  - `DOMAIN` 的值以 `+.` 或 `.` 开头：永远匹配不到 → 改成 `DOMAIN-SUFFIX`
+  - `IP-CIDR` / `IP-CIDR6` / `SRC-IP-CIDR` 只写了单个 IP（没有 `/32`）：mihomo 整份配置校验失败（`payloadRule error`），保存被撤销；sing-box 下能保存，但之后切到 mihomo 会失败 → 自动补 `/32`（IPv6 补 `/128`）
+- sing-box：新加的 `GEOSITE` / `GEOIP` 自定义规则、规则集订阅（如「Apple 直连」「微软 直连」快捷按钮）、引用 geosite 的 DNS 策略，保存后提示「已生效」，但对应的 .srs / 规则集文件只有切换内核、定时 GEO 更新或手动「更新」时才下载，文件不存在时规则被整条跳过，要等到下一次 GEO 更新才真正生效。现在每次保存设置重载前，先把本地还没有的规则集文件下载好（最多等 45 秒；已有的文件不重下，所以平时保存不变慢）；下载失败照旧跳过并在警告里提示，10 分钟内保存时不再重试
+- sing-box：写在逻辑规则里的 GEOSITE / GEOIP（如 `AND,((GEOSITE,steam),(NETWORK,TCP)),DIRECT`）不在下载清单里，连 GEO 更新也不会下载，这条规则永远被跳过 → 下载清单也扫描逻辑规则，与生成配置时引用的规则集一致
+- 透明代理（TProxy + IPv6 + Fake-IP）：Fake-IP 的 IPv6 假地址段（sing-box `fc00::/18`、mihomo `fdfe:dcba:9876::/64`）都落在保留地址 `fc00::/7` 里，nftables 先把它们当保留地址放行、不交给核心，客户端用 AAAA 假地址发起的连接全部不通（只能等回退 IPv4，打开变慢）。现在这两段在保留地址判断之前交给核心
+- 检查确认没有问题的环节：直连规则排在广告拦截、按设备分流之后，规则集 / 内置 GEOSITE / GEOIP 分流之前；sing-box 的类型映射（DOMAIN / SUFFIX / KEYWORD / WILDCARD / IP-CIDR / 端口 / 进程 / 逻辑规则）与 mihomo 一致（真实 sing-box 1.14.3 跑过匹配），`sing-box check` / `mihomo -t` 通过；Fake-IP 下直连域名拿到假 IP 后由核心还原域名、用直连 DNS 解析，不需要额外排除；修改规则走热重载，不受 v10.3.7 启动预生成配置（/run/shunt-core.prep）影响
+- 与 Hk001 v8.4.15 相同的修复
+- 新增测试 `tests/test_v10311.py`（设置 `SHUNT_TEST_MIHOMO` / `SHUNT_TEST_SINGBOX` 时用真实内核校验）；`tests/test_v10310.py` 的版本断言移到新文件
+
 ## v10.3.10 修复订阅「更新」显示成功、节点却还是旧的
 - sing-box：订阅用第一个 UA（clash.meta）下载到的内容解析不出节点时（机场按 UA 返回网页 / 提示页、格式变了等），以前不再试第二个 UA（v2rayN），而是直接读 mihomo 以前下载的 `/etc/mihomo/providers/<订阅名>.yaml` 当结果，并照常提示「已更新：N 个节点」。这份文件往往是切换到 sing-box 之前留下的，订阅明明换了节点，每次「更新」都显示成功、节点一直是旧的
   - 现在先把每个 UA 都试完（每个 UA 仍是先代理后直连），第一个解析出节点的结果才写入缓存

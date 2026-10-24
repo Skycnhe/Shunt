@@ -8,7 +8,7 @@ from .data import config_version, load, read_json, save
 from .groups import provider_nodes
 from .mihomo import build_config, check_config, write_config
 from .sb_common import SB_CONF, active_core
-from .sb_config import build_singbox, check_sb_config, sb_hot_reload, sb_log_error, sb_rule_need, sb_sync_assets, write_sb_config
+from .sb_config import build_singbox, check_sb_config, sb_fetch_missing, sb_hot_reload, sb_log_error, sb_rule_need, sb_sync_assets, write_sb_config
 from .sysopt import svc_restart
 from .devroute import commit_applied
 from .notify import WD, core_alive
@@ -41,6 +41,14 @@ def reload_core(prev=None):
 
     prev（修改前的 data.json）给出时，任何一步失败都回滚到它：校验失败、生成配置抛异常（如残缺的规则集）、
     mihomo 热重载被拒、sing-box 重载后起不来。坏数据不会留在 data.json 里让 /api/state 一直 500"""
+    try:  # sing-box：新引用的 GEO / 规则集文件先下载（锁外；已有文件时零开销）
+        d = load()
+        if active_core(d) == "singbox":
+            bad = sb_fetch_missing(d)
+            if bad:
+                log_err("下载新引用的规则集", "；".join(bad)[:300])
+    except Exception as e:
+        log_err("下载新引用的规则集", e)
     try:
         return _reload_core(prev)
     except Exception as e:

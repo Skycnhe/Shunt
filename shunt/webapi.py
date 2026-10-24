@@ -17,7 +17,7 @@ from .groups import (
     NODE_LIST_MAX, all_node_names, clean_custom_group, gcfg, node_name_ok, provider_nodes, provider_rev, region_plan, rx, sb_provider_nodes, sb_sub_outbounds,
     sub_orig_nodes, sub_removed
 )
-from .ruleutil import complete_rule
+from .ruleutil import complete_rule, norm_rule
 from .mihomo import bad_rule_policies, build_config, dns_cfg, drop_provider_cache, safe_dev, validate_dns
 from .core import conns_snapshot, refresh_after_sub, refresh_later, refresh_regions, reload_core
 from .corehttp import core, core_json
@@ -1463,7 +1463,7 @@ class H(BaseHTTPRequestHandler):
 
     @api_route("/api/rules", "PUT")
     def api_rules_put(self, m, p, b, q):
-        rules = [complete_rule(r.strip(), G_SEL) for r in b.get("rules", []) if isinstance(r, str) and r.strip()]
+        rules = [complete_rule(norm_rule(r.strip()), G_SEL) for r in b.get("rules", []) if isinstance(r, str) and r.strip()]
         bad = bad_rule_policies([r for r in rules if not r.startswith("#")], load())
         if bad:
             return self.send(400, {"message": "以下规则的策略不存在：" + "；".join(bad[:5])})

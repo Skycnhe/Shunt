@@ -3,6 +3,7 @@
 只依赖 base、os、re；data.py、mihomo.py、adblock.py 都从这里导入，
 打破 data→mihomo、mihomo→adblock 的循环。
 """
+import ipaddress
 import os
 import re
 
@@ -35,6 +36,38 @@ def complete_rule(rule, default):
         parts.insert(2, default)
         return ",".join(parts)
     return rule
+
+
+def norm_rule(rule):
+    """规范化自定义规则里两种内核都会「静默不生效」的写法（v8.4.15）：
+    - DOMAIN-SUFFIX 的值带前导「.」「+.」「*.」：mihomo 按字面匹配，永远命中不了（sing-box 只去掉了「.」，「+.」「*.」同样失效）
+      → 去掉前缀（后缀规则本来就含域名自身及所有子域）
+    - DOMAIN 的值以「+.」「.」开头：同样永不命中 → 改成 DOMAIN-SUFFIX
+    - IP-CIDR / IP-CIDR6 / SRC-IP-CIDR 只写了单个 IP（没有 /前缀）：mihomo 整份配置校验失败（payloadRule error）
+      → 补 /32 或 /128
+    逻辑规则（AND / OR / NOT）、注释、空行原样返回"""
+    s = rule.strip()
+    if not s or s.startswith("#"):
+        return rule
+    parts = s.split(",")
+    if len(parts) < 2:
+        return rule
+    typ, val = parts[0].strip().upper(), parts[1].strip()
+    if typ == "DOMAIN" and val.startswith(("+.", ".")) and val.lstrip("+.").strip():
+        parts[0], typ = "DOMAIN-SUFFIX", "DOMAIN-SUFFIX"
+    if typ == "DOMAIN-SUFFIX":
+        v = val
+        while v.startswith(("+.", "*.", ".")):
+            v = v[2:] if v[:2] in ("+.", "*.") else v[1:]
+        if v and v != val:
+            parts[1] = v
+    elif typ in ("IP-CIDR", "IP-CIDR6", "SRC-IP-CIDR") and "/" not in val:
+        try:
+            ip = ipaddress.ip_address(val.strip("[]"))
+            parts[1] = f"{ip}/{32 if ip.version == 4 else 128}"
+        except ValueError:
+            pass
+    return ",".join(parts)
 
 
 def dns_policy_of(server):

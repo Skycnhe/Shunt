@@ -31,24 +31,11 @@ C = sys.modules["shunt.core"]
 CH = sys.modules["shunt.corehttp"]
 SC = sys.modules["shunt.schedule"]
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-VER = "10.3.10"
 
 
 def read(*p):
     with open(os.path.join(ROOT, *p), encoding="utf-8") as f:
         return f.read()
-
-
-class VersionTest(unittest.TestCase):
-    def test_version(self):
-        self.assertEqual(B.PANEL_VERSION, VER)
-
-    def test_changelog_top(self):
-        heads = [ln for ln in read("CHANGELOG.md").splitlines() if ln.startswith("## v")]
-        self.assertTrue(heads[0].startswith("## v" + VER), heads[0])
-
-    def test_built(self):
-        self.assertIn(f'PANEL_VERSION = "{VER}"', read("server.py"))
 
 
 def b64_links(*names):
