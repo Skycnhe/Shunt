@@ -4,7 +4,7 @@
 
 本文件由 tools/build.py 生成，内嵌了 shunt/ 目录下全部模块的源码。请修改 shunt/ 下的文件后重新生成，不要直接改这里。
 """
-PANEL_VERSION = "8.4.14"
+PANEL_VERSION = "8.4.15"
 import importlib.abc, importlib.util, linecache, os, sys, types
 
 _SRC = {}
@@ -338,7 +338,7 @@ LEGACY_AUTO = "♻️ 自动选择"  # v5 及以前的名称，读取旧数据�
 AUTO_ORDER = ["日本", "新加坡", "香港", "美国"]  # 「自动优选」组在节点选择中的顺序，其余地区按识别顺序排在后面
 LB_ORDER = ["香港", "日本", "新加坡", "美国"]    # 「负载均衡」组的顺序
 SCHEMA = 9
-PANEL_VERSION = "8.4.14"
+PANEL_VERSION = "8.4.15"
 L, R = "(?<![A-Za-z])", "(?![A-Za-z])"  # 英文缩写两侧不能紧挨字母，避免 (?i)US 误匹配 Russia / Plus / Australia
 REGIONS = [  # (分组名, 正则)；正则同时在 Python 与 mihomo(regexp2) 中使用，只用两者都支持的语法
     ("🇭🇰 香港", f"🇭🇰|(?i:香港|港|Hong ?Kong)|{L}HKG?{R}"),
@@ -1086,6 +1086,7 @@ _SRC['shunt.ruleutil'] = '''"""规则工具（叶子模块）：从 mihomo.py / 
 只依赖 base、os、re；data.py、mihomo.py、adblock.py 都从这里导入，
 打破 data→mihomo、mihomo→adblock 的循环。
 """
+import ipaddress
 import os
 import re
 
@@ -1118,6 +1119,38 @@ def complete_rule(rule, default):
         parts.insert(2, default)
         return ",".join(parts)
     return rule
+
+
+def norm_rule(rule):
+    """规范化自定义规则里两种内核都会「静默不生效」的写法（v8.4.15）：
+    - DOMAIN-SUFFIX 的值带前导「.」「+.」「*.」：mihomo 按字面匹配，永远命中不了（sing-box 只去掉了「.」，「+.」「*.」同样失效）
+      → 去掉前缀（后缀规则本来就含域名自身及所有子域）
+    - DOMAIN 的值以「+.」「.」开头：同样永不命中 → 改成 DOMAIN-SUFFIX
+    - IP-CIDR / IP-CIDR6 / SRC-IP-CIDR 只写了单个 IP（没有 /前缀）：mihomo 整份配置校验失败（payloadRule error）
+      → 补 /32 或 /128
+    逻辑规则（AND / OR / NOT）、注释、空行原样返回"""
+    s = rule.strip()
+    if not s or s.startswith("#"):
+        return rule
+    parts = s.split(",")
+    if len(parts) < 2:
+        return rule
+    typ, val = parts[0].strip().upper(), parts[1].strip()
+    if typ == "DOMAIN" and val.startswith(("+.", ".")) and val.lstrip("+.").strip():
+        parts[0], typ = "DOMAIN-SUFFIX", "DOMAIN-SUFFIX"
+    if typ == "DOMAIN-SUFFIX":
+        v = val
+        while v.startswith(("+.", "*.", ".")):
+            v = v[2:] if v[:2] in ("+.", "*.") else v[1:]
+        if v and v != val:
+            parts[1] = v
+    elif typ in ("IP-CIDR", "IP-CIDR6", "SRC-IP-CIDR") and "/" not in val:
+        try:
+            ip = ipaddress.ip_address(val.strip("[]"))
+            parts[1] = f"{ip}/{32 if ip.version == 4 else 128}"
+        except ValueError:
+            pass
+    return ",".join(parts)
 
 
 def dns_policy_of(server):
@@ -1517,7 +1550,7 @@ from .base import (
 )
 from .data import LB_KINDS, auto_name, lb_name, region_label, safe
 from .groups import clean_custom_group, gcfg, group_opts, names_rx, pick_plan, region_plan, rx, rx_or, sub_orig_nodes, sub_removed
-from .ruleutil import DOMAIN_RX, adblock_providers, complete_rule, dns_policy_of, rule_policy_index
+from .ruleutil import DOMAIN_RX, adblock_providers, complete_rule, dns_policy_of, norm_rule, rule_policy_index
 from .sb_common import active_core
 from .sysopt import sh
 
@@ -1815,7 +1848,7 @@ def mihomo_tun(d):
 
 def fix_rule_policy(rule, policies):
     """自定义规则引用了不存在的策略组时改用节点选择，避免整份配置无法加载"""
-    rule = complete_rule(rule.strip(), G_SEL)
+    rule = complete_rule(norm_rule(rule.strip()), G_SEL)
     if not rule or rule.startswith("#"):
         return None
     parts = rule.split(",")
@@ -2321,7 +2354,7 @@ from .data import config_version, load, read_json, save
 from .groups import provider_nodes
 from .mihomo import build_config, check_config, write_config
 from .sb_common import SB_CONF, active_core
-from .sb_config import build_singbox, check_sb_config, sb_hot_reload, sb_log_error, sb_rule_need, sb_sync_assets, write_sb_config
+from .sb_config import build_singbox, check_sb_config, sb_fetch_missing, sb_hot_reload, sb_log_error, sb_rule_need, sb_sync_assets, write_sb_config
 from .sysopt import svc_restart
 from .notify import WD, core_alive
 
@@ -2353,6 +2386,14 @@ def reload_core(prev=None):
 
     prev（修改前的 data.json）给出时，任何一步失败都回滚到它：校验失败、生成配置抛异常（如残缺的规则集）、
     mihomo 热重载被拒、sing-box 重载后起不来。坏数据不会留在 data.json 里让 /api/state 一直 500"""
+    try:  # sing-box：新引用的 GEO / 规则集文件先下载（锁外；已有文件时零开销）
+        d = load()
+        if active_core(d) == "singbox":
+            bad = sb_fetch_missing(d)
+            if bad:
+                log_err("下载新引用的规则集", "；".join(bad)[:300])
+    except Exception as e:
+        log_err("下载新引用的规则集", e)
     try:
         return _reload_core(prev)
     except Exception as e:
@@ -4181,9 +4222,13 @@ def sb_geo_rule_sets(d, dc=None):
     for kind, name in BUILTIN_GEO:  # mihomo_rules 末尾硬编码分流规则
         add(kind, name)
     for line in d.get("rules") or []:  # 用户自定义规则里的 GEOSITE/GEOIP（fix_rule_policy 只换 target，不过滤）
-        parts = str(line).split(",")
-        if len(parts) >= 2 and parts[0].strip().upper() in ("GEOSITE", "GEOIP"):
-            add(parts[0].strip().lower(), parts[1].strip())
+        line = str(line).strip()
+        if line.startswith("#"):
+            continue
+        # 逻辑规则 AND,((GEOSITE,steam),(NETWORK,TCP)) 里的也要算：以前只看行首，完整构建会引用 geosite-steam，
+        # 但下载 / GEO 更新按这里的需求表从不下载它，这条规则永远被当成「规则集未下载」跳过
+        for m in re.finditer(r"(?:^|\\()\\s*(GEOSITE|GEOIP)\\s*,\\s*([^,()]+)", line, re.I):
+            add(m.group(1).lower(), m.group(2).strip())
     for pe in dc.get("policies") or []:  # sb_dns.policy_cond：DNS 策略里的 geosite 匹配
         kind, names = policy_parts(pe["match"])
         if kind == "geosite":
@@ -4348,8 +4393,8 @@ def sb_ab_loaded(d):
 ASSETS_WAIT = 150  # 并发下载规则集整体最多等这么多秒
 
 
-def sb_sync_assets(d, force=False, need=None):
-    """下载 / 转换 sing-box 需要的规则集文件；返回失败列表"""
+def sb_sync_assets(d, force=False, need=None, wait=None):
+    """下载 / 转换 sing-box 需要的规则集文件；返回失败列表。wait：整体最多等多少秒（默认 ASSETS_WAIT）"""
     if need is None:
         need = sb_rule_need(d)
     gh = (d.get("gh_proxy") or "").rstrip("/")
@@ -4408,12 +4453,42 @@ def sb_sync_assets(d, force=False, need=None):
     ths = [threading.Thread(target=one, args=(tag, rsd), daemon=True) for tag, rsd in items]
     for t in ths:
         t.start()
-    end = time.time() + ASSETS_WAIT  # 整体最多等 ASSETS_WAIT 秒（以前逐个 join(150)，几个都卡住时要等 N×150 秒）
+    end = time.time() + (wait or ASSETS_WAIT)  # 整体最多等 ASSETS_WAIT 秒（以前逐个 join(150)，几个都卡住时要等 N×150 秒）
     for t in ths:
         t.join(max(0.1, end - time.time()))
     late.set()
     with bad_lock:  # 返回快照：超时线程之后的结果不影响这里
         return list(bad) + [f"{tag}：下载超时" for (tag, _), t in zip(items, ths) if t.is_alive()]
+
+
+MISSING_WAIT = 45  # 保存设置时补下缺失规则集：整体最多等这么多秒（不阻塞太久，下不来的规则照旧跳过并提示）
+MISSING_COOLDOWN = 600  # 下载失败的规则集 10 分钟内不再在保存时重试（GitHub 不通时每次保存都要白等）
+_MISSING_FAIL = {}
+
+
+def sb_fetch_missing(d):
+    """sing-box：新引用、本地还没有的 GEO / 规则集文件先下载好再生成配置；返回失败列表。
+    以前只有切换内核、定时 GEO 更新、手动「更新」规则集才下载：新加的 GEOSITE / GEOIP 自定义规则、规则集订阅
+    （如「Apple 直连」「微软 直连」）、引用 geosite 的 DNS 策略保存后提示「已生效」，实际因文件不存在被整条跳过，
+    要等下一次 GEO 更新才生效。已有的文件不重下（不受影响），广告列表照旧由 _gen_config 转换"""
+    now = time.time()
+    need = {}
+    for tag, rsd in sb_rule_need(d).items():
+        if rsd["kind"] == "adblock":
+            continue
+        path = os.path.join(SB_RULE_DIR, rsd["path"])
+        if os.path.isfile(path) and os.path.getsize(path) > 0:
+            _MISSING_FAIL.pop(tag, None)
+        elif now - _MISSING_FAIL.get(tag, 0) >= MISSING_COOLDOWN:
+            need[tag] = rsd
+    if not need:
+        return []
+    bad = sb_sync_assets(d, need=need, wait=MISSING_WAIT)
+    for tag, rsd in need.items():
+        path = os.path.join(SB_RULE_DIR, rsd["path"])
+        if not (os.path.isfile(path) and os.path.getsize(path) > 0):
+            _MISSING_FAIL[tag] = time.time()
+    return bad
 
 
 def write_sb_config(d, path=None):
@@ -9805,7 +9880,7 @@ from .groups import (
     NODE_LIST_MAX, all_node_names, clean_custom_group, gcfg, node_name_ok, provider_nodes, provider_rev, region_plan, rx, sb_provider_nodes, sb_sub_outbounds,
     sub_orig_nodes, sub_removed
 )
-from .ruleutil import complete_rule
+from .ruleutil import complete_rule, norm_rule
 from .mihomo import bad_rule_policies, build_config, dns_cfg, drop_provider_cache, safe_dev, validate_dns
 from .core import conns_snapshot, refresh_after_sub, refresh_later, refresh_regions, reload_core
 from .corehttp import core, core_json
@@ -11244,7 +11319,7 @@ class H(BaseHTTPRequestHandler):
 
     @api_route("/api/rules", "PUT")
     def api_rules_put(self, m, p, b, q):
-        rules = [complete_rule(r.strip(), G_SEL) for r in b.get("rules", []) if isinstance(r, str) and r.strip()]
+        rules = [complete_rule(norm_rule(r.strip()), G_SEL) for r in b.get("rules", []) if isinstance(r, str) and r.strip()]
         bad = bad_rule_policies([r for r in rules if not r.startswith("#")], load())
         if bad:
             return self.send(400, {"message": "以下规则的策略不存在：" + "；".join(bad[:5])})

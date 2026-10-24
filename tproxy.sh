@@ -119,7 +119,10 @@ start() {
     ip -6 rule add fwmark $MARK table $TABLE_ID
     ip -6 route replace local ::/0 dev lo table $TABLE_ID
     DNS_FAMILY=""
+    # Fake-IP 的 IPv6 段（sing-box fc00::/18、mihomo fdfe:dcba:9876::/64）都落在 reserved6 的 fc00::/7 里：
+    # 以前先被 return 掉、不进核心，客户端拿到 AAAA 假地址的连接全部不通（只能等回退 IPv4）。先把这两段交给核心
     V6_RULES="meta nfproto ipv6 ip6 saddr @bypass6 return
+    meta nfproto ipv6 ip6 daddr { fc00::/18, fdfe:dcba:9876::/64 } meta l4proto { tcp, udp } meta mark set $MARK tproxy ip6 to [::1]:$TPROXY_PORT accept
     meta nfproto ipv6 ip6 daddr @reserved6 return
     meta nfproto ipv6 ip6 daddr @local6 return
     meta nfproto ipv6 meta l4proto { tcp, udp } meta mark set $MARK tproxy ip6 to [::1]:$TPROXY_PORT accept"

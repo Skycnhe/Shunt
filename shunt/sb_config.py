@@ -313,9 +313,13 @@ def sb_geo_rule_sets(d, dc=None):
     for kind, name in BUILTIN_GEO:  # mihomo_rules 末尾硬编码分流规则
         add(kind, name)
     for line in d.get("rules") or []:  # 用户自定义规则里的 GEOSITE/GEOIP（fix_rule_policy 只换 target，不过滤）
-        parts = str(line).split(",")
-        if len(parts) >= 2 and parts[0].strip().upper() in ("GEOSITE", "GEOIP"):
-            add(parts[0].strip().lower(), parts[1].strip())
+        line = str(line).strip()
+        if line.startswith("#"):
+            continue
+        # 逻辑规则 AND,((GEOSITE,steam),(NETWORK,TCP)) 里的也要算：以前只看行首，完整构建会引用 geosite-steam，
+        # 但下载 / GEO 更新按这里的需求表从不下载它，这条规则永远被当成「规则集未下载」跳过
+        for m in re.finditer(r"(?:^|\()\s*(GEOSITE|GEOIP)\s*,\s*([^,()]+)", line, re.I):
+            add(m.group(1).lower(), m.group(2).strip())
     for pe in dc.get("policies") or []:  # sb_dns.policy_cond：DNS 策略里的 geosite 匹配
         kind, names = policy_parts(pe["match"])
         if kind == "geosite":
@@ -480,8 +484,8 @@ def sb_ab_loaded(d):
 ASSETS_WAIT = 150  # 并发下载规则集整体最多等这么多秒
 
 
-def sb_sync_assets(d, force=False, need=None):
-    """下载 / 转换 sing-box 需要的规则集文件；返回失败列表"""
+def sb_sync_assets(d, force=False, need=None, wait=None):
+    """下载 / 转换 sing-box 需要的规则集文件；返回失败列表。wait：整体最多等多少秒（默认 ASSETS_WAIT）"""
     if need is None:
         need = sb_rule_need(d)
     gh = (d.get("gh_proxy") or "").rstrip("/")
@@ -540,12 +544,42 @@ def sb_sync_assets(d, force=False, need=None):
     ths = [threading.Thread(target=one, args=(tag, rsd), daemon=True) for tag, rsd in items]
     for t in ths:
         t.start()
-    end = time.time() + ASSETS_WAIT  # 整体最多等 ASSETS_WAIT 秒（以前逐个 join(150)，几个都卡住时要等 N×150 秒）
+    end = time.time() + (wait or ASSETS_WAIT)  # 整体最多等 ASSETS_WAIT 秒（以前逐个 join(150)，几个都卡住时要等 N×150 秒）
     for t in ths:
         t.join(max(0.1, end - time.time()))
     late.set()
     with bad_lock:  # 返回快照：超时线程之后的结果不影响这里
         return list(bad) + [f"{tag}：下载超时" for (tag, _), t in zip(items, ths) if t.is_alive()]
+
+
+MISSING_WAIT = 45  # 保存设置时补下缺失规则集：整体最多等这么多秒（不阻塞太久，下不来的规则照旧跳过并提示）
+MISSING_COOLDOWN = 600  # 下载失败的规则集 10 分钟内不再在保存时重试（GitHub 不通时每次保存都要白等）
+_MISSING_FAIL = {}
+
+
+def sb_fetch_missing(d):
+    """sing-box：新引用、本地还没有的 GEO / 规则集文件先下载好再生成配置；返回失败列表。
+    以前只有切换内核、定时 GEO 更新、手动「更新」规则集才下载：新加的 GEOSITE / GEOIP 自定义规则、规则集订阅
+    （如「Apple 直连」「微软 直连」）、引用 geosite 的 DNS 策略保存后提示「已生效」，实际因文件不存在被整条跳过，
+    要等下一次 GEO 更新才生效。已有的文件不重下（不受影响），广告列表照旧由 _gen_config 转换"""
+    now = time.time()
+    need = {}
+    for tag, rsd in sb_rule_need(d).items():
+        if rsd["kind"] == "adblock":
+            continue
+        path = os.path.join(SB_RULE_DIR, rsd["path"])
+        if os.path.isfile(path) and os.path.getsize(path) > 0:
+            _MISSING_FAIL.pop(tag, None)
+        elif now - _MISSING_FAIL.get(tag, 0) >= MISSING_COOLDOWN:
+            need[tag] = rsd
+    if not need:
+        return []
+    bad = sb_sync_assets(d, need=need, wait=MISSING_WAIT)
+    for tag, rsd in need.items():
+        path = os.path.join(SB_RULE_DIR, rsd["path"])
+        if not (os.path.isfile(path) and os.path.getsize(path) > 0):
+            _MISSING_FAIL[tag] = time.time()
+    return bad
 
 
 def write_sb_config(d, path=None):
