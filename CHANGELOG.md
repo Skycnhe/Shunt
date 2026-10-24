@@ -6,7 +6,7 @@
 - 容器里用 OpenRC 的 `rc-service` 管面板（shunt）和核心（shunt-core），和实机共用同一份 init.d 脚本：面板的启动 / 停止 / 重启、看门狗、在线更新和切 HTTPS 后重启面板都照常工作。入口脚本（tini 下运行）负责准备数据卷（geo 数据、规则集没有才复制）、每次启动重建 OpenRC 状态、清理上次被强杀留下的 nftables 表和策略路由、核心在面板里被手动停止过就不自动启动、面板意外退出时拉起；`docker stop` 时先删透明代理规则（局域网立即直连）再停面板和核心。镜像升级时和 install.sh 一样先记下各策略组的选择；启动时检查 TProxy（探测语句与 tproxy.sh 实际下发的一致）、TUN 设备和宿主机 ip_forward，缺什么在 `docker logs` 里提示
 - GitHub Actions 新工作流 `Docker image`：面板版本变化、Docker 相关文件变化或手动触发时，在 amd64 / arm64 原生 runner 上分别构建，并用 host 网络实际起容器测试（面板可访问、核心运行、TProxy 规则挂上、面板重启核心、面板自重启、`docker stop` 后规则撤干净、再次启动），通过后合并多架构清单推送到 GHCR；仓库 Secrets 里有 `DOCKERHUB_TOKEN`（用户名 `DOCKERHUB_USERNAME`，默认 skycn2022）时再复制到 Docker Hub，没有就跳过
 - install.sh：安装结束时的 TProxy 探测语句缺少 `meta nfproto ipv4`，nft 在 inet 表里会拒绝这种写法，所以即使内核支持 TProxy 也提示「TProxy 不可用」（实际透明代理照常工作，tproxy.sh 的写法一直是对的）。现在与 tproxy.sh 写法一致（GitHub runner 上实测：旧写法被拒绝、新写法通过）
-- `.github/offline/build.sh` 新增 `NO_APK=1`（不下载 apk 离线源）、`NO_TAR=1`（自测后不打 tar 包）供镜像构建用，离线安装包打包不受影响
+- `.github/offline/build.sh` 新增 `NO_APK=1`（不下载 apk 离线源）、`NO_TAR=1`（自测后不打 tar 包）供镜像构建用，离线安装包打包不受影响；顺带修正离线包 `offline/VERSION` 的面板版本写成两行（server.py 里内嵌的 base.py 也有一行 `PANEL_VERSION`）
 - 面板代码没有改动；Dockerfile、入口脚本不在在线更新清单里，不会下载到设备
 - 新增测试 `tests/test_v8416.py`（Dockerfile / 入口脚本 / 工作流 / README 之间的约定）；`tests/test_v8415.py` 的版本断言移到新文件
 

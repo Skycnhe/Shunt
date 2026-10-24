@@ -49,7 +49,7 @@ if [ -c /dev/net/tun ]; then log "TUN 设备 /dev/net/tun 已映射"; else log "
 "$PANEL/tproxy.sh" stop leftovers >/dev/null 2>&1
 
 # 镜像升级（面板版本变化）：和 install.sh 一样先记下各策略组的选择，新配置生效后面板按新组名恢复
-VER=$(sed -n 's/^PANEL_VERSION = "\(.*\)"/\1/p' "$PANEL/server.py")
+VER=$(sed -n 's/^PANEL_VERSION = "\(.*\)"/\1/p' "$PANEL/server.py" | head -n 1)  # 内嵌的 base.py 里还有一行
 if [ -z "$NEW" ] && [ "$(cat /data/mihomo-panel/.image-version 2>/dev/null)" != "$VER" ]; then
   python3 "$PANEL/server.py" --snapshot >/dev/null 2>&1 || true
 fi

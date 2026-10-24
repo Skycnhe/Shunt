@@ -132,6 +132,17 @@ class EntrypointTest(unittest.TestCase):
         self.assertIn(want, read("install.sh"))
         self.assertIn(want, self.s)
 
+    def test_version_line_single(self):
+        """server.py 里有两行 PANEL_VERSION（文件头 + 内嵌的 base.py）：取版本号只能取一行，
+        以前离线包 VERSION 写成 panel=8.4.16 换行 8.4.16，入口日志也多一行"""
+        for f, var in (("docker/entrypoint.sh", "VER"), (".github/offline/build.sh", "PV")):
+            line = [ln for ln in read(*f.split("/")).splitlines() if ln.startswith(var + "=$(sed -n 's/^PANEL_VERSION")][0]
+            self.assertIn("| head -n 1)", line)
+        self.assertEqual(read("server.py").count('\nPANEL_VERSION = "'), 2)
+        out = subprocess.run("sed -n 's/^PANEL_VERSION = \"\\(.*\\)\"/\\1/p' server.py | head -n 1", shell=True, cwd=ROOT,
+                             capture_output=True, text=True).stdout
+        self.assertEqual(out, VER + "\n")
+
     def test_seed_does_not_overwrite(self):
         self.assertIn('[ -s "/data/mihomo/$f" ] ||', self.s)
         self.assertIn('[ -s "/data/sing-box/rules/${f##*/}" ] ||', self.s)

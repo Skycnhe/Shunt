@@ -65,7 +65,7 @@ bad = g["sb_sync_assets"](d, need=g["build_singbox"](d)[2])
 print("失败:", bad) if bad else print("ok")
 PY
 
-PV=$(sed -n 's/^PANEL_VERSION = "\(.*\)"/\1/p' "$W/server.py")
+PV=$(sed -n 's/^PANEL_VERSION = "\(.*\)"/\1/p' "$W/server.py" | head -n 1)  # server.py 里内嵌的 base.py 还有一行同样的
 cat > "$W/offline/VERSION" <<V
 panel=$PV
 alpine=$REL
