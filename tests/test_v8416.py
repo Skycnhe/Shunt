@@ -163,7 +163,7 @@ class WorkflowTest(unittest.TestCase):
     def test_dockerhub_optional(self):
         self.assertIn("DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}", self.w)
         self.assertIn("secrets.DOCKERHUB_USERNAME || 'skycn2022'", self.w)
-        self.assertEqual(self.w.count("if: env.DH_TOKEN != ''"), 2)
+        self.assertEqual(self.w.count("if: env.DH_TOKEN != ''"), 3)
         self.assertIn("if: env.DH_TOKEN == ''", self.w)
 
     def test_smoke_test_before_publish(self):
@@ -178,9 +178,18 @@ class WorkflowTest(unittest.TestCase):
         except ImportError:
             self.skipTest("没有 PyYAML")
         d = yaml.safe_load(self.w)
-        self.assertEqual(set(d["jobs"]), {"prep", "build", "publish"})
+        self.assertEqual(set(d["jobs"]), {"prep", "build", "publish", "hub-readme"})
         on = d.get("on", d.get(True))
         self.assertEqual(on["push"]["branches"], ["Hk001"])
+
+    def test_hub_readme(self):
+        """Docker Hub 说明页由 .github/dockerhub.md 同步；只改说明不触发重新构建镜像"""
+        self.assertIn("- .github/dockerhub.md", self.w)
+        self.assertIn("readme-filepath: .github/dockerhub.md", self.w)
+        self.assertNotIn("dockerhub.md", self.w.split("git diff --name-only", 1)[1].split("\n", 1)[0])
+        d = read(".github", "dockerhub.md")
+        for k in ("network_mode: host", "NET_ADMIN", "/dev/net/tun", "nft_tproxy", "DOCKER-USER", "skycn2022/shunt"):
+            self.assertIn(k, d)
 
     def test_check_workflow_lints_entrypoint(self):
         self.assertIn("docker/entrypoint.sh", read(".github", "workflows", "check.yml"))

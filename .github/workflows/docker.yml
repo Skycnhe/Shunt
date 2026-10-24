@@ -17,6 +17,7 @@ on:
       - docker/**
       - .github/offline/build.sh
       - .github/workflows/docker.yml
+      - .github/dockerhub.md
   workflow_dispatch:
 
 permissions:
@@ -201,3 +202,22 @@ jobs:
       - name: 没有配置 Docker Hub
         if: env.DH_TOKEN == ''
         run: echo "::notice::仓库 Secrets 里没有 DOCKERHUB_TOKEN，只推送了 GHCR（$IMAGE），跳过 Docker Hub"
+
+  # Docker Hub 仓库说明页：.github/dockerhub.md 改动或手动触发时同步（只改说明不会重新构建镜像）
+  hub-readme:
+    needs: prep
+    runs-on: ubuntu-24.04
+    env:
+      DH_USER: ${{ secrets.DOCKERHUB_USERNAME || 'skycn2022' }}
+      DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 同步 Docker Hub 说明
+        if: env.DH_TOKEN != ''
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ env.DH_USER }}
+          password: ${{ env.DH_TOKEN }}
+          repository: ${{ env.DH_USER }}/shunt
+          short-description: Alpine 旁路由透明代理 + Web 面板，mihomo / sing-box 三内核，amd64 / arm64
+          readme-filepath: .github/dockerhub.md
